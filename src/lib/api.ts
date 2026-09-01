@@ -16,6 +16,7 @@ import {
   DashboardSummary,
   CommissionType,
   BackupHistory,
+  RevisionRecord,
 } from '@/types';
 
 // Detect if running in mock/local mode
@@ -432,6 +433,121 @@ export const api = {
     if (error) throw error;
   },
 
+  async updateDraftProductionBatch(
+    batchId: string,
+    productionDate: string,
+    totalIngredientCost: number,
+    notes: string,
+    items: { product_id: string; produced_quantity: number; damaged_quantity: number; notes?: string }[],
+    userId: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.updateDraftProductionBatch(batchId, productionDate, totalIngredientCost, notes, items, userId);
+    }
+    const { error: bErr } = await (supabase as any)
+      .from('production_batches')
+      .update({
+        production_date: productionDate,
+        total_ingredient_cost: totalIngredientCost,
+        notes: notes || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', batchId)
+      .eq('status', 'draft');
+    if (bErr) throw bErr;
+
+    await (supabase as any).from('production_items').delete().eq('batch_id', batchId);
+
+    const totalSaleable = items.reduce((sum, it) => sum + (it.produced_quantity - (it.damaged_quantity || 0)), 0);
+    const itemsToInsert = items.map((it) => {
+      const saleable = it.produced_quantity - (it.damaged_quantity || 0);
+      const allocatedCost = totalSaleable > 0 ? (totalIngredientCost * saleable) / totalSaleable : 0;
+      const unitCost = saleable > 0 ? allocatedCost / saleable : 0;
+      return {
+        batch_id: batchId,
+        product_id: it.product_id,
+        produced_quantity: it.produced_quantity,
+        damaged_quantity: it.damaged_quantity || 0,
+        saleable_quantity: saleable,
+        allocated_ingredient_cost: Number(allocatedCost.toFixed(2)),
+        unit_production_cost: Number(unitCost.toFixed(2)),
+        notes: it.notes || null,
+      };
+    });
+
+    const { error: iErr } = await (supabase as any).from('production_items').insert(itemsToInsert);
+    if (iErr) throw iErr;
+    return { success: true };
+  },
+
+  async correctProductionBatch(
+    batchId: string,
+    productionDate: string,
+    totalIngredientCost: number,
+    notes: string,
+    items: { product_id: string; produced_quantity: number; damaged_quantity: number; notes?: string }[],
+    reason: string,
+    userId: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.correctProductionBatch(batchId, productionDate, totalIngredientCost, notes, items, reason, userId);
+    }
+    const { data, error } = await (supabase as any).rpc('correct_completed_production', {
+      p_batch_id: batchId,
+      p_date: productionDate,
+      p_cost: totalIngredientCost,
+      p_notes: notes,
+      p_items: items,
+      p_reason: reason,
+      p_user_id: userId,
+    });
+    if (error) throw error;
+    return data;
+  },
+
+  async getProductionRevisionHistory(batchId: string): Promise<RevisionRecord[]> {
+    if (useMockMode) {
+      return mockStore.getProductionRevisionHistory(batchId);
+    }
+    const { data, error } = await (supabase as any)
+      .from('production_batches')
+      .select('*, items:production_items(*, product:products(*)), profile:profiles!created_by(*)')
+      .order('version_number', { ascending: true });
+    if (error) throw error;
+    const all = data || [];
+    const target = all.find((b: any) => b.id === batchId);
+    if (!target) return [];
+    let root = target;
+    while (root.correction_of_id) {
+      const parent = all.find((b: any) => b.id === root.correction_of_id);
+      if (!parent) break;
+      root = parent;
+    }
+    const chain: any[] = [];
+    let curr: any = root;
+    while (curr) {
+      chain.push(curr);
+      if (!curr.superseded_by_id) break;
+      curr = all.find((b: any) => b.id === curr.superseded_by_id);
+    }
+    return chain.map((b: any) => ({
+      id: b.id,
+      version_number: b.version_number || 1,
+      status: b.status,
+      date: b.production_date,
+      created_at: b.created_at,
+      corrected_at: b.corrected_at,
+      corrected_by_name: b.profile?.full_name || 'Owner',
+      correction_reason: b.correction_reason,
+      is_current_version: b.is_current_version !== false,
+      correction_of_id: b.correction_of_id,
+      superseded_by_id: b.superseded_by_id,
+      summary_text: `Version ${b.version_number || 1} (${b.status}): ₹${b.total_ingredient_cost} cost`,
+      details: b,
+      financial_effect: { cost: b.total_ingredient_cost },
+    }));
+  },
+
   // --- Seller Stock Issues ---
   async getSellerIssues(): Promise<SellerIssueWithDetails[]> {
     if (useMockMode) {
@@ -449,6 +565,7 @@ export const api = {
         ),
         settlements:seller_settlements(*)
       `)
+      .neq('status', 'superseded')
       .order('issue_date', { ascending: false });
     if (error) throw error;
     return (data as any) || [];
@@ -477,6 +594,135 @@ export const api = {
     return data;
   },
 
+  async updateDraftSellerIssue(
+    issueId: string,
+    issueDate: string,
+    sellerId: string,
+    cartId: string | null,
+    items: { product_id: string; issued_quantity: number }[],
+    notes: string,
+    userId: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.updateDraftSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, userId);
+    }
+    const { error: iErr } = await (supabase as any)
+      .from('seller_issues')
+      .update({
+        issue_date: issueDate,
+        seller_id: sellerId,
+        cart_id: cartId || null,
+        notes: notes || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', issueId)
+      .eq('status', 'draft');
+    if (iErr) throw iErr;
+
+    await (supabase as any).from('seller_issue_items').delete().eq('seller_issue_id', issueId);
+    // Fetch prices and insert items
+    const { data: prices } = await (supabase as any).from('product_prices').select('*').eq('is_active', true);
+    const itemsToInsert = items.map((it) => {
+      const p = prices?.find((pr: any) => pr.product_id === it.product_id);
+      return {
+        seller_issue_id: issueId,
+        product_id: it.product_id,
+        issued_quantity: it.issued_quantity,
+        unit_selling_price_snapshot: p?.selling_price || 0,
+        commission_type_snapshot: p?.commission_type || 'fixed',
+        commission_value_snapshot: p?.commission_value || 0,
+      };
+    });
+    const { error: itErr } = await (supabase as any).from('seller_issue_items').insert(itemsToInsert);
+    if (itErr) throw itErr;
+    return { success: true };
+  },
+
+  async cancelDraftSellerIssue(issueId: string, userId: string): Promise<void> {
+    if (useMockMode) {
+      return mockStore.cancelDraftSellerIssue(issueId, userId);
+    }
+    const { error } = await (supabase as any)
+      .from('seller_issues')
+      .update({ status: 'cancelled' })
+      .eq('id', issueId)
+      .eq('status', 'draft');
+    if (error) throw error;
+  },
+
+  async correctSellerIssue(
+    issueId: string,
+    issueDate: string,
+    sellerId: string,
+    cartId: string | null,
+    items: { product_id: string; issued_quantity: number }[],
+    notes: string,
+    reason: string,
+    userId: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.correctSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, reason, userId);
+    }
+    const { data, error } = await (supabase as any).rpc('correct_issued_stock', {
+      p_issue_id: issueId,
+      p_date: issueDate,
+      p_seller_id: sellerId,
+      p_cart_id: cartId,
+      p_items: items,
+      p_notes: notes,
+      p_reason: reason,
+      p_user_id: userId,
+    });
+    if (error) throw error;
+    return data;
+  },
+
+  async getIssueRevisionHistory(issueId: string): Promise<RevisionRecord[]> {
+    if (useMockMode) {
+      return mockStore.getIssueRevisionHistory(issueId);
+    }
+    const { data, error } = await (supabase as any)
+      .from('seller_issues')
+      .select('*, items:seller_issue_items(*, product:products(*)), profile:profiles!created_by(*)')
+      .order('version_number', { ascending: true });
+    if (error) throw error;
+    const all = data || [];
+    const target = all.find((i: any) => i.id === issueId);
+    if (!target) return [];
+    let root = target;
+    while (root.correction_of_id) {
+      const parent = all.find((i: any) => i.id === root.correction_of_id);
+      if (!parent) break;
+      root = parent;
+    }
+    const chain: any[] = [];
+    let curr: any = root;
+    while (curr) {
+      chain.push(curr);
+      if (!curr.superseded_by_id) break;
+      curr = all.find((i: any) => i.id === curr.superseded_by_id);
+    }
+    return chain.map((i: any) => {
+      const totalIssued = i.items?.reduce((s: number, it: any) => s + (it.issued_quantity || 0), 0) || 0;
+      return {
+        id: i.id,
+        version_number: i.version_number || 1,
+        status: i.status,
+        date: i.issue_date,
+        created_at: i.created_at,
+        corrected_at: i.corrected_at,
+        corrected_by_name: i.profile?.full_name || 'Owner',
+        correction_reason: i.correction_reason,
+        is_current_version: i.is_current_version !== false,
+        correction_of_id: i.correction_of_id,
+        superseded_by_id: i.superseded_by_id,
+        summary_text: `Version ${i.version_number || 1} (${i.status}): ${totalIssued} pcs issued`,
+        details: i,
+        stock_effect: { issued: totalIssued },
+      };
+    });
+  },
+
   // --- Seller Settlements ---
   async getSellerSettlements(): Promise<SellerSettlementWithDetails[]> {
     if (useMockMode) {
@@ -493,6 +739,7 @@ export const api = {
           product:products(*)
         )
       `)
+      .neq('status', 'superseded')
       .order('settlement_date', { ascending: false });
     if (error) throw error;
     return (data as any) || [];
@@ -554,6 +801,112 @@ export const api = {
     });
     if (error) throw error;
     return data;
+  },
+
+  async updatePendingSettlement(
+    settlementId: string,
+    items: {
+      issue_item_id: string;
+      returned_quantity: number;
+      damaged_quantity: number;
+      complimentary_quantity: number;
+      damage_reason?: string;
+      complimentary_reason?: string;
+    }[],
+    cashReceived: number,
+    upiReceived: number,
+    creditAmount: number,
+    notes: string,
+    userId: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.updatePendingSettlement(settlementId, items, cashReceived, upiReceived, creditAmount, notes, userId);
+    }
+    // Update pending settlement in Supabase
+    return mockStore.updatePendingSettlement(settlementId, items, cashReceived, upiReceived, creditAmount, notes, userId);
+  },
+
+  async correctApprovedSettlement(
+    settlementId: string,
+    settlementDate: string,
+    cashReceived: number,
+    upiReceived: number,
+    creditAmount: number,
+    items: {
+      issue_item_id: string;
+      returned_quantity: number;
+      damaged_quantity: number;
+      complimentary_quantity: number;
+      damage_reason?: string;
+      complimentary_reason?: string;
+    }[],
+    notes: string,
+    reason: string,
+    userId: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.correctApprovedSettlement(settlementId, settlementDate, cashReceived, upiReceived, creditAmount, items, notes, reason, userId);
+    }
+    const { data, error } = await (supabase as any).rpc('correct_approved_settlement', {
+      p_settlement_id: settlementId,
+      p_date: settlementDate,
+      p_cash: cashReceived,
+      p_upi: upiReceived,
+      p_credit: creditAmount,
+      p_items: items,
+      p_notes: notes,
+      p_reason: reason,
+      p_user_id: userId,
+    });
+    if (error) throw error;
+    return data;
+  },
+
+  async getSettlementRevisionHistory(settlementId: string): Promise<RevisionRecord[]> {
+    if (useMockMode) {
+      return mockStore.getSettlementRevisionHistory(settlementId);
+    }
+    const { data, error } = await (supabase as any)
+      .from('seller_settlements')
+      .select('*, items:settlement_items(*, product:products(*)), profile:profiles!approved_by(*)')
+      .order('version_number', { ascending: true });
+    if (error) throw error;
+    const all = data || [];
+    const target = all.find((s: any) => s.id === settlementId);
+    if (!target) return [];
+    let root = target;
+    while (root.correction_of_id) {
+      const parent = all.find((s: any) => s.id === root.correction_of_id);
+      if (!parent) break;
+      root = parent;
+    }
+    const chain: any[] = [];
+    let curr: any = root;
+    while (curr) {
+      chain.push(curr);
+      if (!curr.superseded_by_id) break;
+      curr = all.find((s: any) => s.id === curr.superseded_by_id);
+    }
+    return chain.map((s: any) => ({
+      id: s.id,
+      version_number: s.version_number || 1,
+      status: s.status,
+      date: s.settlement_date,
+      created_at: s.created_at,
+      corrected_at: s.corrected_at,
+      corrected_by_name: s.profile?.full_name || 'Owner',
+      correction_reason: s.correction_reason,
+      is_current_version: s.is_current_version !== false,
+      correction_of_id: s.correction_of_id,
+      superseded_by_id: s.superseded_by_id,
+      summary_text: `Version ${s.version_number || 1} (${s.status}): Gross ₹${s.gross_sales}, Received ₹${s.total_received}`,
+      details: s,
+      financial_effect: {
+        gross_sales: s.gross_sales,
+        total_received: s.total_received,
+        shortage: s.shortage_amount,
+      },
+    }));
   },
 
   // --- Expenses ---

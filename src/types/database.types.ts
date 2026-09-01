@@ -8,9 +8,9 @@ export type Json =
 
 export type UserRole = 'owner' | 'production_worker' | 'seller';
 export type CommissionType = 'fixed' | 'percentage';
-export type BatchStatus = 'draft' | 'completed' | 'cancelled';
-export type IssueStatus = 'draft' | 'issued' | 'partially_settled' | 'settled' | 'cancelled';
-export type SettlementStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected';
+export type BatchStatus = 'draft' | 'completed' | 'cancelled' | 'corrected' | 'superseded';
+export type IssueStatus = 'draft' | 'issued' | 'partially_settled' | 'settled' | 'cancelled' | 'corrected' | 'superseded';
+export type SettlementStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'corrected' | 'superseded';
 export type ExpenseCategory =
   | 'ingredients'
   | 'electricity'
@@ -33,7 +33,11 @@ export type StockMovementType =
   | 'damaged'
   | 'complimentary'
   | 'stock_correction'
-  | 'cancellation_reversal';
+  | 'cancellation_reversal'
+  | 'production_reversal'
+  | 'issue_reversal'
+  | 'settlement_reversal'
+  | 'correction_replacement';
 export type ClosingStatus = 'open' | 'closed' | 'reopened';
 
 export interface Database {
@@ -241,6 +245,13 @@ export interface Database {
           total_ingredient_cost: number;
           notes: string | null;
           completed_at: string | null;
+          version_number: number;
+          is_current_version: boolean;
+          correction_of_id: string | null;
+          superseded_by_id: string | null;
+          correction_reason: string | null;
+          corrected_by: string | null;
+          corrected_at: string | null;
           created_by: string | null;
           created_at: string;
           updated_at: string;
@@ -253,6 +264,13 @@ export interface Database {
           total_ingredient_cost?: number;
           notes?: string | null;
           completed_at?: string | null;
+          version_number?: number;
+          is_current_version?: boolean;
+          correction_of_id?: string | null;
+          superseded_by_id?: string | null;
+          correction_reason?: string | null;
+          corrected_by?: string | null;
+          corrected_at?: string | null;
           created_by?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -265,6 +283,13 @@ export interface Database {
           total_ingredient_cost?: number;
           notes?: string | null;
           completed_at?: string | null;
+          version_number?: number;
+          is_current_version?: boolean;
+          correction_of_id?: string | null;
+          superseded_by_id?: string | null;
+          correction_reason?: string | null;
+          corrected_by?: string | null;
+          corrected_at?: string | null;
           updated_at?: string;
         };
       };
@@ -313,6 +338,13 @@ export interface Database {
           status: IssueStatus;
           issued_at: string | null;
           notes: string | null;
+          version_number: number;
+          is_current_version: boolean;
+          correction_of_id: string | null;
+          superseded_by_id: string | null;
+          correction_reason: string | null;
+          corrected_by: string | null;
+          corrected_at: string | null;
           created_by: string | null;
           created_at: string;
           updated_at: string;
@@ -326,6 +358,13 @@ export interface Database {
           status?: IssueStatus;
           issued_at?: string | null;
           notes?: string | null;
+          version_number?: number;
+          is_current_version?: boolean;
+          correction_of_id?: string | null;
+          superseded_by_id?: string | null;
+          correction_reason?: string | null;
+          corrected_by?: string | null;
+          corrected_at?: string | null;
           created_by?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -339,6 +378,13 @@ export interface Database {
           status?: IssueStatus;
           issued_at?: string | null;
           notes?: string | null;
+          version_number?: number;
+          is_current_version?: boolean;
+          correction_of_id?: string | null;
+          superseded_by_id?: string | null;
+          correction_reason?: string | null;
+          corrected_by?: string | null;
+          corrected_at?: string | null;
           updated_at?: string;
         };
       };
@@ -393,6 +439,13 @@ export interface Database {
           approved_by: string | null;
           submitted_at: string | null;
           approved_at: string | null;
+          version_number: number;
+          is_current_version: boolean;
+          correction_of_id: string | null;
+          superseded_by_id: string | null;
+          correction_reason: string | null;
+          corrected_by: string | null;
+          corrected_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -417,6 +470,13 @@ export interface Database {
           approved_by?: string | null;
           submitted_at?: string | null;
           approved_at?: string | null;
+          version_number?: number;
+          is_current_version?: boolean;
+          correction_of_id?: string | null;
+          superseded_by_id?: string | null;
+          correction_reason?: string | null;
+          corrected_by?: string | null;
+          corrected_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -441,6 +501,13 @@ export interface Database {
           approved_by?: string | null;
           submitted_at?: string | null;
           approved_at?: string | null;
+          version_number?: number;
+          is_current_version?: boolean;
+          correction_of_id?: string | null;
+          superseded_by_id?: string | null;
+          correction_reason?: string | null;
+          corrected_by?: string | null;
+          corrected_at?: string | null;
           updated_at?: string;
         };
       };
@@ -550,6 +617,7 @@ export interface Database {
           movement_type: StockMovementType;
           reference_table: string | null;
           reference_id: string | null;
+          reversal_of_movement_id?: string | null;
           notes: string | null;
           created_by: string | null;
           created_at: string;
@@ -564,6 +632,7 @@ export interface Database {
           movement_type: StockMovementType;
           reference_table?: string | null;
           reference_id?: string | null;
+          reversal_of_movement_id?: string | null;
           notes?: string | null;
           created_by?: string | null;
           created_at?: string;
@@ -578,7 +647,9 @@ export interface Database {
           movement_type?: StockMovementType;
           reference_table?: string | null;
           reference_id?: string | null;
+          reversal_of_movement_id?: string | null;
           notes?: string | null;
+          created_by?: string | null;
         };
       };
       daily_closings: {

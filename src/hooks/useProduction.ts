@@ -71,3 +71,85 @@ export function useCancelProductionBatch() {
     },
   });
 }
+
+export function useUpdateDraftProductionBatch() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({
+      batchId,
+      productionDate,
+      totalIngredientCost,
+      notes,
+      items,
+    }: {
+      batchId: string;
+      productionDate: string;
+      totalIngredientCost: number;
+      notes: string;
+      items: { product_id: string; produced_quantity: number; damaged_quantity: number; notes?: string }[];
+    }) => {
+      return api.updateDraftProductionBatch(
+        batchId,
+        productionDate,
+        totalIngredientCost,
+        notes,
+        items,
+        user?.id || 'usr-owner-001'
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}
+
+export function useCorrectProductionBatch() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({
+      batchId,
+      productionDate,
+      totalIngredientCost,
+      notes,
+      items,
+      reason,
+    }: {
+      batchId: string;
+      productionDate: string;
+      totalIngredientCost: number;
+      notes: string;
+      items: { product_id: string; produced_quantity: number; damaged_quantity: number; notes?: string }[];
+      reason: string;
+    }) => {
+      return api.correctProductionBatch(
+        batchId,
+        productionDate,
+        totalIngredientCost,
+        notes,
+        items,
+        reason,
+        user?.id || 'usr-owner-001'
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}
+
+export function useProductionRevisionHistory(batchId?: string) {
+  return useQuery({
+    queryKey: ['production_revisions', batchId],
+    queryFn: () => (batchId ? api.getProductionRevisionHistory(batchId) : Promise.resolve([])),
+    enabled: !!batchId,
+  });
+}

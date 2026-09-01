@@ -79,3 +79,110 @@ export function useApproveSettlement() {
     },
   });
 }
+
+export function useUpdatePendingSettlement() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({
+      settlementId,
+      items,
+      cashReceived,
+      upiReceived,
+      creditAmount,
+      notes,
+    }: {
+      settlementId: string;
+      items: {
+        issue_item_id: string;
+        returned_quantity: number;
+        damaged_quantity: number;
+        complimentary_quantity: number;
+        damage_reason?: string;
+        complimentary_reason?: string;
+      }[];
+      cashReceived: number;
+      upiReceived: number;
+      creditAmount: number;
+      notes: string;
+    }) => {
+      return api.updatePendingSettlement(
+        settlementId,
+        items,
+        cashReceived,
+        upiReceived,
+        creditAmount,
+        notes,
+        user?.id || 'usr-owner-001'
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['seller_settlements'] });
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}
+
+export function useCorrectApprovedSettlement() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({
+      settlementId,
+      settlementDate,
+      cashReceived,
+      upiReceived,
+      creditAmount,
+      items,
+      notes,
+      reason,
+    }: {
+      settlementId: string;
+      settlementDate: string;
+      cashReceived: number;
+      upiReceived: number;
+      creditAmount: number;
+      items: {
+        issue_item_id: string;
+        returned_quantity: number;
+        damaged_quantity: number;
+        complimentary_quantity: number;
+        damage_reason?: string;
+        complimentary_reason?: string;
+      }[];
+      notes: string;
+      reason: string;
+    }) => {
+      return api.correctApprovedSettlement(
+        settlementId,
+        settlementDate,
+        cashReceived,
+        upiReceived,
+        creditAmount,
+        items,
+        notes,
+        reason,
+        user?.id || 'usr-owner-001'
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['seller_settlements'] });
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['sellers'] });
+      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}
+
+export function useSettlementRevisionHistory(settlementId?: string) {
+  return useQuery({
+    queryKey: ['settlement_revisions', settlementId],
+    queryFn: () => (settlementId ? api.getSettlementRevisionHistory(settlementId) : Promise.resolve([])),
+    enabled: !!settlementId,
+  });
+}

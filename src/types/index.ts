@@ -149,3 +149,33 @@ export interface BackupValidationResult {
   warnings: string[];
 }
 
+export interface RevisionRecord {
+  id: string;
+  version_number: number;
+  status: string;
+  date: string;
+  created_at: string;
+  corrected_at?: string | null;
+  corrected_by_name?: string | null;
+  correction_reason?: string | null;
+  is_current_version: boolean;
+  correction_of_id?: string | null;
+  superseded_by_id?: string | null;
+  summary_text: string;
+  details: any;
+  financial_effect?: {
+    gross_sales?: number;
+    total_received?: number;
+    cost?: number;
+    shortage?: number;
+  };
+  stock_effect?: {
+    produced?: number;
+    issued?: number;
+    returned?: number;
+    damaged?: number;
+    sold?: number;
+  };
+}
+
+

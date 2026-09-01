@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import {
   useSellerSettlements,
   useProcessSettlement,
   useApproveSettlement,
+  useUpdatePendingSettlement,
+  useCorrectApprovedSettlement,
+  useSettlementRevisionHistory,
 } from '@/hooks/useSettlements';
 import { useSellerIssues } from '@/hooks/useSellers';
+import { useDailyClosings } from '@/hooks/useDailyClosing';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { useSync } from '@/context/SyncContext';
@@ -15,6 +19,7 @@ import { Input } from '@/components/common/Input';
 import { Badge } from '@/components/common/Badge';
 import { Modal } from '@/components/common/Modal';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { RevisionHistoryModal } from '@/components/common/RevisionHistoryModal';
 import {
   formatCurrency,
   formatDate,
@@ -31,6 +36,11 @@ import {
   CheckCircle,
   Printer,
   AlertCircle,
+  Edit3,
+  History,
+  Lock,
+  ArrowRight,
+  ShieldAlert,
 } from 'lucide-react';
 import { SellerSettlementWithDetails } from '@/types';
 
@@ -38,12 +48,15 @@ export const SettlementsPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: settlements = [], isLoading } = useSellerSettlements();
   const { data: issues = [] } = useSellerIssues();
+  const { data: closings = [] } = useDailyClosings();
   const { t, language } = useLanguage();
   const { isOwner } = useAuth();
   const { isOnline, saveDraft } = useSync();
 
   const processSettlement = useProcessSettlement();
   const approveSettlement = useApproveSettlement();
+  const updatePendingSettlement = useUpdatePendingSettlement();
+  const correctApprovedSettlement = useCorrectApprovedSettlement();
 
   const [isNewModalOpen, setIsNewModalOpen] = useState(searchParams.get('new') === 'true');
   const [selectedIssueId, setSelectedIssueId] = useState<string>('');
@@ -53,6 +66,16 @@ export const SettlementsPage: React.FC = () => {
   const [creditAmount, setCreditAmount] = useState<string>('0');
   const [notes, setNotes] = useState<string>('');
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Edit Pending / Correct Approved / Revision History State
+  const [editingPendingSettlement, setEditingPendingSettlement] = useState<SellerSettlementWithDetails | null>(null);
+  const [correctingSettlement, setCorrectingSettlement] = useState<SellerSettlementWithDetails | null>(null);
+  const [correctionReason, setCorrectionReason] = useState<string>('');
+  const [historySettlementId, setHistorySettlementId] = useState<string | null>(null);
+
+  const { data: revisionHistory = [], isLoading: isHistoryLoading } = useSettlementRevisionHistory(
+    historySettlementId || undefined
+  );
 
   // Per-item return/damage/complimentary inputs
   const [itemInputs, setItemInputs] = useState<
@@ -71,6 +94,9 @@ export const SettlementsPage: React.FC = () => {
   // Receipt Modal
   const [receiptSettlement, setReceiptSettlement] = useState<SellerSettlementWithDetails | null>(null);
   const [settlementToApprove, setSettlementToApprove] = useState<string | null>(null);
+
+  const isDayClosed = (dateStr: string) =>
+    closings.find((c) => c.business_date === dateStr)?.status === 'closed';
 
   const openIssues = issues.filter(
     (i) => i.status === 'issued' || i.status === 'partially_settled'
@@ -109,6 +135,51 @@ export const SettlementsPage: React.FC = () => {
     setItemInputs(initial);
   };
 
+  const handleOpenEditPending = (st: SellerSettlementWithDetails) => {
+    setSelectedIssueId(st.seller_issue_id);
+    const initial: Record<string, any> = {};
+    st.items.forEach((it) => {
+      initial[it.seller_issue_item_id || it.id] = {
+        returned_qty: it.returned_quantity,
+        damaged_qty: it.damaged_quantity,
+        comp_qty: it.complimentary_quantity,
+        damage_reason: it.damage_reason || '',
+        comp_reason: it.complimentary_reason || '',
+      };
+    });
+    setItemInputs(initial);
+    setSettlementDate(st.settlement_date);
+    setCashReceived(String(st.cash_received));
+    setUpiReceived(String(st.upi_received));
+    setCreditAmount(String(st.credit_amount));
+    setNotes(st.notes || '');
+    setFormError(null);
+    setEditingPendingSettlement(st);
+  };
+
+  const handleOpenCorrect = (st: SellerSettlementWithDetails) => {
+    setSelectedIssueId(st.seller_issue_id);
+    const initial: Record<string, any> = {};
+    st.items.forEach((it) => {
+      initial[it.seller_issue_item_id || it.id] = {
+        returned_qty: it.returned_quantity,
+        damaged_qty: it.damaged_quantity,
+        comp_qty: it.complimentary_quantity,
+        damage_reason: it.damage_reason || '',
+        comp_reason: it.complimentary_reason || '',
+      };
+    });
+    setItemInputs(initial);
+    setSettlementDate(st.settlement_date);
+    setCashReceived(String(st.cash_received));
+    setUpiReceived(String(st.upi_received));
+    setCreditAmount(String(st.credit_amount));
+    setNotes(st.notes || '');
+    setCorrectionReason('');
+    setFormError(null);
+    setCorrectingSettlement(st);
+  };
+
   const handleIssueSelect = (issueId: string) => {
     setSelectedIssueId(issueId);
     initializeItemInputs(issueId);
@@ -128,17 +199,18 @@ export const SettlementsPage: React.FC = () => {
     }));
   };
 
-  // Selected issue object
-  const currentIssue = issues.find((i) => i.id === selectedIssueId);
+  // Find currently selected issue
+  const currentIssue =
+    issues.find((i) => i.id === selectedIssueId) ||
+    issues.find((i) => i.id === editingPendingSettlement?.seller_issue_id) ||
+    issues.find((i) => i.id === correctingSettlement?.seller_issue_id);
 
-  // Live Summary Calculation
+  // Build calculation items dynamically
   const calculationItems: SettlementItemInput[] = (currentIssue?.items || []).map((it) => {
     const inp = itemInputs[it.id] || {
       returned_qty: 0,
       damaged_qty: 0,
       comp_qty: 0,
-      damage_reason: '',
-      comp_reason: '',
     };
     return {
       issued_quantity: it.issued_quantity,
@@ -148,24 +220,28 @@ export const SettlementsPage: React.FC = () => {
       unit_selling_price: it.unit_selling_price_snapshot,
       commission_type: it.commission_type_snapshot as any,
       commission_value: it.commission_value_snapshot,
-      damage_reason: inp.damage_reason,
-      complimentary_reason: inp.comp_reason,
     };
   });
 
-  const liveSummary = calculateSettlementSummary(
+  const cashNum = parseFloat(cashReceived) || 0;
+  const upiNum = parseFloat(upiReceived) || 0;
+  const creditNum = parseFloat(creditAmount) || 0;
+
+  // Live calculated financial summary
+  const summary = calculateSettlementSummary(
     calculationItems,
-    parseFloat(cashReceived) || 0,
-    parseFloat(upiReceived) || 0,
-    parseFloat(creditAmount) || 0
+    cashNum,
+    upiNum,
+    creditNum
   );
 
+  // Submit New Settlement
   const handleSubmitSettlement = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
 
     if (!selectedIssueId || !currentIssue) {
-      setFormError('कृपया स्टॉक निकासी चुनें');
+      setFormError('कृपया निकासी पर्ची चुनें');
       return;
     }
 
@@ -177,18 +253,71 @@ export const SettlementsPage: React.FC = () => {
         damage_reason: '',
         comp_reason: '',
       };
+      return {
+        issue_item_id: it.id,
+        returned_quantity: inp.returned_qty,
+        damaged_quantity: inp.damaged_qty,
+        complimentary_quantity: inp.comp_qty,
+        damage_reason: inp.damage_reason,
+        complimentary_reason: inp.comp_reason,
+      };
+    });
 
-      if (inp.damaged_qty > 0 && (!inp.damage_reason || inp.damage_reason.trim() === '')) {
-        throw new Error(`कृपया ${language === 'hi' ? it.product?.name_hi : it.product?.name_en} के खराब होने का कारण दर्ज करें।`);
+    for (const it of currentIssue.items) {
+      const inp = itemInputs[it.id] || { returned_qty: 0, damaged_qty: 0, comp_qty: 0 };
+      const nonSold = inp.returned_qty + inp.damaged_qty + inp.comp_qty;
+      if (nonSold > it.issued_quantity) {
+        setFormError(
+          `वापसी+खराब+मुफ्त मात्रा (${nonSold}) दी गई मात्रा (${it.issued_quantity}) से अधिक नहीं हो सकती!`
+        );
+        return;
       }
-      if (inp.comp_qty > 0 && (!inp.comp_reason || inp.comp_reason.trim() === '')) {
-        throw new Error(`कृपया ${language === 'hi' ? it.product?.name_hi : it.product?.name_en} को मुफ्त देने का कारण दर्ज करें।`);
-      }
+    }
 
-      if (inp.returned_qty + inp.damaged_qty + inp.comp_qty > it.issued_quantity) {
-        throw new Error(`वापसी, खराब व मुफ्त पीस का योग जारी मात्रा (${it.issued_quantity}) से अधिक नहीं हो सकता!`);
+    try {
+      if (!isOnline) {
+        await saveDraft('seller_settlement', {
+          issue_id: selectedIssueId,
+          settlement_date: settlementDate,
+          items,
+          cash_received: cashNum,
+          upi_received: upiNum,
+          credit_amount: creditNum,
+          notes,
+        });
+        alert('ऑफ़लाइन हिसाब सुरक्षित हो गया! कनेक्शन आने पर स्वतः सिंक हो जाएगा।');
+      } else {
+        await processSettlement.mutateAsync({
+          issueId: selectedIssueId,
+          settlementDate,
+          items,
+          cashReceived: cashNum,
+          upiReceived: upiNum,
+          creditAmount: creditNum,
+          notes,
+        });
       }
+      setIsNewModalOpen(false);
+      setSearchParams({});
+    } catch (err: any) {
+      setFormError(err.message || 'हिसाब दर्ज करने में त्रुटि हुई');
+    }
+  };
 
+  // Submit Edit Pending Settlement
+  const handleUpdatePendingSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingPendingSettlement || !currentIssue) return;
+    setFormError(null);
+
+    const items = currentIssue.items.map((it) => {
+      const inp = itemInputs[it.id] || {
+        returned_qty: 0,
+        damaged_qty: 0,
+        comp_qty: 0,
+        damage_reason: '',
+        comp_reason: '',
+      };
       return {
         issue_item_id: it.id,
         returned_quantity: inp.returned_qty,
@@ -200,61 +329,94 @@ export const SettlementsPage: React.FC = () => {
     });
 
     try {
-      if (!isOnline) {
-        await saveDraft('seller_settlement', {
-          issue_id: selectedIssueId,
-          settlement_date: settlementDate,
-          items,
-          cash: parseFloat(cashReceived) || 0,
-          upi: parseFloat(upiReceived) || 0,
-          credit: parseFloat(creditAmount) || 0,
-          notes,
-          is_approved: isOwner,
-        });
-        alert('ऑफ़लाइन ड्राफ्ट सुरक्षित हो गया! कनेक्शन मिलने पर यह सिंक हो जाएगा।');
-      } else {
-        const result = await processSettlement.mutateAsync({
-          issueId: selectedIssueId,
-          settlementDate,
-          items,
-          cashReceived: parseFloat(cashReceived) || 0,
-          upiReceived: parseFloat(upiReceived) || 0,
-          creditAmount: parseFloat(creditAmount) || 0,
-          notes,
-        });
-        // Open receipt modal
-        setReceiptSettlement(result);
-      }
-
-      setIsNewModalOpen(false);
-      setSearchParams({});
+      await updatePendingSettlement.mutateAsync({
+        settlementId: editingPendingSettlement.id,
+        items,
+        cashReceived: cashNum,
+        upiReceived: upiNum,
+        creditAmount: creditNum,
+        notes,
+      });
+      setEditingPendingSettlement(null);
     } catch (err: any) {
-      setFormError(err.message || 'हिसाब दर्ज करने में त्रुटि');
+      setFormError(err.message || 'पेंडिंग हिसाब अपडेट करने में त्रुटि हुई');
+    }
+  };
+
+  // Submit Correct Approved Settlement
+  const handleCorrectApprovedSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!correctingSettlement || !currentIssue) return;
+    setFormError(null);
+
+    if (!correctionReason || correctionReason.trim().length < 5) {
+      setFormError('कृपया सुधार का कारण (कम से कम 5 अक्षर) दर्ज करें');
+      return;
+    }
+
+    if (isDayClosed(correctingSettlement.settlement_date)) {
+      setFormError(
+        `दिन (${correctingSettlement.settlement_date}) बंद है। सुधार से पहले दैनिक क्लोजिंग को पुनः खोलें।`
+      );
+      return;
+    }
+
+    const items = currentIssue.items.map((it) => {
+      const inp = itemInputs[it.id] || {
+        returned_qty: 0,
+        damaged_qty: 0,
+        comp_qty: 0,
+        damage_reason: '',
+        comp_reason: '',
+      };
+      return {
+        issue_item_id: it.id,
+        returned_quantity: inp.returned_qty,
+        damaged_quantity: inp.damaged_qty,
+        complimentary_quantity: inp.comp_qty,
+        damage_reason: inp.damage_reason,
+        complimentary_reason: inp.comp_reason,
+      };
+    });
+
+    try {
+      await correctApprovedSettlement.mutateAsync({
+        settlementId: correctingSettlement.id,
+        settlementDate,
+        cashReceived: cashNum,
+        upiReceived: upiNum,
+        creditAmount: creditNum,
+        items,
+        notes,
+        reason: correctionReason,
+      });
+      setCorrectingSettlement(null);
+    } catch (err: any) {
+      setFormError(err.message || 'हिसाब सुधारने में त्रुटि हुई');
     }
   };
 
   const handleConfirmApprove = async () => {
     if (!settlementToApprove) return;
     try {
-      const updated = await approveSettlement.mutateAsync(settlementToApprove);
+      await approveSettlement.mutateAsync(settlementToApprove);
       setSettlementToApprove(null);
-      setReceiptSettlement(updated);
     } catch (err: any) {
-      alert(err.message || 'स्वीकृति में त्रुटि');
+      alert(err.message || 'हिसाब स्वीकृत करने में त्रुटि हुई');
     }
   };
 
   return (
-    <div className="space-y-5">
-      {/* Top Header */}
+    <div className="space-y-6">
+      {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight flex items-center gap-2">
-            <Receipt className="w-6 h-6 text-maroon-800" />
+          <h2 className="text-xl sm:text-2xl font-black text-gray-900 dark:text-gray-100 tracking-tight flex items-center gap-2">
+            <Receipt className="w-6 h-6 text-maroon-800 dark:text-rose-400" />
             {t.settlements}
           </h2>
-          <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
-            शाम की वापसी, बिकी कुल्फी, कमीशन एवं नकद/UPI वसूली का हिसाब
+          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+            शाम की वापसी, बिकी कुल्फी, कमीशन, वसूली एवं सुरक्षित संशोधन इतिहास
           </p>
         </div>
 
@@ -269,16 +431,15 @@ export const SettlementsPage: React.FC = () => {
 
       {/* Settlements List */}
       {isLoading ? (
-        <div className="text-center py-12">
-          <div className="w-10 h-10 border-4 border-maroon-800 border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-sm font-semibold text-gray-500 mt-3">{t.loading}</p>
-        </div>
+        <Card className="py-12 text-center text-gray-500">{t.loading}</Card>
       ) : settlements.length === 0 ? (
         <Card className="text-center py-12">
           <div className="w-14 h-14 bg-emerald-100 text-emerald-800 rounded-2xl flex items-center justify-center mx-auto mb-3">
             <Receipt className="w-7 h-7" />
           </div>
-          <h3 className="text-base font-bold text-gray-900">कोई हिसाब रिकॉर्ड नहीं मिला</h3>
+          <h3 className="text-base font-bold text-gray-900 dark:text-gray-100">
+            कोई हिसाब रिकॉर्ड नहीं मिला
+          </h3>
           <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
             शाम को विक्रेता की वापसी और नकद वसूली दर्ज करने के लिए नया हिसाब जोड़ें।
           </p>
@@ -295,25 +456,43 @@ export const SettlementsPage: React.FC = () => {
         <div className="space-y-4">
           {settlements.map((st) => {
             const totalSold = st.items.reduce((s, it) => s + it.sold_quantity, 0);
+            const closed = isDayClosed(st.settlement_date);
 
             return (
-              <Card key={st.id} className="overflow-hidden border-cream-300">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-gray-100">
+              <Card key={st.id} className="overflow-hidden border-cream-300 dark:border-gray-800">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-gray-100 dark:border-gray-800">
                   <div>
-                    <div className="flex items-center gap-2.5">
-                      <span className="font-mono font-bold text-base text-maroon-950">
+                    <div className="flex items-center gap-2.5 flex-wrap">
+                      <span className="font-mono font-bold text-base text-maroon-950 dark:text-rose-200">
                         {st.settlement_number}
                       </span>
+                      {st.version_number && st.version_number > 1 && (
+                        <Badge variant="warning">
+                          {t.version} {st.version_number}
+                        </Badge>
+                      )}
                       <Badge variant={st.status}>
-                        {st.status === 'approved' ? t.approved : st.status === 'pending_approval' ? t.pending : st.status}
+                        {st.status === 'approved'
+                          ? t.approved
+                          : st.status === 'pending_approval'
+                          ? t.pending
+                          : st.status === 'superseded'
+                          ? t.superseded
+                          : st.status}
                       </Badge>
+                      {closed && (
+                        <Badge variant="danger">
+                          <Lock className="w-3 h-3 mr-1 inline" />
+                          {language === 'hi' ? 'दिन बंद है' : 'Day Closed'}
+                        </Badge>
+                      )}
                     </div>
-                    <span className="text-xs font-bold text-gray-800 block mt-0.5">
+                    <span className="text-xs font-bold text-gray-800 dark:text-gray-200 block mt-0.5">
                       👤 {st.seller?.full_name} | 📅 {formatDate(st.settlement_date)}
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <Button
                       size="sm"
                       variant="outline"
@@ -322,66 +501,104 @@ export const SettlementsPage: React.FC = () => {
                     >
                       {t.printReceipt}
                     </Button>
-                    {st.status === 'pending_approval' && isOwner && (
+
+                    {st.status === 'pending_approval' && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          leftIcon={<Edit3 className="w-3.5 h-3.5" />}
+                          onClick={() => handleOpenEditPending(st)}
+                        >
+                          {t.editDraft}
+                        </Button>
+                        {isOwner && (
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            leftIcon={<CheckCircle className="w-4 h-4" />}
+                            onClick={() => setSettlementToApprove(st.id)}
+                          >
+                            {t.approveSettlement}
+                          </Button>
+                        )}
+                      </>
+                    )}
+
+                    {st.status === 'approved' && isOwner && (
                       <Button
                         size="sm"
-                        variant="primary"
-                        leftIcon={<CheckCircle className="w-4 h-4" />}
-                        onClick={() => setSettlementToApprove(st.id)}
+                        variant="secondary"
+                        leftIcon={closed ? <Lock className="w-3.5 h-3.5 text-rose-600" /> : <Edit3 className="w-3.5 h-3.5" />}
+                        onClick={() => handleOpenCorrect(st)}
                       >
-                        {t.approveSettlement}
+                        {t.correctRecord}
                       </Button>
                     )}
+
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      leftIcon={<History className="w-3.5 h-3.5" />}
+                      onClick={() => setHistorySettlementId(st.id)}
+                    >
+                      {t.revisionHistory}
+                    </Button>
                   </div>
                 </div>
 
                 {/* Financial Summary Grid */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 my-3 text-xs">
-                  <div className="p-2.5 rounded-xl bg-cream-50 border border-cream-200">
+                  <div className="p-2.5 rounded-xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700">
                     <span className="text-gray-500 block">कुल बिक्री (Gross)</span>
-                    <span className="font-bold text-sm text-gray-900 block mt-0.5">
+                    <span className="font-bold text-sm text-gray-900 dark:text-gray-100 block mt-0.5">
                       {formatCurrency(st.gross_sales)}
                     </span>
                     <span className="text-[10px] text-gray-500">{totalSold} {t.pieces} बिकी</span>
                   </div>
 
-                  <div className="p-2.5 rounded-xl bg-cream-50 border border-cream-200">
+                  <div className="p-2.5 rounded-xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700">
                     <span className="text-gray-500 block">विक्रेता कमीशन</span>
-                    <span className="font-bold text-sm text-maroon-800 block mt-0.5">
+                    <span className="font-bold text-sm text-maroon-800 dark:text-rose-400 block mt-0.5">
                       {formatCurrency(st.total_commission)}
                     </span>
                     <span className="text-[10px] text-gray-500">कटा हुआ</span>
                   </div>
 
-                  <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200">
-                    <span className="text-emerald-800 font-semibold block">प्राप्त (Cash+UPI)</span>
-                    <span className="font-bold text-sm text-emerald-900 block mt-0.5">
+                  <div className="p-2.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                    <span className="text-emerald-800 dark:text-emerald-300 font-semibold block">प्राप्त (Cash+UPI)</span>
+                    <span className="font-bold text-sm text-emerald-900 dark:text-emerald-200 block mt-0.5">
                       {formatCurrency(st.total_received)}
                     </span>
-                    <span className="text-[10px] text-gray-600">
+                    <span className="text-[10px] text-gray-600 dark:text-gray-400">
                       नकद: {formatCurrency(st.cash_received, false)} | UPI: {formatCurrency(st.upi_received, false)}
                     </span>
                   </div>
 
-                  <div className="p-2.5 rounded-xl bg-amber-50/70 border border-amber-200">
-                    <span className="text-amber-800 font-semibold block">कमी / उधार</span>
-                    <span className="font-bold text-sm text-amber-900 block mt-0.5">
+                  <div className="p-2.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                    <span className="text-amber-800 dark:text-amber-300 font-semibold block">कमी / उधार</span>
+                    <span className="font-bold text-sm text-amber-900 dark:text-amber-200 block mt-0.5">
                       {st.shortage_amount > 0 ? (
-                        <span className="text-rose-700">कमी: {formatCurrency(st.shortage_amount)}</span>
+                        <span className="text-rose-700 dark:text-rose-400">कमी: {formatCurrency(st.shortage_amount)}</span>
                       ) : (
                         <span>उधार: {formatCurrency(st.credit_amount)}</span>
                       )}
                     </span>
-                    <span className="text-[10px] text-gray-600">अपेक्षित: {formatCurrency(st.expected_collection)}</span>
+                    <span className="text-[10px] text-gray-600 dark:text-gray-400">
+                      अपेक्षित: {formatCurrency(st.expected_collection)}
+                    </span>
                   </div>
                 </div>
 
                 {/* Items Detail Preview */}
-                <div className="pt-2 border-t border-gray-100 text-xs text-gray-600 flex flex-wrap gap-x-4 gap-y-1">
+                <div className="pt-2 border-t border-gray-100 dark:border-gray-800 text-xs text-gray-600 dark:text-gray-400 flex flex-wrap gap-x-4 gap-y-1">
                   {st.items.map((it) => (
                     <span key={it.id}>
-                      <strong className="text-gray-900">{language === 'hi' ? it.product?.name_hi : it.product?.name_en}:</strong>{' '}
-                      दी: {it.issued_quantity_snapshot} | वापसी: {it.returned_quantity} | खराब: {it.damaged_quantity} | बिकी: <strong className="text-emerald-800">{it.sold_quantity}</strong>
+                      <strong className="text-gray-900 dark:text-gray-100">
+                        {language === 'hi' ? it.product?.name_hi : it.product?.name_en}:
+                      </strong>{' '}
+                      दी: {it.issued_quantity_snapshot} | वापसी: {it.returned_quantity} | खराब: {it.damaged_quantity} | बिकी:{' '}
+                      <strong className="text-emerald-800 dark:text-emerald-400">{it.sold_quantity}</strong>
                     </span>
                   ))}
                 </div>
@@ -412,16 +629,18 @@ export const SettlementsPage: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <label className="block text-sm font-semibold text-gray-800">
+              <label className="block text-sm font-semibold text-gray-800 dark:text-gray-200">
                 {t.selectOpenIssue} *
               </label>
               <select
                 value={selectedIssueId}
                 onChange={(e) => handleIssueSelect(e.target.value)}
-                className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
+                className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
                 required
               >
-                <option value="" disabled>-- बकाया निकासी चुनें --</option>
+                <option value="" disabled>
+                  -- बकाया निकासी चुनें --
+                </option>
                 {openIssues.map((i) => (
                   <option key={i.id} value={i.id}>
                     {i.issue_number} - {i.seller?.full_name} ({formatDate(i.issue_date)})
@@ -442,7 +661,7 @@ export const SettlementsPage: React.FC = () => {
           {/* Product Items Breakdown */}
           {currentIssue ? (
             <div className="space-y-3 pt-2">
-              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+              <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
                 उत्पाद वापसी व बिक्री का विवरण (Pieces)
               </h4>
 
@@ -468,11 +687,11 @@ export const SettlementsPage: React.FC = () => {
                   return (
                     <div
                       key={it.id}
-                      className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 space-y-3"
+                      className="p-3.5 rounded-2xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 space-y-3"
                     >
                       <div className="flex items-center justify-between">
                         <div>
-                          <span className="font-bold text-sm text-gray-900 block">
+                          <span className="font-bold text-sm text-gray-900 dark:text-gray-100 block">
                             {language === 'hi' ? it.product?.name_hi : it.product?.name_en}
                           </span>
                           <span className="text-xs text-gray-500">
@@ -481,7 +700,7 @@ export const SettlementsPage: React.FC = () => {
                         </div>
                         <div className="text-right">
                           <span className="text-xs text-gray-500 block">कुल बिकी पीस:</span>
-                          <span className="font-mono font-black text-lg text-emerald-800">
+                          <span className="font-mono font-black text-lg text-emerald-800 dark:text-emerald-400">
                             {res.sold_quantity} {t.pieces}
                           </span>
                         </div>
@@ -516,116 +735,72 @@ export const SettlementsPage: React.FC = () => {
                           }
                         />
                       </div>
-
-                      {inp.damaged_qty > 0 && (
-                        <Input
-                          label={`${t.damageReason} *`}
-                          placeholder="जैसे: पेटी में पिघल गई, धूप के कारण..."
-                          value={inp.damage_reason}
-                          onChange={(e) => handleItemFieldChange(it.id, 'damage_reason', e.target.value)}
-                          required
-                        />
-                      )}
-
-                      {inp.comp_qty > 0 && (
-                        <Input
-                          label={`${t.compReason} *`}
-                          placeholder="जैसे: ग्राहक को चखने दिया, प्रचार..."
-                          value={inp.comp_reason}
-                          onChange={(e) => handleItemFieldChange(it.id, 'comp_reason', e.target.value)}
-                          required
-                        />
-                      )}
-
-                      <div className="flex justify-between text-xs font-semibold text-gray-600 bg-white p-2 rounded-xl border border-cream-200">
-                        <span>बिक्री: {formatCurrency(res.gross_sales)}</span>
-                        <span>कमीशन: {formatCurrency(res.commission_amount)}</span>
-                        <span className="text-emerald-800">वसूली: {formatCurrency(res.net_collection)}</span>
-                      </div>
                     </div>
                   );
                 })}
               </div>
             </div>
           ) : (
-            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold">
-              कृपया ऊपर दी गई सूची से स्टॉक निकासी का चयन करें।
+            <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200 text-xs">
+              कृपया पहले ऊपर से एक सक्रिय निकासी पर्ची चुनें।
             </div>
           )}
 
-          {/* Payment Collection Inputs */}
-          <div className="p-4 rounded-2xl bg-cream-100/70 border border-cream-300 space-y-3">
-            <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider">
-              वसूली एवं भुगतान विवरण (Payment Received)
-            </h4>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <Input
-                type="number"
-                step="0.01"
-                label={t.cashReceived}
-                prefixSymbol="₹"
-                value={cashReceived}
-                onChange={(e) => setCashReceived(e.target.value)}
-              />
-              <Input
-                type="number"
-                step="0.01"
-                label={t.upiReceived}
-                prefixSymbol="₹"
-                value={upiReceived}
-                onChange={(e) => setUpiReceived(e.target.value)}
-              />
-              <Input
-                type="number"
-                step="0.01"
-                label={t.approvedCredit}
-                prefixSymbol="₹"
-                value={creditAmount}
-                onChange={(e) => setCreditAmount(e.target.value)}
-                helperText="उधार (Credit)"
-              />
-            </div>
+          {/* Collection & Payment Details */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+            <Input
+              type="number"
+              step="0.01"
+              label={`${t.cashReceived} (₹)`}
+              prefixSymbol="₹"
+              value={cashReceived}
+              onChange={(e) => setCashReceived(e.target.value)}
+            />
+            <Input
+              type="number"
+              step="0.01"
+              label={`${t.upiReceived} (₹)`}
+              prefixSymbol="₹"
+              value={upiReceived}
+              onChange={(e) => setUpiReceived(e.target.value)}
+            />
+            <Input
+              type="number"
+              step="0.01"
+              label={`${t.approvedCredit} (₹)`}
+              prefixSymbol="₹"
+              value={creditAmount}
+              onChange={(e) => setCreditAmount(e.target.value)}
+            />
           </div>
 
-          {/* Live Calculated Summary Card */}
-          <div className="p-4 rounded-2xl bg-gradient-to-br from-maroon-900 to-maroon-950 text-white space-y-2 text-xs">
-            <div className="flex justify-between text-cream-200">
-              <span>सकल बिक्री (Gross Sales):</span>
-              <span className="font-mono font-bold text-white">{formatCurrency(liveSummary.gross_sales)}</span>
+          {/* Live Summary Box */}
+          <div className="p-3.5 rounded-2xl bg-cream-100/60 dark:bg-gray-800/80 border border-cream-200 dark:border-gray-700 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div>
+              <span className="text-gray-500 block">कुल बिक्री</span>
+              <span className="font-bold text-sm text-gray-900 dark:text-gray-100">{formatCurrency(summary.gross_sales)}</span>
             </div>
-            <div className="flex justify-between text-cream-200">
-              <span>विक्रेता कमीशन (-):</span>
-              <span className="font-mono font-bold text-saffron-300">-{formatCurrency(liveSummary.total_commission)}</span>
+            <div>
+              <span className="text-gray-500 block">कमीशन</span>
+              <span className="font-bold text-sm text-maroon-800 dark:text-rose-400">{formatCurrency(summary.total_commission)}</span>
             </div>
-            <div className="flex justify-between font-bold text-sm border-t border-white/10 pt-1.5">
-              <span>{t.expectedCollection}:</span>
-              <span className="font-mono text-saffron-400">{formatCurrency(liveSummary.expected_collection)}</span>
+            <div>
+              <span className="text-emerald-800 dark:text-emerald-400 font-semibold block">अपेक्षित वसूली</span>
+              <span className="font-bold text-sm text-emerald-950 dark:text-emerald-200">{formatCurrency(summary.expected_collection)}</span>
             </div>
-            <div className="flex justify-between text-cream-200">
-              <span>कुल प्राप्त राशि (Cash + UPI + Credit):</span>
-              <span className="font-mono font-bold text-white">{formatCurrency(liveSummary.accounted_amount)}</span>
-            </div>
-            <div className="flex justify-between font-extrabold text-sm border-t border-white/10 pt-1.5">
-              <span>{liveSummary.collection_difference < 0 ? t.shortage : t.surplus}:</span>
-              <span
-                className={`font-mono ${
-                  liveSummary.collection_difference < 0 ? 'text-rose-400' : 'text-emerald-400'
-                }`}
-              >
-                {formatCurrency(Math.abs(liveSummary.collection_difference))}
-              </span>
+            <div>
+              <span className="text-amber-800 dark:text-amber-400 font-semibold block">कुल प्राप्त</span>
+              <span className="font-bold text-sm text-amber-950 dark:text-amber-200">{formatCurrency(summary.total_received)}</span>
             </div>
           </div>
 
           <Input
             label="टिप्पणी (Notes)"
-            placeholder="जैसे: पूरा हिसाब चुकता, ₹50 कल देगा..."
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
           />
 
-          <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100">
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100 dark:border-gray-800">
             <Button
               type="button"
               variant="secondary"
@@ -637,13 +812,360 @@ export const SettlementsPage: React.FC = () => {
               {t.cancel}
             </Button>
             <Button type="submit" variant="primary" isLoading={processSettlement.isPending}>
-              {isOwner ? t.approveSettlement : t.submitPending}
+              {t.save}
             </Button>
           </div>
         </form>
       </Modal>
 
-      {/* Printable Receipt Modal */}
+      {/* Edit Pending Settlement Modal */}
+      <Modal
+        isOpen={Boolean(editingPendingSettlement)}
+        onClose={() => setEditingPendingSettlement(null)}
+        title={`${t.editDraft}: ${editingPendingSettlement?.settlement_number}`}
+        subtitle="स्वीकृति से पूर्व हिसाब व वापसी मात्रा संशोधित करें"
+        maxWidth="lg"
+      >
+        <form onSubmit={handleUpdatePendingSubmit} className="space-y-4">
+          {formError && (
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
+          {currentIssue && (
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                उत्पाद वापसी संशोधन (Pieces)
+              </h4>
+
+              <div className="space-y-3">
+                {currentIssue.items.map((it) => {
+                  const inp = itemInputs[it.id] || {
+                    returned_qty: 0,
+                    damaged_qty: 0,
+                    comp_qty: 0,
+                    damage_reason: '',
+                    comp_reason: '',
+                  };
+                  const res = calculateSettlementItem({
+                    issued_quantity: it.issued_quantity,
+                    returned_quantity: inp.returned_qty,
+                    damaged_quantity: inp.damaged_qty,
+                    complimentary_quantity: inp.comp_qty,
+                    unit_selling_price: it.unit_selling_price_snapshot,
+                    commission_type: it.commission_type_snapshot as any,
+                    commission_value: it.commission_value_snapshot,
+                  });
+
+                  return (
+                    <div
+                      key={it.id}
+                      className="p-3.5 rounded-2xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 space-y-3"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="font-bold text-sm text-gray-900 dark:text-gray-100 block">
+                            {language === 'hi' ? it.product?.name_hi : it.product?.name_en}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            दी गई मात्रा: {it.issued_quantity}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs text-gray-500 block">कुल बिकी पीस:</span>
+                          <span className="font-mono font-black text-lg text-emerald-800 dark:text-emerald-400">
+                            {res.sold_quantity} {t.pieces}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <Input
+                          type="number"
+                          label={t.returnedQty}
+                          isPieceQuantity
+                          value={inp.returned_qty}
+                          onChange={(e) =>
+                            handleItemFieldChange(it.id, 'returned_qty', parseInt(e.target.value, 10) || 0)
+                          }
+                        />
+                        <Input
+                          type="number"
+                          label={t.damagedQty}
+                          isPieceQuantity
+                          value={inp.damaged_qty}
+                          onChange={(e) =>
+                            handleItemFieldChange(it.id, 'damaged_qty', parseInt(e.target.value, 10) || 0)
+                          }
+                        />
+                        <Input
+                          type="number"
+                          label={t.compQty}
+                          isPieceQuantity
+                          value={inp.comp_qty}
+                          onChange={(e) =>
+                            handleItemFieldChange(it.id, 'comp_qty', parseInt(e.target.value, 10) || 0)
+                          }
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+            <Input
+              type="number"
+              step="0.01"
+              label={`${t.cashReceived} (₹)`}
+              prefixSymbol="₹"
+              value={cashReceived}
+              onChange={(e) => setCashReceived(e.target.value)}
+            />
+            <Input
+              type="number"
+              step="0.01"
+              label={`${t.upiReceived} (₹)`}
+              prefixSymbol="₹"
+              value={upiReceived}
+              onChange={(e) => setUpiReceived(e.target.value)}
+            />
+            <Input
+              type="number"
+              step="0.01"
+              label={`${t.approvedCredit} (₹)`}
+              prefixSymbol="₹"
+              value={creditAmount}
+              onChange={(e) => setCreditAmount(e.target.value)}
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100 dark:border-gray-800">
+            <Button type="button" variant="secondary" onClick={() => setEditingPendingSettlement(null)}>
+              {t.cancel}
+            </Button>
+            <Button type="submit" variant="primary" isLoading={updatePendingSettlement.isPending}>
+              {t.save}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Correct Approved Settlement Modal (Owner Only) */}
+      <Modal
+        isOpen={Boolean(correctingSettlement)}
+        onClose={() => setCorrectingSettlement(null)}
+        title={`${t.correctRecord}: ${correctingSettlement?.settlement_number}`}
+        subtitle="पुराने वित्तीय व स्टॉक असर को उलटकर नया स्वीकृत हिसाब (V{(correctingSettlement?.version_number || 1) + 1}) दर्ज होगा"
+        maxWidth="lg"
+      >
+        <form onSubmit={handleCorrectApprovedSubmit} className="space-y-4">
+          {isDayClosed(correctingSettlement?.settlement_date || '') && (
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs space-y-2">
+              <div className="flex items-center gap-2 font-bold">
+                <Lock className="w-4 h-4 text-amber-700" />
+                <span>{t.closedDayWarning}</span>
+              </div>
+              <p>तारीख {formatDate(correctingSettlement?.settlement_date || '')} का दिन क्लोज हो चुका है।</p>
+              <Link to="/closing">
+                <Button size="sm" variant="outline" className="mt-1" rightIcon={<ArrowRight className="w-3.5 h-3.5" />}>
+                  दैनिक क्लोजिंग खोलें
+                </Button>
+              </Link>
+            </div>
+          )}
+
+          {formError && (
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
+          <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-200 text-blue-900 text-xs flex items-start gap-2">
+            <ShieldAlert className="w-4 h-4 text-blue-700 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">सुरक्षित वित्तीय सुधार:</p>
+              <p className="text-blue-800">
+                पुराने हिसाब के स्टॉक रिवर्सल एवं नकद/UPI सुधार स्वतः दर्ज होंगे।
+              </p>
+            </div>
+          </div>
+
+          {currentIssue && (
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                उत्पाद वापसी व बिक्री संशोधन (Pieces)
+              </h4>
+
+              <div className="space-y-3">
+                {currentIssue.items.map((it) => {
+                  const inp = itemInputs[it.id] || {
+                    returned_qty: 0,
+                    damaged_qty: 0,
+                    comp_qty: 0,
+                    damage_reason: '',
+                    comp_reason: '',
+                  };
+                  const res = calculateSettlementItem({
+                    issued_quantity: it.issued_quantity,
+                    returned_quantity: inp.returned_qty,
+                    damaged_quantity: inp.damaged_qty,
+                    complimentary_quantity: inp.comp_qty,
+                    unit_selling_price: it.unit_selling_price_snapshot,
+                    commission_type: it.commission_type_snapshot as any,
+                    commission_value: it.commission_value_snapshot,
+                  });
+
+                  return (
+                    <div
+                      key={it.id}
+                      className="p-3.5 rounded-2xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 space-y-3"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="font-bold text-sm text-gray-900 dark:text-gray-100 block">
+                            {language === 'hi' ? it.product?.name_hi : it.product?.name_en}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            दी गई मात्रा: {it.issued_quantity}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs text-gray-500 block">नया बिकी पीस:</span>
+                          <span className="font-mono font-black text-lg text-emerald-800 dark:text-emerald-400">
+                            {res.sold_quantity} {t.pieces}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <Input
+                          type="number"
+                          label={t.returnedQty}
+                          isPieceQuantity
+                          value={inp.returned_qty}
+                          onChange={(e) =>
+                            handleItemFieldChange(it.id, 'returned_qty', parseInt(e.target.value, 10) || 0)
+                          }
+                        />
+                        <Input
+                          type="number"
+                          label={t.damagedQty}
+                          isPieceQuantity
+                          value={inp.damaged_qty}
+                          onChange={(e) =>
+                            handleItemFieldChange(it.id, 'damaged_qty', parseInt(e.target.value, 10) || 0)
+                          }
+                        />
+                        <Input
+                          type="number"
+                          label={t.compQty}
+                          isPieceQuantity
+                          value={inp.comp_qty}
+                          onChange={(e) =>
+                            handleItemFieldChange(it.id, 'comp_qty', parseInt(e.target.value, 10) || 0)
+                          }
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+            <Input
+              type="number"
+              step="0.01"
+              label={`${t.cashReceived} (₹)`}
+              prefixSymbol="₹"
+              value={cashReceived}
+              onChange={(e) => setCashReceived(e.target.value)}
+            />
+            <Input
+              type="number"
+              step="0.01"
+              label={`${t.upiReceived} (₹)`}
+              prefixSymbol="₹"
+              value={upiReceived}
+              onChange={(e) => setUpiReceived(e.target.value)}
+            />
+            <Input
+              type="number"
+              step="0.01"
+              label={`${t.approvedCredit} (₹)`}
+              prefixSymbol="₹"
+              value={creditAmount}
+              onChange={(e) => setCreditAmount(e.target.value)}
+            />
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-cream-100/60 dark:bg-gray-800/80 border border-cream-200 dark:border-gray-700 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div>
+              <span className="text-gray-500 block">नया Gross Sales</span>
+              <span className="font-bold text-sm text-gray-900 dark:text-gray-100">{formatCurrency(summary.gross_sales)}</span>
+            </div>
+            <div>
+              <span className="text-gray-500 block">नया कमीशन</span>
+              <span className="font-bold text-sm text-maroon-800 dark:text-rose-400">{formatCurrency(summary.total_commission)}</span>
+            </div>
+            <div>
+              <span className="text-emerald-800 dark:text-emerald-400 font-semibold block">अपेक्षित वसूली</span>
+              <span className="font-bold text-sm text-emerald-950 dark:text-emerald-200">{formatCurrency(summary.expected_collection)}</span>
+            </div>
+            <div>
+              <span className="text-amber-800 dark:text-amber-400 font-semibold block">कुल प्राप्त</span>
+              <span className="font-bold text-sm text-amber-950 dark:text-amber-200">{formatCurrency(summary.total_received)}</span>
+            </div>
+          </div>
+
+          <Input
+            label={`${t.correctionReason} *`}
+            placeholder="जैसे: शाम को नकद गिनती में ₹200 का अंतर ठीक किया गया..."
+            value={correctionReason}
+            onChange={(e) => setCorrectionReason(e.target.value)}
+            helperText="कम से कम 5 अक्षर का स्पष्ट कारण"
+            required
+          />
+
+          <Input
+            label="अतिरिक्त टिप्पणी (Notes)"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100 dark:border-gray-800">
+            <Button type="button" variant="secondary" onClick={() => setCorrectingSettlement(null)}>
+              {t.cancel}
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              isLoading={correctApprovedSettlement.isPending}
+              disabled={isDayClosed(correctingSettlement?.settlement_date || '')}
+            >
+              {t.correctRecord}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Revision History Modal */}
+      <RevisionHistoryModal
+        isOpen={Boolean(historySettlementId)}
+        onClose={() => setHistorySettlementId(null)}
+        title={`${t.revisionHistory}: ${settlements.find((s) => s.id === historySettlementId)?.settlement_number || ''}`}
+        revisions={revisionHistory}
+        isLoading={isHistoryLoading}
+      />
+
+      {/* Receipt Modal */}
       <Modal
         isOpen={Boolean(receiptSettlement)}
         onClose={() => setReceiptSettlement(null)}

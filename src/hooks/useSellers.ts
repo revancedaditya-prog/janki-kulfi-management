@@ -171,3 +171,89 @@ export function useIssueSellerStock() {
     },
   });
 }
+
+export function useUpdateDraftSellerIssue() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({
+      issueId,
+      issueDate,
+      sellerId,
+      cartId,
+      items,
+      notes,
+    }: {
+      issueId: string;
+      issueDate: string;
+      sellerId: string;
+      cartId: string | null;
+      items: { product_id: string; issued_quantity: number }[];
+      notes: string;
+    }) => {
+      return api.updateDraftSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}
+
+export function useCancelDraftSellerIssue() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async (issueId: string) => {
+      return api.cancelDraftSellerIssue(issueId, user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
+    },
+  });
+}
+
+export function useCorrectSellerIssue() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({
+      issueId,
+      issueDate,
+      sellerId,
+      cartId,
+      items,
+      notes,
+      reason,
+    }: {
+      issueId: string;
+      issueDate: string;
+      sellerId: string;
+      cartId: string | null;
+      items: { product_id: string; issued_quantity: number }[];
+      notes: string;
+      reason: string;
+    }) => {
+      return api.correctSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, reason, user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['sellers'] });
+      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}
+
+export function useIssueRevisionHistory(issueId?: string) {
+  return useQuery({
+    queryKey: ['issue_revisions', issueId],
+    queryFn: () => (issueId ? api.getIssueRevisionHistory(issueId) : Promise.resolve([])),
+    enabled: !!issueId,
+  });
+}

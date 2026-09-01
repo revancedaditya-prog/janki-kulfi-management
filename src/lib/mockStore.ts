@@ -16,6 +16,7 @@ import {
   AuditLog,
   DashboardSummary,
   BackupHistory,
+  RevisionRecord,
 } from '@/types';
 import {
   calculateSaleableProduction,
@@ -310,6 +311,10 @@ class MockStore {
   public resetToDefault(): void {
     this.state = JSON.parse(JSON.stringify(DEFAULT_STATE));
     this.saveState();
+  }
+
+  public getState() {
+    return this.state;
   }
 
   // --- Auth & Profiles ---
@@ -615,9 +620,11 @@ class MockStore {
 
   // --- Production Workflow ---
   public getProductionBatches(): ProductionBatchWithItems[] {
-    return [...this.state.production_batches].sort(
-      (a, b) => new Date(b.production_date).getTime() - new Date(a.production_date).getTime()
-    );
+    return [...this.state.production_batches]
+      .filter((b) => b.is_current_version !== false)
+      .sort(
+        (a, b) => new Date(b.production_date).getTime() - new Date(a.production_date).getTime()
+      );
   }
 
   public createProductionBatch(
@@ -663,6 +670,13 @@ class MockStore {
       total_ingredient_cost: totalIngredientCost,
       notes: notes || null,
       completed_at: null,
+      version_number: 1,
+      is_current_version: true,
+      correction_of_id: null,
+      superseded_by_id: null,
+      correction_reason: null,
+      corrected_by: null,
+      corrected_at: null,
       created_by: userId,
       created_at: now,
       updated_at: now,
@@ -743,11 +757,267 @@ class MockStore {
     this.saveState();
   }
 
+  public updateDraftProductionBatch(
+    batchId: string,
+    productionDate: string,
+    totalIngredientCost: number,
+    notes: string,
+    items: { product_id: string; produced_quantity: number; damaged_quantity: number; notes?: string }[],
+    userId: string
+  ): ProductionBatchWithItems {
+    const batch = this.state.production_batches.find((b) => b.id === batchId);
+    if (!batch) throw new Error('Production batch not found');
+    if (batch.status !== 'draft') throw new Error('Only draft batches can be edited directly');
+
+    const user = this.state.profiles.find((p) => p.id === userId);
+    if (user && user.role === 'production_worker' && batch.created_by && batch.created_by !== userId) {
+      throw new Error('Workers can edit only their own drafts.');
+    }
+
+    const totalSaleable = items.reduce((sum, it) => sum + calculateSaleableProduction(it.produced_quantity, it.damaged_quantity), 0);
+
+    const batchItems = items.map((it) => {
+      const saleable = calculateSaleableProduction(it.produced_quantity, it.damaged_quantity);
+      const allocatedCost = totalSaleable > 0 ? Number(((saleable / totalSaleable) * totalIngredientCost).toFixed(2)) : 0;
+      const unitCost = saleable > 0 ? Number((allocatedCost / saleable).toFixed(2)) : 0;
+      const product = this.state.products.find((p) => p.id === it.product_id);
+
+      return {
+        id: `pitem-${generateId().slice(0, 8)}`,
+        batch_id: batchId,
+        product_id: it.product_id,
+        produced_quantity: it.produced_quantity,
+        damaged_quantity: it.damaged_quantity,
+        saleable_quantity: saleable,
+        allocated_ingredient_cost: allocatedCost,
+        unit_production_cost: unitCost,
+        notes: it.notes || null,
+        product,
+      };
+    });
+
+    const oldBatch = { ...batch };
+    batch.production_date = productionDate;
+    batch.total_ingredient_cost = totalIngredientCost;
+    batch.notes = notes || null;
+    batch.items = batchItems;
+    batch.updated_at = new Date().toISOString();
+
+    this.logAudit('production_batches', batchId, 'EDIT_DRAFT', oldBatch, batch, 'Draft production batch updated', userId);
+    this.saveState();
+    return batch;
+  }
+
+  public correctProductionBatch(
+    batchId: string,
+    productionDate: string,
+    totalIngredientCost: number,
+    notes: string,
+    items: { product_id: string; produced_quantity: number; damaged_quantity: number; notes?: string }[],
+    reason: string,
+    userId: string
+  ): ProductionBatchWithItems {
+    const user = this.state.profiles.find((p) => p.id === userId);
+    if (user && user.role !== 'owner') {
+      throw new Error('Access Denied: Only Owners are authorized to correct completed production batches.');
+    }
+
+    if (!reason || reason.trim().length < 5) {
+      throw new Error('A valid explanation of at least 5 characters is required for correcting a completed batch.');
+    }
+
+    const oldBatch = this.state.production_batches.find((b) => b.id === batchId);
+    if (!oldBatch) throw new Error('Production batch not found');
+    if (oldBatch.status !== 'completed' || oldBatch.is_current_version === false) {
+      throw new Error('Only active, completed production batches can be corrected.');
+    }
+
+    // Check closed business day
+    const closing = this.state.daily_closings.find((c) => c.business_date === oldBatch.production_date);
+    if (closing && closing.status === 'closed') {
+      throw new Error(`Business day (${oldBatch.production_date}) is closed. You must reopen the business day first before correcting this record.`);
+    }
+
+    // Stock Safety check: check each product difference
+    const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer')!;
+    const prodLoc = this.state.stock_locations.find((l) => l.location_type === 'production')!;
+
+    for (const it of items) {
+      const oldItem = oldBatch.items.find((i) => i.product_id === it.product_id);
+      const oldSaleable = oldItem ? oldItem.saleable_quantity : 0;
+      const newSaleable = it.produced_quantity - (it.damaged_quantity || 0);
+      const netDiff = newSaleable - oldSaleable;
+
+      if (netDiff < 0) {
+        const currentFreezerStock = this.getAvailableFreezerStock(it.product_id);
+        if (currentFreezerStock + netDiff < 0) {
+          throw new Error(`Correction cannot reduce production below stock already issued or consumed. Current freezer stock is ${currentFreezerStock}, proposed reduction is ${Math.abs(netDiff)}.`);
+        }
+      }
+    }
+
+    const now = new Date().toISOString();
+
+    // Reverse old stock movements
+    const oldMovements = this.state.stock_movements.filter(
+      (m) => m.reference_table === 'production_batches' && m.reference_id === batchId && (m.movement_type === 'production_completed' || (m.movement_type as any) === 'production_in')
+    );
+
+    for (const om of oldMovements) {
+      this.state.stock_movements.push({
+        id: `mv-${generateId().slice(0, 8)}`,
+        movement_date: now,
+        product_id: om.product_id,
+        source_location_id: om.destination_location_id,
+        destination_location_id: om.source_location_id,
+        quantity: om.quantity,
+        movement_type: 'production_reversal',
+        reference_table: 'production_batches',
+        reference_id: batchId,
+        reversal_of_movement_id: om.id,
+        notes: `Reversal for correction: ${reason}`,
+        created_by: userId,
+        created_at: now,
+      });
+    }
+
+    // Create new batch (Version N+1)
+    const newVersion = (oldBatch.version_number || 1) + 1;
+    const newBatchId = `batch-${generateId().slice(0, 8)}`;
+    const baseBatchNumber = oldBatch.batch_number.replace(/-V\d+$/, '');
+    const newBatchNumber = `${baseBatchNumber}-V${newVersion}`;
+
+    const totalSaleable = items.reduce((sum, it) => sum + calculateSaleableProduction(it.produced_quantity, it.damaged_quantity), 0);
+
+    const newItems = items.map((it) => {
+      const saleable = calculateSaleableProduction(it.produced_quantity, it.damaged_quantity);
+      const allocatedCost = totalSaleable > 0 ? Number(((saleable / totalSaleable) * totalIngredientCost).toFixed(2)) : 0;
+      const unitCost = saleable > 0 ? Number((allocatedCost / saleable).toFixed(2)) : 0;
+      const product = this.state.products.find((p) => p.id === it.product_id);
+
+      if (saleable > 0) {
+        this.state.stock_movements.push({
+          id: `mv-${generateId().slice(0, 8)}`,
+          movement_date: now,
+          product_id: it.product_id,
+          source_location_id: prodLoc.id,
+          destination_location_id: freezerLoc.id,
+          quantity: saleable,
+          movement_type: 'production_completed',
+          reference_table: 'production_batches',
+          reference_id: newBatchId,
+          notes: `Replacement stock for correction V${newVersion}`,
+          created_by: userId,
+          created_at: now,
+        });
+      }
+
+      return {
+        id: `pitem-${generateId().slice(0, 8)}`,
+        batch_id: newBatchId,
+        product_id: it.product_id,
+        produced_quantity: it.produced_quantity,
+        damaged_quantity: it.damaged_quantity,
+        saleable_quantity: saleable,
+        allocated_ingredient_cost: allocatedCost,
+        unit_production_cost: unitCost,
+        notes: it.notes || null,
+        product,
+      };
+    });
+
+    const newBatch: ProductionBatchWithItems = {
+      id: newBatchId,
+      batch_number: newBatchNumber,
+      production_date: productionDate,
+      status: 'completed',
+      total_ingredient_cost: totalIngredientCost,
+      notes: notes || null,
+      completed_at: now,
+      version_number: newVersion,
+      is_current_version: true,
+      correction_of_id: oldBatch.id,
+      superseded_by_id: null,
+      correction_reason: reason,
+      corrected_by: userId,
+      corrected_at: now,
+      created_by: oldBatch.created_by,
+      created_at: oldBatch.created_at,
+      updated_at: now,
+      items: newItems,
+    };
+
+    // Supersede old batch
+    oldBatch.status = 'superseded';
+    oldBatch.is_current_version = false;
+    oldBatch.superseded_by_id = newBatchId;
+    oldBatch.updated_at = now;
+
+    this.state.production_batches.push(newBatch);
+    this.logAudit('production_batches', newBatchId, 'CORRECT_RECORD', oldBatch, newBatch, reason, userId);
+    this.saveState();
+    return newBatch;
+  }
+
+  public getProductionRevisionHistory(batchId: string): RevisionRecord[] {
+    const allBatches = this.state.production_batches;
+    const target = allBatches.find((b) => b.id === batchId);
+    if (!target) return [];
+
+    let root = target;
+    while (root.correction_of_id) {
+      const parent = allBatches.find((b) => b.id === root.correction_of_id);
+      if (!parent) break;
+      root = parent;
+    }
+
+    const chain: ProductionBatchWithItems[] = [];
+    let curr: ProductionBatchWithItems | undefined = root;
+    while (curr) {
+      chain.push(curr);
+      if (!curr.superseded_by_id) break;
+      curr = allBatches.find((b) => b.id === curr!.superseded_by_id);
+    }
+
+    const profiles = this.state.profiles;
+
+    return chain.map((b) => {
+      const user = profiles.find((p) => p.id === (b.corrected_by || b.created_by));
+      const totalProduced = b.items.reduce((s, it) => s + it.produced_quantity, 0);
+      const totalSaleable = b.items.reduce((s, it) => s + it.saleable_quantity, 0);
+
+      return {
+        id: b.id,
+        version_number: b.version_number || 1,
+        status: b.status,
+        date: b.production_date,
+        created_at: b.created_at,
+        corrected_at: b.corrected_at,
+        corrected_by_name: user?.full_name || 'Owner',
+        correction_reason: b.correction_reason,
+        is_current_version: b.is_current_version !== false,
+        correction_of_id: b.correction_of_id,
+        superseded_by_id: b.superseded_by_id,
+        summary_text: `Version ${b.version_number || 1} (${b.status}): ${totalProduced} pcs produced (${totalSaleable} saleable), Cost: ₹${b.total_ingredient_cost}`,
+        details: b,
+        financial_effect: {
+          cost: b.total_ingredient_cost,
+        },
+        stock_effect: {
+          produced: totalProduced,
+          damaged: totalProduced - totalSaleable,
+        },
+      };
+    });
+  }
+
   // --- Seller Stock Issue Workflow ---
   public getSellerIssues(): SellerIssueWithDetails[] {
-    return [...this.state.seller_issues].sort(
-      (a, b) => new Date(b.issue_date).getTime() - new Date(a.issue_date).getTime()
-    );
+    return [...this.state.seller_issues]
+      .filter((i) => i.is_current_version !== false)
+      .sort(
+        (a, b) => new Date(b.issue_date).getTime() - new Date(a.issue_date).getTime()
+      );
   }
 
   public issueSellerStock(
@@ -841,6 +1111,13 @@ class MockStore {
       status: 'issued',
       issued_at: now,
       notes: notes || null,
+      version_number: 1,
+      is_current_version: true,
+      correction_of_id: null,
+      superseded_by_id: null,
+      correction_reason: null,
+      corrected_by: null,
+      corrected_at: null,
       created_by: userId,
       created_at: now,
       updated_at: now,
@@ -856,11 +1133,309 @@ class MockStore {
     return newIssue;
   }
 
+  public updateDraftSellerIssue(
+    issueId: string,
+    issueDate: string,
+    sellerId: string,
+    cartId: string | null,
+    items: { product_id: string; issued_quantity: number }[],
+    notes: string,
+    userId: string
+  ): SellerIssueWithDetails {
+    const issue = this.state.seller_issues.find((i) => i.id === issueId);
+    if (!issue) throw new Error('Stock issue not found');
+    if (issue.status !== 'draft') throw new Error('Only draft stock issues can be directly edited');
+
+    const seller = this.state.sellers.find((s) => s.id === sellerId);
+    const cart = this.state.carts.find((c) => c.id === (cartId || seller?.default_cart_id));
+
+    // Validate available freezer stock
+    for (const it of items) {
+      const available = this.getAvailableFreezerStock(it.product_id);
+      if (available < it.issued_quantity) {
+        const prod = this.state.products.find((p) => p.id === it.product_id);
+        throw new Error(
+          `Insufficient freezer stock for ${prod?.name_en || 'Product'} (Available: ${available}, Requested: ${it.issued_quantity})`
+        );
+      }
+    }
+
+    const issueItems = items.map((it) => {
+      const price = this.getActivePrice(it.product_id);
+      if (!price) throw new Error(`No active price configured for product ${it.product_id}`);
+      const product = this.state.products.find((p) => p.id === it.product_id);
+
+      return {
+        id: `iitem-${generateId().slice(0, 8)}`,
+        seller_issue_id: issueId,
+        product_id: it.product_id,
+        issued_quantity: it.issued_quantity,
+        unit_selling_price_snapshot: price.selling_price,
+        commission_type_snapshot: price.commission_type,
+        commission_value_snapshot: price.commission_value,
+        product,
+      };
+    });
+
+    const oldIssue = { ...issue };
+    issue.issue_date = issueDate;
+    issue.seller_id = sellerId;
+    issue.cart_id = cart?.id || null;
+    issue.seller = seller;
+    issue.cart = cart;
+    issue.items = issueItems;
+    issue.notes = notes || null;
+    issue.updated_at = new Date().toISOString();
+
+    this.logAudit('seller_issues', issueId, 'EDIT_DRAFT', oldIssue, issue, 'Draft stock issue updated', userId);
+    this.saveState();
+    return issue;
+  }
+
+  public cancelDraftSellerIssue(issueId: string, userId: string): void {
+    const issue = this.state.seller_issues.find((i) => i.id === issueId);
+    if (!issue) throw new Error('Stock issue not found');
+    if (issue.status !== 'draft') throw new Error('Only draft stock issues can be cancelled');
+
+    issue.status = 'cancelled';
+    issue.updated_at = new Date().toISOString();
+    this.logAudit('seller_issues', issueId, 'CANCEL_DRAFT', null, issue, 'Draft stock issue cancelled', userId);
+    this.saveState();
+  }
+
+  public correctSellerIssue(
+    issueId: string,
+    issueDate: string,
+    sellerId: string,
+    cartId: string | null,
+    items: { product_id: string; issued_quantity: number }[],
+    notes: string,
+    reason: string,
+    userId: string
+  ): SellerIssueWithDetails {
+    const user = this.state.profiles.find((p) => p.id === userId);
+    if (user && user.role !== 'owner') {
+      throw new Error('Access Denied: Only Owners can correct stock issues.');
+    }
+
+    if (!reason || reason.trim().length < 5) {
+      throw new Error('A valid correction reason of at least 5 characters is required.');
+    }
+
+    const oldIssue = this.state.seller_issues.find((i) => i.id === issueId);
+    if (!oldIssue) throw new Error('Stock issue not found');
+    if (oldIssue.is_current_version === false) {
+      throw new Error('Only active, current version of stock issue can be corrected.');
+    }
+
+    // Check if issue has settlements
+    const settlements = this.state.seller_settlements.filter(
+      (s) => s.seller_issue_id === issueId && s.status !== 'rejected' && s.status !== 'superseded'
+    );
+    if (settlements.length > 0 || oldIssue.status === 'settled' || oldIssue.status === 'partially_settled') {
+      throw new Error('This stock issue has a settlement. Correct or reverse the related settlement before changing this issue.');
+    }
+
+    if (oldIssue.status !== 'issued' && oldIssue.status !== 'draft') {
+      throw new Error('Only active issued or draft records can be corrected.');
+    }
+
+    // Check closed business day
+    const closing = this.state.daily_closings.find((c) => c.business_date === oldIssue.issue_date);
+    if (closing && closing.status === 'closed') {
+      throw new Error(`Business day (${oldIssue.issue_date}) is closed. Please reopen the business day first.`);
+    }
+
+    const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer')!;
+    let sellerLoc = this.state.stock_locations.find(
+      (l) => l.location_type === 'seller' && l.seller_id === sellerId
+    );
+    if (!sellerLoc) {
+      sellerLoc = {
+        id: `loc-seller-${sellerId}`,
+        location_type: 'seller',
+        name: 'Seller Cart Stock',
+        seller_id: sellerId,
+        cart_id: cartId,
+        is_active: true,
+      };
+      this.state.stock_locations.push(sellerLoc);
+    }
+
+    // Validate available freezer stock for additional quantity
+    for (const it of items) {
+      const oldItem = oldIssue.items.find((i) => i.product_id === it.product_id);
+      const oldIssued = oldItem ? oldItem.issued_quantity : 0;
+      const netDiff = it.issued_quantity - oldIssued;
+
+      if (netDiff > 0) {
+        const available = this.getAvailableFreezerStock(it.product_id);
+        if (available < netDiff) {
+          const prod = this.state.products.find((p) => p.id === it.product_id);
+          throw new Error(`Insufficient freezer stock for ${prod?.name_en || 'Product'} (Available: ${available}, Required: ${netDiff})`);
+        }
+      }
+    }
+
+    const now = new Date().toISOString();
+
+    // Reverse old stock movements
+    const oldMovements = this.state.stock_movements.filter(
+      (m) => m.reference_table === 'seller_issues' && m.reference_id === issueId && m.movement_type === 'seller_issued'
+    );
+
+    for (const om of oldMovements) {
+      this.state.stock_movements.push({
+        id: `mv-${generateId().slice(0, 8)}`,
+        movement_date: now,
+        product_id: om.product_id,
+        source_location_id: om.destination_location_id,
+        destination_location_id: om.source_location_id,
+        quantity: om.quantity,
+        movement_type: 'issue_reversal',
+        reference_table: 'seller_issues',
+        reference_id: issueId,
+        reversal_of_movement_id: om.id,
+        notes: `Reversal for issue correction: ${reason}`,
+        created_by: userId,
+        created_at: now,
+      });
+    }
+
+    // Create new issue (Version N+1)
+    const newVersion = (oldIssue.version_number || 1) + 1;
+    const newIssueId = `issue-${generateId().slice(0, 8)}`;
+    const baseIssueNumber = oldIssue.issue_number.replace(/-V\d+$/, '');
+    const newIssueNumber = `${baseIssueNumber}-V${newVersion}`;
+
+    const seller = this.state.sellers.find((s) => s.id === sellerId);
+    const cart = this.state.carts.find((c) => c.id === (cartId || seller?.default_cart_id));
+
+    const newIssueItems = items.map((it) => {
+      const price = this.getActivePrice(it.product_id);
+      if (!price) throw new Error(`No active price configured for product ${it.product_id}`);
+      const product = this.state.products.find((p) => p.id === it.product_id);
+
+      if (it.issued_quantity > 0) {
+        this.state.stock_movements.push({
+          id: `mv-${generateId().slice(0, 8)}`,
+          movement_date: now,
+          product_id: it.product_id,
+          source_location_id: freezerLoc.id,
+          destination_location_id: sellerLoc!.id,
+          quantity: it.issued_quantity,
+          movement_type: 'seller_issued',
+          reference_table: 'seller_issues',
+          reference_id: newIssueId,
+          notes: `Corrected stock issue: ${newIssueNumber}`,
+          created_by: userId,
+          created_at: now,
+        });
+      }
+
+      return {
+        id: `iitem-${generateId().slice(0, 8)}`,
+        seller_issue_id: newIssueId,
+        product_id: it.product_id,
+        issued_quantity: it.issued_quantity,
+        unit_selling_price_snapshot: price.selling_price,
+        commission_type_snapshot: price.commission_type,
+        commission_value_snapshot: price.commission_value,
+        product,
+      };
+    });
+
+    const newIssue: SellerIssueWithDetails = {
+      id: newIssueId,
+      issue_number: newIssueNumber,
+      seller_id: sellerId,
+      cart_id: cart?.id || null,
+      issue_date: issueDate,
+      status: 'issued',
+      issued_at: now,
+      notes: notes || null,
+      version_number: newVersion,
+      is_current_version: true,
+      correction_of_id: oldIssue.id,
+      superseded_by_id: null,
+      correction_reason: reason,
+      corrected_by: userId,
+      corrected_at: now,
+      created_by: oldIssue.created_by,
+      created_at: oldIssue.created_at,
+      updated_at: now,
+      seller,
+      cart,
+      items: newIssueItems,
+      settlements: [],
+    };
+
+    // Supersede old issue
+    oldIssue.status = 'superseded';
+    oldIssue.is_current_version = false;
+    oldIssue.superseded_by_id = newIssueId;
+    oldIssue.updated_at = now;
+
+    this.state.seller_issues.push(newIssue);
+    this.logAudit('seller_issues', newIssueId, 'CORRECT_RECORD', oldIssue, newIssue, reason, userId);
+    this.saveState();
+    return newIssue;
+  }
+
+  public getIssueRevisionHistory(issueId: string): RevisionRecord[] {
+    const allIssues = this.state.seller_issues;
+    const target = allIssues.find((i) => i.id === issueId);
+    if (!target) return [];
+
+    let root = target;
+    while (root.correction_of_id) {
+      const parent = allIssues.find((i) => i.id === root.correction_of_id);
+      if (!parent) break;
+      root = parent;
+    }
+
+    const chain: SellerIssueWithDetails[] = [];
+    let curr: SellerIssueWithDetails | undefined = root;
+    while (curr) {
+      chain.push(curr);
+      if (!curr.superseded_by_id) break;
+      curr = allIssues.find((i) => i.id === curr!.superseded_by_id);
+    }
+
+    const profiles = this.state.profiles;
+
+    return chain.map((i) => {
+      const user = profiles.find((p) => p.id === (i.corrected_by || i.created_by));
+      const totalIssued = i.items.reduce((s, it) => s + it.issued_quantity, 0);
+
+      return {
+        id: i.id,
+        version_number: i.version_number || 1,
+        status: i.status,
+        date: i.issue_date,
+        created_at: i.created_at,
+        corrected_at: i.corrected_at,
+        corrected_by_name: user?.full_name || 'Owner',
+        correction_reason: i.correction_reason,
+        is_current_version: i.is_current_version !== false,
+        correction_of_id: i.correction_of_id,
+        superseded_by_id: i.superseded_by_id,
+        summary_text: `Version ${i.version_number || 1} (${i.status}): ${totalIssued} pcs issued to ${i.seller?.full_name || 'Seller'}`,
+        details: i,
+        stock_effect: {
+          issued: totalIssued,
+        },
+      };
+    });
+  }
+
   // --- Seller Settlement Workflow ---
   public getSettlements(): SellerSettlementWithDetails[] {
-    return [...this.state.seller_settlements].sort(
-      (a, b) => new Date(b.settlement_date).getTime() - new Date(a.settlement_date).getTime()
-    );
+    return [...this.state.seller_settlements]
+      .filter((s) => s.is_current_version !== false)
+      .sort(
+        (a, b) => new Date(b.settlement_date).getTime() - new Date(a.settlement_date).getTime()
+      );
   }
 
   public processSellerSettlement(
@@ -1027,6 +1602,13 @@ class MockStore {
       approved_by: isApprovedByOwner ? userId : null,
       submitted_at: now,
       approved_at: isApprovedByOwner ? now : null,
+      version_number: 1,
+      is_current_version: true,
+      correction_of_id: null,
+      superseded_by_id: null,
+      correction_reason: null,
+      corrected_by: null,
+      corrected_at: null,
       created_at: now,
       updated_at: now,
       seller: issue.seller,
@@ -1130,6 +1712,382 @@ class MockStore {
     this.logAudit('seller_settlements', settlementId, 'APPROVE_SETTLEMENT', null, settlement, 'Owner approved settlement', userId);
     this.saveState();
     return settlement;
+  }
+
+  public updatePendingSettlement(
+    settlementId: string,
+    items: {
+      issue_item_id: string;
+      returned_quantity: number;
+      damaged_quantity: number;
+      complimentary_quantity: number;
+      damage_reason?: string;
+      complimentary_reason?: string;
+    }[],
+    cashReceived: number,
+    upiReceived: number,
+    creditAmount: number,
+    notes: string,
+    userId: string
+  ): SellerSettlementWithDetails {
+    const settlement = this.state.seller_settlements.find((s) => s.id === settlementId);
+    if (!settlement) throw new Error('Settlement not found');
+    if (settlement.status !== 'pending_approval' && settlement.status !== 'draft') {
+      throw new Error('Only pending or draft settlements can be updated before approval');
+    }
+
+    const user = this.state.profiles.find((p) => p.id === userId);
+    if (user && user.role === 'seller' && settlement.submitted_by && settlement.submitted_by !== userId) {
+      throw new Error('Sellers can edit only their own pending settlement submission');
+    }
+
+    const issue = this.state.seller_issues.find((i) => i.id === settlement.seller_issue_id);
+    if (!issue) throw new Error('Linked stock issue not found');
+
+    const calculationItems = items.map((it) => {
+      const issueItem = issue.items.find((ii) => ii.id === it.issue_item_id);
+      if (!issueItem) throw new Error(`Issue item ${it.issue_item_id} not found`);
+
+      return {
+        issued_quantity: issueItem.issued_quantity,
+        returned_quantity: it.returned_quantity,
+        damaged_quantity: it.damaged_quantity,
+        complimentary_quantity: it.complimentary_quantity,
+        unit_selling_price: issueItem.unit_selling_price_snapshot,
+        commission_type: issueItem.commission_type_snapshot as any,
+        commission_value: issueItem.commission_value_snapshot,
+        damage_reason: it.damage_reason,
+        complimentary_reason: it.complimentary_reason,
+      };
+    });
+
+    const summary = calculateSettlementSummary(calculationItems, cashReceived, upiReceived, creditAmount);
+
+    const settlementItems = items.map((it, idx) => {
+      const issueItem = issue.items.find((ii) => ii.id === it.issue_item_id)!;
+      const cItem = calculationItems[idx];
+      const sold = cItem.issued_quantity - (cItem.returned_quantity + cItem.damaged_quantity + cItem.complimentary_quantity);
+      const gross = sold * issueItem.unit_selling_price_snapshot;
+      const comm =
+        issueItem.commission_type_snapshot === 'percentage'
+          ? Number(((gross * issueItem.commission_value_snapshot) / 100).toFixed(2))
+          : sold * issueItem.commission_value_snapshot;
+
+      return {
+        id: `sitem-${generateId().slice(0, 8)}`,
+        settlement_id: settlementId,
+        seller_issue_item_id: it.issue_item_id,
+        product_id: issueItem.product_id,
+        issued_quantity_snapshot: issueItem.issued_quantity,
+        returned_quantity: it.returned_quantity,
+        damaged_quantity: it.damaged_quantity,
+        complimentary_quantity: it.complimentary_quantity,
+        sold_quantity: sold,
+        selling_price_snapshot: issueItem.unit_selling_price_snapshot,
+        gross_sales: gross,
+        commission_amount: comm,
+        damage_reason: it.damage_reason || null,
+        complimentary_reason: it.complimentary_reason || null,
+        product: issueItem.product,
+      };
+    });
+
+    const oldSettlement = { ...settlement };
+    settlement.cash_received = summary.cash_received;
+    settlement.upi_received = summary.upi_received;
+    settlement.credit_amount = summary.credit_amount;
+    settlement.gross_sales = summary.gross_sales;
+    settlement.total_commission = summary.total_commission;
+    settlement.expected_collection = summary.expected_collection;
+    settlement.total_received = summary.total_received;
+    settlement.outstanding_amount = summary.outstanding_amount;
+    settlement.shortage_amount = summary.shortage_amount;
+    settlement.notes = notes || null;
+    settlement.items = settlementItems;
+    settlement.updated_at = new Date().toISOString();
+
+    this.logAudit('seller_settlements', settlementId, 'EDIT_PENDING', oldSettlement, settlement, 'Pending settlement edited', userId);
+    this.saveState();
+    return settlement;
+  }
+
+  public correctApprovedSettlement(
+    settlementId: string,
+    settlementDate: string,
+    cashReceived: number,
+    upiReceived: number,
+    creditAmount: number,
+    items: {
+      issue_item_id: string;
+      returned_quantity: number;
+      damaged_quantity: number;
+      complimentary_quantity: number;
+      damage_reason?: string;
+      complimentary_reason?: string;
+    }[],
+    notes: string,
+    reason: string,
+    userId: string
+  ): SellerSettlementWithDetails {
+    const user = this.state.profiles.find((p) => p.id === userId);
+    if (user && user.role !== 'owner') {
+      throw new Error('Access Denied: Only Owners can correct approved settlements.');
+    }
+
+    if (!reason || reason.trim().length < 5) {
+      throw new Error('A valid correction reason of at least 5 characters is required.');
+    }
+
+    const oldSettlement = this.state.seller_settlements.find((s) => s.id === settlementId);
+    if (!oldSettlement) throw new Error('Settlement record not found');
+    if (oldSettlement.is_current_version === false) {
+      throw new Error('Only current version of settlement can be corrected.');
+    }
+
+    // Check closed business day
+    const closing = this.state.daily_closings.find((c) => c.business_date === oldSettlement.settlement_date);
+    if (closing && closing.status === 'closed') {
+      throw new Error(`Business day (${oldSettlement.settlement_date}) is closed. Please reopen the business day first.`);
+    }
+
+    const issue = this.state.seller_issues.find((i) => i.id === oldSettlement.seller_issue_id);
+    if (!issue) throw new Error('Linked stock issue not found');
+
+    const now = new Date().toISOString();
+    const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer')!;
+    const sellerLoc = this.state.stock_locations.find(
+      (l) => l.location_type === 'seller' && l.seller_id === oldSettlement.seller_id
+    )!;
+    const damagedLoc = this.state.stock_locations.find((l) => l.location_type === 'damaged')!;
+    const compLoc = this.state.stock_locations.find((l) => l.location_type === 'complimentary')!;
+
+    // Reverse old stock movements from previous approved settlement
+    const oldMovements = this.state.stock_movements.filter(
+      (m) => m.reference_table === 'seller_settlements' && m.reference_id === settlementId
+    );
+
+    for (const om of oldMovements) {
+      this.state.stock_movements.push({
+        id: `mv-${generateId().slice(0, 8)}`,
+        movement_date: now,
+        product_id: om.product_id,
+        source_location_id: om.destination_location_id,
+        destination_location_id: om.source_location_id,
+        quantity: om.quantity,
+        movement_type: 'settlement_reversal',
+        reference_table: 'seller_settlements',
+        reference_id: settlementId,
+        reversal_of_movement_id: om.id,
+        notes: `Reversal for settlement correction: ${reason}`,
+        created_by: userId,
+        created_at: now,
+      });
+    }
+
+    // Recalculate totals
+    const calculationItems = items.map((it) => {
+      const issueItem = issue.items.find((ii) => ii.id === it.issue_item_id);
+      if (!issueItem) throw new Error(`Issue item ${it.issue_item_id} not found`);
+
+      return {
+        issued_quantity: issueItem.issued_quantity,
+        returned_quantity: it.returned_quantity,
+        damaged_quantity: it.damaged_quantity,
+        complimentary_quantity: it.complimentary_quantity,
+        unit_selling_price: issueItem.unit_selling_price_snapshot,
+        commission_type: issueItem.commission_type_snapshot as any,
+        commission_value: issueItem.commission_value_snapshot,
+        damage_reason: it.damage_reason,
+        complimentary_reason: it.complimentary_reason,
+      };
+    });
+
+    const summary = calculateSettlementSummary(calculationItems, cashReceived, upiReceived, creditAmount);
+
+    const newVersion = (oldSettlement.version_number || 1) + 1;
+    const newSettlementId = `st-${generateId().slice(0, 8)}`;
+    const baseSettlementNumber = oldSettlement.settlement_number.replace(/-V\d+$/, '');
+    const newSettlementNumber = `${baseSettlementNumber}-V${newVersion}`;
+
+    const newSettlementItems = items.map((it, idx) => {
+      const issueItem = issue.items.find((ii) => ii.id === it.issue_item_id)!;
+      const cItem = calculationItems[idx];
+      const sold = cItem.issued_quantity - (cItem.returned_quantity + cItem.damaged_quantity + cItem.complimentary_quantity);
+      const gross = sold * issueItem.unit_selling_price_snapshot;
+      const comm =
+        issueItem.commission_type_snapshot === 'percentage'
+          ? Number(((gross * issueItem.commission_value_snapshot) / 100).toFixed(2))
+          : sold * issueItem.commission_value_snapshot;
+
+      if (it.returned_quantity > 0) {
+        this.state.stock_movements.push({
+          id: `mv-${generateId().slice(0, 8)}`,
+          movement_date: now,
+          product_id: issueItem.product_id,
+          source_location_id: sellerLoc.id,
+          destination_location_id: freezerLoc.id,
+          quantity: it.returned_quantity,
+          movement_type: 'seller_returned',
+          reference_table: 'seller_settlements',
+          reference_id: newSettlementId,
+          notes: `Returned to freezer: ${newSettlementNumber}`,
+          created_by: userId,
+          created_at: now,
+        });
+      }
+
+      if (it.damaged_quantity > 0) {
+        this.state.stock_movements.push({
+          id: `mv-${generateId().slice(0, 8)}`,
+          movement_date: now,
+          product_id: issueItem.product_id,
+          source_location_id: sellerLoc.id,
+          destination_location_id: damagedLoc.id,
+          quantity: it.damaged_quantity,
+          movement_type: 'damaged',
+          reference_table: 'seller_settlements',
+          reference_id: newSettlementId,
+          notes: `Seller damaged: ${it.damage_reason || ''}`,
+          created_by: userId,
+          created_at: now,
+        });
+      }
+
+      if (it.complimentary_quantity > 0) {
+        this.state.stock_movements.push({
+          id: `mv-${generateId().slice(0, 8)}`,
+          movement_date: now,
+          product_id: issueItem.product_id,
+          source_location_id: sellerLoc.id,
+          destination_location_id: compLoc.id,
+          quantity: it.complimentary_quantity,
+          movement_type: 'complimentary',
+          reference_table: 'seller_settlements',
+          reference_id: newSettlementId,
+          notes: `Complimentary stock: ${it.complimentary_reason || ''}`,
+          created_by: userId,
+          created_at: now,
+        });
+      }
+
+      return {
+        id: `sitem-${generateId().slice(0, 8)}`,
+        settlement_id: newSettlementId,
+        seller_issue_item_id: it.issue_item_id,
+        product_id: issueItem.product_id,
+        issued_quantity_snapshot: issueItem.issued_quantity,
+        returned_quantity: it.returned_quantity,
+        damaged_quantity: it.damaged_quantity,
+        complimentary_quantity: it.complimentary_quantity,
+        sold_quantity: sold,
+        selling_price_snapshot: issueItem.unit_selling_price_snapshot,
+        gross_sales: gross,
+        commission_amount: comm,
+        damage_reason: it.damage_reason || null,
+        complimentary_reason: it.complimentary_reason || null,
+        product: issueItem.product,
+      };
+    });
+
+    const newSettlement: SellerSettlementWithDetails = {
+      id: newSettlementId,
+      settlement_number: newSettlementNumber,
+      seller_issue_id: oldSettlement.seller_issue_id,
+      seller_id: oldSettlement.seller_id,
+      settlement_date: settlementDate,
+      status: 'approved',
+      cash_received: summary.cash_received,
+      upi_received: summary.upi_received,
+      credit_amount: summary.credit_amount,
+      gross_sales: summary.gross_sales,
+      total_commission: summary.total_commission,
+      expected_collection: summary.expected_collection,
+      total_received: summary.total_received,
+      outstanding_amount: summary.outstanding_amount,
+      shortage_amount: summary.shortage_amount,
+      notes: notes || null,
+      submitted_by: oldSettlement.submitted_by,
+      approved_by: userId,
+      submitted_at: oldSettlement.submitted_at,
+      approved_at: now,
+      version_number: newVersion,
+      is_current_version: true,
+      correction_of_id: oldSettlement.id,
+      superseded_by_id: null,
+      correction_reason: reason,
+      corrected_by: userId,
+      corrected_at: now,
+      created_at: oldSettlement.created_at,
+      updated_at: now,
+      seller: oldSettlement.seller,
+      issue,
+      items: newSettlementItems,
+    };
+
+    // Supersede old settlement
+    oldSettlement.status = 'superseded';
+    oldSettlement.is_current_version = false;
+    oldSettlement.superseded_by_id = newSettlementId;
+    oldSettlement.updated_at = now;
+
+    this.state.seller_settlements.push(newSettlement);
+    this.logAudit('seller_settlements', newSettlementId, 'CORRECT_RECORD', oldSettlement, newSettlement, reason, userId);
+    this.saveState();
+    return newSettlement;
+  }
+
+  public getSettlementRevisionHistory(settlementId: string): RevisionRecord[] {
+    const allSettlements = this.state.seller_settlements;
+    const target = allSettlements.find((s) => s.id === settlementId);
+    if (!target) return [];
+
+    let root = target;
+    while (root.correction_of_id) {
+      const parent = allSettlements.find((s) => s.id === root.correction_of_id);
+      if (!parent) break;
+      root = parent;
+    }
+
+    const chain: SellerSettlementWithDetails[] = [];
+    let curr: SellerSettlementWithDetails | undefined = root;
+    while (curr) {
+      chain.push(curr);
+      if (!curr.superseded_by_id) break;
+      curr = allSettlements.find((s) => s.id === curr!.superseded_by_id);
+    }
+
+    const profiles = this.state.profiles;
+
+    return chain.map((s) => {
+      const user = profiles.find((p) => p.id === (s.corrected_by || s.approved_by || s.submitted_by));
+      const totalSold = s.items.reduce((sum, it) => sum + it.sold_quantity, 0);
+
+      return {
+        id: s.id,
+        version_number: s.version_number || 1,
+        status: s.status,
+        date: s.settlement_date,
+        created_at: s.created_at,
+        corrected_at: s.corrected_at,
+        corrected_by_name: user?.full_name || 'Owner',
+        correction_reason: s.correction_reason,
+        is_current_version: s.is_current_version !== false,
+        correction_of_id: s.correction_of_id,
+        superseded_by_id: s.superseded_by_id,
+        summary_text: `Version ${s.version_number || 1} (${s.status}): Gross ₹${s.gross_sales}, Received ₹${s.total_received}, Sold ${totalSold} pcs`,
+        details: s,
+        financial_effect: {
+          gross_sales: s.gross_sales,
+          total_received: s.total_received,
+          shortage: s.shortage_amount,
+        },
+        stock_effect: {
+          sold: totalSold,
+          returned: s.items.reduce((sum, it) => sum + it.returned_quantity, 0),
+          damaged: s.items.reduce((sum, it) => sum + it.damaged_quantity, 0),
+        },
+      };
+    });
   }
 
   // --- Expenses Workflow ---
