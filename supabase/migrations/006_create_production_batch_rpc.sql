@@ -1,6 +1,18 @@
 -- Janki Kulfi Management Schema Migration 006
--- Production Batch Atomic Transaction RPC
+-- Production Batch Atomic Transaction RPC & Enum Alignment
 
+-- 1. Ensure enum contains both 'production_completed' and 'production_in'
+DO $$
+BEGIN
+  ALTER TYPE stock_movement_type ADD VALUE IF NOT EXISTS 'production_in';
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+-- 2. Drop old function to clear schema cache
+DROP FUNCTION IF EXISTS create_production_batch_transaction(DATE, NUMERIC, TEXT, JSONB, UUID);
+
+-- 3. Recreate the atomic stored procedure
 CREATE OR REPLACE FUNCTION create_production_batch_transaction(
   p_date DATE,
   p_cost NUMERIC(12,2),
