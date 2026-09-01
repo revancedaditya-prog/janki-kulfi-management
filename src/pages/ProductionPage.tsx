@@ -343,11 +343,11 @@ export const ProductionPage: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-            <Factory className="w-7 h-7 text-maroon-800 dark:text-rose-400" />
+          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+            <Factory className="w-7 h-7 text-maroon-800" />
             {t.productionBatches}
           </h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          <p className="text-sm text-gray-500 mt-1">
             कारखाने में दैनिक कुल्फी निर्माण, बैच लागत व सुरक्षित संशोधन प्रबंधन
           </p>
         </div>
@@ -367,7 +367,7 @@ export const ProductionPage: React.FC = () => {
       ) : batches.length === 0 ? (
         <Card className="py-12 text-center text-gray-500">
           <Factory className="w-12 h-12 mx-auto text-gray-400 mb-3 opacity-50" />
-          <p className="text-base font-semibold text-gray-700 dark:text-gray-300">
+          <p className="text-base font-semibold text-gray-700">
             {language === 'hi' ? 'आज का कोई उत्पादन बैच नहीं मिला' : 'No production batches found'}
           </p>
           <Button
@@ -387,10 +387,10 @@ export const ProductionPage: React.FC = () => {
             const closed = isDayClosed(batch.production_date);
 
             return (
-              <Card key={batch.id} className="overflow-hidden border-cream-300 dark:border-gray-800">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-gray-100 dark:border-gray-800">
+              <Card key={batch.id} className="overflow-hidden border-cream-300">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-gray-100">
                   <div className="flex items-center gap-2.5 flex-wrap">
-                    <span className="font-mono font-bold text-base text-maroon-950 dark:text-rose-200">
+                    <span className="font-mono font-bold text-base text-maroon-950">
                       {batch.batch_number}
                     </span>
                     {batch.version_number && batch.version_number > 1 && (
@@ -414,7 +414,7 @@ export const ProductionPage: React.FC = () => {
                       </Badge>
                     )}
                   </div>
-                  <div className="flex items-center gap-4 text-xs font-semibold text-gray-600 dark:text-gray-400">
+                  <div className="flex items-center gap-4 text-xs font-semibold text-gray-600">
                     <span>📅 {formatDate(batch.production_date)}</span>
                     <span>
                       💰 {t.totalIngredientCost}: {formatCurrency(batch.total_ingredient_cost)}
@@ -427,24 +427,24 @@ export const ProductionPage: React.FC = () => {
                   {batch.items.map((it) => (
                     <div
                       key={it.id}
-                      className="p-2.5 rounded-xl bg-cream-50/70 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 text-xs"
+                      className="p-2.5 rounded-xl bg-cream-50/70 border border-cream-200 text-xs"
                     >
-                      <span className="font-bold text-gray-900 dark:text-gray-100 block text-sm mb-1">
+                      <span className="font-bold text-gray-900 block text-sm mb-1">
                         {language === 'hi' ? it.product?.name_hi : it.product?.name_en}
                       </span>
-                      <div className="flex justify-between text-gray-600 dark:text-gray-400">
+                      <div className="flex justify-between text-gray-600">
                         <span>{t.producedQty}:</span>
-                        <span className="font-mono font-bold text-gray-900 dark:text-gray-100">
+                        <span className="font-mono font-bold text-gray-900">
                           {formatQuantity(it.produced_quantity)}
                         </span>
                       </div>
-                      <div className="flex justify-between text-rose-700 dark:text-rose-400">
+                      <div className="flex justify-between text-rose-700">
                         <span>{t.damagedQty}:</span>
                         <span className="font-mono font-bold">
                           {formatQuantity(it.damaged_quantity)}
                         </span>
                       </div>
-                      <div className="flex justify-between text-emerald-800 dark:text-emerald-400 font-bold border-t border-cream-200 dark:border-gray-700 pt-1 mt-1">
+                      <div className="flex justify-between text-emerald-800 font-bold border-t border-cream-200 pt-1 mt-1">
                         <span>{t.saleableQty}:</span>
                         <span className="font-mono">
                           {formatQuantity(it.saleable_quantity)} {t.pieces}
@@ -455,16 +455,16 @@ export const ProductionPage: React.FC = () => {
                 </div>
 
                 {/* Summary & Action Bar */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-gray-100 dark:border-gray-800 bg-cream-50/30 dark:bg-gray-800/20 -mx-4 -mb-4 px-4 py-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-gray-100 bg-cream-50/30 -mx-4 -mb-4 px-4 py-3">
                   <div className="flex items-center gap-4 text-xs">
-                    <span className="font-semibold text-gray-700 dark:text-gray-300">
+                    <span className="font-semibold text-gray-700">
                       कुल बिक्री योग्य:{' '}
-                      <strong className="text-maroon-900 dark:text-rose-300 font-mono text-sm">
+                      <strong className="text-maroon-900 font-mono text-sm">
                         {formatQuantity(batchTotalSaleable)} {t.pieces}
                       </strong>
                     </span>
                     {totalDamaged > 0 && (
-                      <span className="text-rose-700 dark:text-rose-400 font-medium">
+                      <span className="text-rose-700 font-medium">
                         खराब: {formatQuantity(totalDamaged)} {t.pieces}
                       </span>
                     )}
@@ -573,7 +573,7 @@ export const ProductionPage: React.FC = () => {
           </div>
 
           <div className="space-y-3 pt-2">
-            <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
               उत्पाद-वार उत्पादन विवरण (Pieces)
             </h4>
 
@@ -585,11 +585,11 @@ export const ProductionPage: React.FC = () => {
                 return (
                   <div
                     key={prod.id}
-                    className="p-3.5 rounded-2xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 space-y-3"
+                    className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 space-y-3"
                   >
                     <div className="flex items-center justify-between">
                       <div>
-                        <span className="font-bold text-sm text-gray-900 dark:text-gray-100">
+                        <span className="font-bold text-sm text-gray-900">
                           {language === 'hi' ? prod.name_hi : prod.name_en}
                         </span>
                         <span className="text-xs text-gray-500 block">
@@ -597,7 +597,7 @@ export const ProductionPage: React.FC = () => {
                         </span>
                       </div>
                       <div className="text-right">
-                        <span className="text-xs font-semibold text-emerald-800 dark:text-emerald-400">
+                        <span className="text-xs font-semibold text-emerald-800">
                           बिक्री योग्य: <strong className="font-mono text-base">{saleable}</strong>{' '}
                           {t.pieces}
                         </span>
@@ -637,10 +637,10 @@ export const ProductionPage: React.FC = () => {
             onChange={(e) => setNotes(e.target.value)}
           />
 
-          <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-800">
+          <div className="flex items-center justify-between pt-3 border-t border-gray-100">
             <div>
               <span className="text-xs text-gray-500 block">कुल तैयार पीस</span>
-              <span className="text-lg font-black text-maroon-900 dark:text-rose-300 font-mono">
+              <span className="text-lg font-black text-maroon-900 font-mono">
                 {formatQuantity(totalSaleable)} {t.pieces}
               </span>
             </div>
@@ -701,7 +701,7 @@ export const ProductionPage: React.FC = () => {
           </div>
 
           <div className="space-y-3 pt-2">
-            <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
               उत्पाद मात्रा संशोधन (Pieces)
             </h4>
 
@@ -713,13 +713,13 @@ export const ProductionPage: React.FC = () => {
                 return (
                   <div
                     key={prod.id}
-                    className="p-3.5 rounded-2xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 space-y-3"
+                    className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 space-y-3"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-sm text-gray-900 dark:text-gray-100">
+                      <span className="font-bold text-sm text-gray-900">
                         {language === 'hi' ? prod.name_hi : prod.name_en}
                       </span>
-                      <span className="text-xs font-semibold text-emerald-800 dark:text-emerald-400">
+                      <span className="text-xs font-semibold text-emerald-800">
                         बिक्री योग्य: <strong className="font-mono text-base">{saleable}</strong>{' '}
                         {t.pieces}
                       </span>
@@ -757,10 +757,10 @@ export const ProductionPage: React.FC = () => {
             onChange={(e) => setNotes(e.target.value)}
           />
 
-          <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-800">
+          <div className="flex items-center justify-between pt-3 border-t border-gray-100">
             <div>
               <span className="text-xs text-gray-500 block">कुल बिक्री योग्य</span>
-              <span className="text-lg font-black text-maroon-900 dark:text-rose-300 font-mono">
+              <span className="text-lg font-black text-maroon-900 font-mono">
                 {formatQuantity(totalSaleable)} {t.pieces}
               </span>
             </div>
@@ -843,7 +843,7 @@ export const ProductionPage: React.FC = () => {
           </div>
 
           <div className="space-y-3 pt-2">
-            <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
               उत्पाद मात्रा तुलना व संशोधन (Old vs New)
             </h4>
 
@@ -858,11 +858,11 @@ export const ProductionPage: React.FC = () => {
                 return (
                   <div
                     key={prod.id}
-                    className="p-3.5 rounded-2xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 space-y-3"
+                    className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 space-y-3"
                   >
                     <div className="flex items-center justify-between">
                       <div>
-                        <span className="font-bold text-sm text-gray-900 dark:text-gray-100">
+                        <span className="font-bold text-sm text-gray-900">
                           {language === 'hi' ? prod.name_hi : prod.name_en}
                         </span>
                         <span className="text-xs text-gray-500 block">
@@ -870,13 +870,13 @@ export const ProductionPage: React.FC = () => {
                         </span>
                       </div>
                       <div className="text-right">
-                        <span className="text-xs font-semibold text-emerald-800 dark:text-emerald-400 block">
+                        <span className="text-xs font-semibold text-emerald-800 block">
                           नया बिक्री योग्य: <strong className="font-mono text-base">{newSaleable}</strong> {t.pieces}
                         </span>
                         {diff !== 0 && (
                           <span
                             className={`text-xs font-bold ${
-                              diff > 0 ? 'text-emerald-600' : 'text-rose-600'
+                              diff > 0 ? 'text-emerald-700' : 'text-rose-700'
                             }`}
                           >
                             प्रभाव: {diff > 0 ? `+${diff}` : diff} pcs
@@ -926,10 +926,10 @@ export const ProductionPage: React.FC = () => {
             onChange={(e) => setNotes(e.target.value)}
           />
 
-          <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-800">
+          <div className="flex items-center justify-between pt-3 border-t border-gray-100">
             <div>
               <span className="text-xs text-gray-500 block">नया कुल बिक्री योग्य</span>
-              <span className="text-lg font-black text-maroon-900 dark:text-rose-300 font-mono">
+              <span className="text-lg font-black text-maroon-900 font-mono">
                 {formatQuantity(totalSaleable)} {t.pieces}
               </span>
             </div>

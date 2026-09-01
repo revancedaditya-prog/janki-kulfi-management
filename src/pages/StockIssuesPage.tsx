@@ -294,11 +294,11 @@ export const StockIssuesPage: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-            <Truck className="w-7 h-7 text-maroon-800 dark:text-rose-400" />
+          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+            <Truck className="w-7 h-7 text-maroon-800" />
             {t.stockIssues}
           </h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          <p className="text-sm text-gray-500 mt-1">
             विक्रेताओं व ठेलों को कुल्फी स्टॉक निकासी, सुरक्षित सुधार व संशोधन इतिहास
           </p>
         </div>
@@ -320,7 +320,7 @@ export const StockIssuesPage: React.FC = () => {
       ) : issues.length === 0 ? (
         <Card className="py-12 text-center text-gray-500">
           <Truck className="w-12 h-12 mx-auto text-gray-400 mb-3 opacity-50" />
-          <p className="text-base font-semibold text-gray-700 dark:text-gray-300">
+          <p className="text-base font-semibold text-gray-700">
             {language === 'hi' ? 'आज का कोई निकासी रिकॉर्ड नहीं मिला' : 'No stock issues found'}
           </p>
           {isProduction && (
@@ -342,11 +342,11 @@ export const StockIssuesPage: React.FC = () => {
             const hasSettlements = (issue.settlements && issue.settlements.length > 0) || issue.status === 'settled';
 
             return (
-              <Card key={issue.id} className="overflow-hidden border-cream-300 dark:border-gray-800">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-gray-100 dark:border-gray-800">
+              <Card key={issue.id} className="overflow-hidden border-cream-300">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-gray-100">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono font-bold text-base text-maroon-950 dark:text-rose-200">
+                      <span className="font-mono font-bold text-base text-maroon-950">
                         {issue.issue_number}
                       </span>
                       {issue.version_number && issue.version_number > 1 && (
@@ -370,12 +370,12 @@ export const StockIssuesPage: React.FC = () => {
                         </Badge>
                       )}
                     </div>
-                    <span className="text-xs font-bold text-gray-800 dark:text-gray-200 block mt-0.5">
+                    <span className="text-xs font-bold text-gray-800 block mt-0.5">
                       👤 {issue.seller?.full_name} {issue.cart ? `| 🛒 ${issue.cart.cart_name}` : ''}
                     </span>
                   </div>
 
-                  <div className="text-xs font-semibold text-gray-600 dark:text-gray-400">
+                  <div className="text-xs font-semibold text-gray-600">
                     <span>📅 {formatDate(issue.issue_date)}</span>
                   </div>
                 </div>
@@ -385,10 +385,10 @@ export const StockIssuesPage: React.FC = () => {
                   {issue.items.map((it) => (
                     <div
                       key={it.id}
-                      className="p-2.5 rounded-xl bg-cream-50/80 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 text-xs flex items-center justify-between"
+                      className="p-2.5 rounded-xl bg-cream-50/80 border border-cream-200 text-xs flex items-center justify-between"
                     >
                       <div>
-                        <span className="font-bold text-gray-900 dark:text-gray-100 block">
+                        <span className="font-bold text-gray-900 block">
                           {language === 'hi' ? it.product?.name_hi : it.product?.name_en}
                         </span>
                         <span className="text-[11px] text-gray-500">
@@ -396,7 +396,7 @@ export const StockIssuesPage: React.FC = () => {
                         </span>
                       </div>
                       <div className="text-right">
-                        <span className="font-mono font-black text-base text-maroon-900 dark:text-rose-300 block">
+                        <span className="font-mono font-black text-base text-maroon-900 block">
                           {formatQuantity(it.issued_quantity)}
                         </span>
                         <span className="text-[10px] text-gray-500">{t.pieces}</span>
@@ -406,19 +406,19 @@ export const StockIssuesPage: React.FC = () => {
                 </div>
 
                 {/* Footer and Actions */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-gray-100 dark:border-gray-800 bg-cream-50/30 dark:bg-gray-800/20 -mx-4 -mb-4 px-4 py-3 text-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-gray-100 bg-cream-50/30 -mx-4 -mb-4 px-4 py-3 text-xs">
                   <div className="flex items-center gap-4">
-                    <span className="font-semibold text-gray-700 dark:text-gray-300">
+                    <span className="font-semibold text-gray-700">
                       कुल निकासी:{' '}
-                      <strong className="text-maroon-900 dark:text-rose-300 font-mono text-sm">
+                      <strong className="text-maroon-900 font-mono text-sm">
                         {formatQuantity(totalIssued)} {t.pieces}
                       </strong>
                     </span>
                     {issue.status === 'issued' && !hasSettlements && (
-                      <span className="text-amber-800 dark:text-amber-400 font-bold">शाम का हिसाब बाकी</span>
+                      <span className="text-amber-800 font-bold">शाम का हिसाब बाकी</span>
                     )}
                     {hasSettlements && (
-                      <span className="text-emerald-800 dark:text-emerald-400 font-bold flex items-center gap-1">
+                      <span className="text-emerald-800 font-bold flex items-center gap-1">
                         <CheckCircle className="w-3.5 h-3.5" /> हिसाब दर्ज / पूर्ण
                       </span>
                     )}
@@ -510,13 +510,13 @@ export const StockIssuesPage: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="space-y-1.5">
-              <label className="block text-sm font-semibold text-gray-800 dark:text-gray-200">
+              <label className="block text-sm font-semibold text-gray-800">
                 {t.selectSeller} *
               </label>
               <select
                 value={selectedSellerId}
                 onChange={(e) => handleSellerChange(e.target.value)}
-                className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
+                className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
                 required
               >
                 <option value="" disabled>
@@ -531,13 +531,13 @@ export const StockIssuesPage: React.FC = () => {
             </div>
 
             <div className="space-y-1.5">
-              <label className="block text-sm font-semibold text-gray-800 dark:text-gray-200">
+              <label className="block text-sm font-semibold text-gray-800">
                 {t.selectCart}
               </label>
               <select
                 value={selectedCartId}
                 onChange={(e) => setSelectedCartId(e.target.value)}
-                className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
+                className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
               >
                 <option value="">-- ठेला चुनें (वैकल्पिक) --</option>
                 {carts.map((c) => (
@@ -558,7 +558,7 @@ export const StockIssuesPage: React.FC = () => {
           </div>
 
           <div className="space-y-3 pt-2">
-            <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
               उत्पाद मात्रा दर्ज करें (Pieces)
             </h4>
 
@@ -566,15 +566,15 @@ export const StockIssuesPage: React.FC = () => {
               {products.map((prod) => (
                 <div
                   key={prod.id}
-                  className="p-3.5 rounded-2xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 flex items-center justify-between gap-4"
+                  className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 flex items-center justify-between gap-4"
                 >
                   <div>
-                    <span className="font-bold text-sm text-gray-900 dark:text-gray-100 block">
+                    <span className="font-bold text-sm text-gray-900 block">
                       {language === 'hi' ? prod.name_hi : prod.name_en}
                     </span>
                     <span className="text-xs text-gray-500 block">
                       दर: {formatCurrency(prod.current_price)} | उपलब्ध:{' '}
-                      <strong className="text-emerald-700 dark:text-emerald-400 font-mono">
+                      <strong className="text-emerald-700 font-mono">
                         {prod.available_quantity || 0}
                       </strong>{' '}
                       pcs
@@ -603,10 +603,10 @@ export const StockIssuesPage: React.FC = () => {
             onChange={(e) => setNotes(e.target.value)}
           />
 
-          <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-800">
+          <div className="flex items-center justify-between pt-3 border-t border-gray-100">
             <div>
               <span className="text-xs text-gray-500 block">कुल निकासी पीस</span>
-              <span className="text-lg font-black text-maroon-900 dark:text-rose-300 font-mono">
+              <span className="text-lg font-black text-maroon-900 font-mono">
                 {formatQuantity(totalIssuedPieces)} {t.pieces}
               </span>
             </div>
@@ -648,13 +648,13 @@ export const StockIssuesPage: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="space-y-1.5">
-              <label className="block text-sm font-semibold text-gray-800 dark:text-gray-200">
+              <label className="block text-sm font-semibold text-gray-800">
                 {t.selectSeller} *
               </label>
               <select
                 value={selectedSellerId}
                 onChange={(e) => handleSellerChange(e.target.value)}
-                className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
+                className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
                 required
               >
                 {sellers.map((s) => (
@@ -666,13 +666,13 @@ export const StockIssuesPage: React.FC = () => {
             </div>
 
             <div className="space-y-1.5">
-              <label className="block text-sm font-semibold text-gray-800 dark:text-gray-200">
+              <label className="block text-sm font-semibold text-gray-800">
                 {t.selectCart}
               </label>
               <select
                 value={selectedCartId}
                 onChange={(e) => setSelectedCartId(e.target.value)}
-                className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
+                className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
               >
                 <option value="">-- ठेला चुनें (वैकल्पिक) --</option>
                 {carts.map((c) => (
@@ -693,7 +693,7 @@ export const StockIssuesPage: React.FC = () => {
           </div>
 
           <div className="space-y-3 pt-2">
-            <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
               संशोधित मात्रा दर्ज करें (Pieces)
             </h4>
 
@@ -701,10 +701,10 @@ export const StockIssuesPage: React.FC = () => {
               {products.map((prod) => (
                 <div
                   key={prod.id}
-                  className="p-3.5 rounded-2xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 flex items-center justify-between gap-4"
+                  className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 flex items-center justify-between gap-4"
                 >
                   <div>
-                    <span className="font-bold text-sm text-gray-900 dark:text-gray-100 block">
+                    <span className="font-bold text-sm text-gray-900 block">
                       {language === 'hi' ? prod.name_hi : prod.name_en}
                     </span>
                     <span className="text-xs text-gray-500 block">
@@ -733,10 +733,10 @@ export const StockIssuesPage: React.FC = () => {
             onChange={(e) => setNotes(e.target.value)}
           />
 
-          <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-800">
+          <div className="flex items-center justify-between pt-3 border-t border-gray-100">
             <div>
               <span className="text-xs text-gray-500 block">कुल निकासी</span>
-              <span className="text-lg font-black text-maroon-900 dark:text-rose-300 font-mono">
+              <span className="text-lg font-black text-maroon-900 font-mono">
                 {formatQuantity(totalIssuedPieces)} {t.pieces}
               </span>
             </div>
@@ -814,13 +814,13 @@ export const StockIssuesPage: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="space-y-1.5">
-              <label className="block text-sm font-semibold text-gray-800 dark:text-gray-200">
+              <label className="block text-sm font-semibold text-gray-800">
                 {t.selectSeller} *
               </label>
               <select
                 value={selectedSellerId}
                 onChange={(e) => handleSellerChange(e.target.value)}
-                className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
+                className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
                 required
               >
                 {sellers.map((s) => (
@@ -832,13 +832,13 @@ export const StockIssuesPage: React.FC = () => {
             </div>
 
             <div className="space-y-1.5">
-              <label className="block text-sm font-semibold text-gray-800 dark:text-gray-200">
+              <label className="block text-sm font-semibold text-gray-800">
                 {t.selectCart}
               </label>
               <select
                 value={selectedCartId}
                 onChange={(e) => setSelectedCartId(e.target.value)}
-                className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
+                className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
               >
                 <option value="">-- ठेला चुनें --</option>
                 {carts.map((c) => (
@@ -859,7 +859,7 @@ export const StockIssuesPage: React.FC = () => {
           </div>
 
           <div className="space-y-3 pt-2">
-            <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
               उत्पाद मात्रा तुलना (Old vs New)
             </h4>
 
@@ -873,10 +873,10 @@ export const StockIssuesPage: React.FC = () => {
                 return (
                   <div
                     key={prod.id}
-                    className="p-3.5 rounded-2xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 flex items-center justify-between gap-4"
+                    className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 flex items-center justify-between gap-4"
                   >
                     <div>
-                      <span className="font-bold text-sm text-gray-900 dark:text-gray-100 block">
+                      <span className="font-bold text-sm text-gray-900 block">
                         {language === 'hi' ? prod.name_hi : prod.name_en}
                       </span>
                       <span className="text-xs text-gray-500 block">
@@ -924,10 +924,10 @@ export const StockIssuesPage: React.FC = () => {
             onChange={(e) => setNotes(e.target.value)}
           />
 
-          <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-800">
+          <div className="flex items-center justify-between pt-3 border-t border-gray-100">
             <div>
               <span className="text-xs text-gray-500 block">नया कुल निकासी</span>
-              <span className="text-lg font-black text-maroon-900 dark:text-rose-300 font-mono">
+              <span className="text-lg font-black text-maroon-900 font-mono">
                 {formatQuantity(totalIssuedPieces)} {t.pieces}
               </span>
             </div>

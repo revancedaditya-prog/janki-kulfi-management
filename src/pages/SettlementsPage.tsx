@@ -411,11 +411,11 @@ export const SettlementsPage: React.FC = () => {
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl sm:text-2xl font-black text-gray-900 dark:text-gray-100 tracking-tight flex items-center gap-2">
-            <Receipt className="w-6 h-6 text-maroon-800 dark:text-rose-400" />
+          <h2 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight flex items-center gap-2">
+            <Receipt className="w-6 h-6 text-maroon-800" />
             {t.settlements}
           </h2>
-          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+          <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
             शाम की वापसी, बिकी कुल्फी, कमीशन, वसूली एवं सुरक्षित संशोधन इतिहास
           </p>
         </div>
@@ -437,7 +437,7 @@ export const SettlementsPage: React.FC = () => {
           <div className="w-14 h-14 bg-emerald-100 text-emerald-800 rounded-2xl flex items-center justify-center mx-auto mb-3">
             <Receipt className="w-7 h-7" />
           </div>
-          <h3 className="text-base font-bold text-gray-900 dark:text-gray-100">
+          <h3 className="text-base font-bold text-gray-900">
             कोई हिसाब रिकॉर्ड नहीं मिला
           </h3>
           <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
@@ -459,11 +459,11 @@ export const SettlementsPage: React.FC = () => {
             const closed = isDayClosed(st.settlement_date);
 
             return (
-              <Card key={st.id} className="overflow-hidden border-cream-300 dark:border-gray-800">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-gray-100 dark:border-gray-800">
+              <Card key={st.id} className="overflow-hidden border-cream-300">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-gray-100">
                   <div>
                     <div className="flex items-center gap-2.5 flex-wrap">
-                      <span className="font-mono font-bold text-base text-maroon-950 dark:text-rose-200">
+                      <span className="font-mono font-bold text-base text-maroon-950">
                         {st.settlement_number}
                       </span>
                       {st.version_number && st.version_number > 1 && (
@@ -487,7 +487,7 @@ export const SettlementsPage: React.FC = () => {
                         </Badge>
                       )}
                     </div>
-                    <span className="text-xs font-bold text-gray-800 dark:text-gray-200 block mt-0.5">
+                    <span className="text-xs font-bold text-gray-800 block mt-0.5">
                       👤 {st.seller?.full_name} | 📅 {formatDate(st.settlement_date)}
                     </span>
                   </div>
@@ -549,56 +549,56 @@ export const SettlementsPage: React.FC = () => {
 
                 {/* Financial Summary Grid */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 my-3 text-xs">
-                  <div className="p-2.5 rounded-xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700">
+                  <div className="p-2.5 rounded-xl bg-cream-50 border border-cream-200">
                     <span className="text-gray-500 block">कुल बिक्री (Gross)</span>
-                    <span className="font-bold text-sm text-gray-900 dark:text-gray-100 block mt-0.5">
+                    <span className="font-bold text-sm text-gray-900 block mt-0.5">
                       {formatCurrency(st.gross_sales)}
                     </span>
                     <span className="text-[10px] text-gray-500">{totalSold} {t.pieces} बिकी</span>
                   </div>
 
-                  <div className="p-2.5 rounded-xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700">
+                  <div className="p-2.5 rounded-xl bg-cream-50 border border-cream-200">
                     <span className="text-gray-500 block">विक्रेता कमीशन</span>
-                    <span className="font-bold text-sm text-maroon-800 dark:text-rose-400 block mt-0.5">
+                    <span className="font-bold text-sm text-maroon-800 block mt-0.5">
                       {formatCurrency(st.total_commission)}
                     </span>
                     <span className="text-[10px] text-gray-500">कटा हुआ</span>
                   </div>
 
-                  <div className="p-2.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
-                    <span className="text-emerald-800 dark:text-emerald-300 font-semibold block">प्राप्त (Cash+UPI)</span>
-                    <span className="font-bold text-sm text-emerald-900 dark:text-emerald-200 block mt-0.5">
+                  <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200">
+                    <span className="text-emerald-800 font-semibold block">प्राप्त (Cash+UPI)</span>
+                    <span className="font-bold text-sm text-emerald-900 block mt-0.5">
                       {formatCurrency(st.total_received)}
                     </span>
-                    <span className="text-[10px] text-gray-600 dark:text-gray-400">
+                    <span className="text-[10px] text-gray-600">
                       नकद: {formatCurrency(st.cash_received, false)} | UPI: {formatCurrency(st.upi_received, false)}
                     </span>
                   </div>
 
-                  <div className="p-2.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
-                    <span className="text-amber-800 dark:text-amber-300 font-semibold block">कमी / उधार</span>
-                    <span className="font-bold text-sm text-amber-900 dark:text-amber-200 block mt-0.5">
+                  <div className="p-2.5 rounded-xl bg-amber-50/70 border border-amber-200">
+                    <span className="text-amber-800 font-semibold block">कमी / उधार</span>
+                    <span className="font-bold text-sm text-amber-900 block mt-0.5">
                       {st.shortage_amount > 0 ? (
-                        <span className="text-rose-700 dark:text-rose-400">कमी: {formatCurrency(st.shortage_amount)}</span>
+                        <span className="text-rose-700">कमी: {formatCurrency(st.shortage_amount)}</span>
                       ) : (
                         <span>उधार: {formatCurrency(st.credit_amount)}</span>
                       )}
                     </span>
-                    <span className="text-[10px] text-gray-600 dark:text-gray-400">
+                    <span className="text-[10px] text-gray-600">
                       अपेक्षित: {formatCurrency(st.expected_collection)}
                     </span>
                   </div>
                 </div>
 
                 {/* Items Detail Preview */}
-                <div className="pt-2 border-t border-gray-100 dark:border-gray-800 text-xs text-gray-600 dark:text-gray-400 flex flex-wrap gap-x-4 gap-y-1">
+                <div className="pt-2 border-t border-gray-100 text-xs text-gray-600 flex flex-wrap gap-x-4 gap-y-1">
                   {st.items.map((it) => (
                     <span key={it.id}>
-                      <strong className="text-gray-900 dark:text-gray-100">
+                      <strong className="text-gray-900">
                         {language === 'hi' ? it.product?.name_hi : it.product?.name_en}:
                       </strong>{' '}
                       दी: {it.issued_quantity_snapshot} | वापसी: {it.returned_quantity} | खराब: {it.damaged_quantity} | बिकी:{' '}
-                      <strong className="text-emerald-800 dark:text-emerald-400">{it.sold_quantity}</strong>
+                      <strong className="text-emerald-800">{it.sold_quantity}</strong>
                     </span>
                   ))}
                 </div>
@@ -629,13 +629,13 @@ export const SettlementsPage: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <label className="block text-sm font-semibold text-gray-800 dark:text-gray-200">
+              <label className="block text-sm font-semibold text-gray-800">
                 {t.selectOpenIssue} *
               </label>
               <select
                 value={selectedIssueId}
                 onChange={(e) => handleIssueSelect(e.target.value)}
-                className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
+                className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
                 required
               >
                 <option value="" disabled>
@@ -661,7 +661,7 @@ export const SettlementsPage: React.FC = () => {
           {/* Product Items Breakdown */}
           {currentIssue ? (
             <div className="space-y-3 pt-2">
-              <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
                 उत्पाद वापसी व बिक्री का विवरण (Pieces)
               </h4>
 
@@ -687,11 +687,11 @@ export const SettlementsPage: React.FC = () => {
                   return (
                     <div
                       key={it.id}
-                      className="p-3.5 rounded-2xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 space-y-3"
+                      className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 space-y-3"
                     >
                       <div className="flex items-center justify-between">
                         <div>
-                          <span className="font-bold text-sm text-gray-900 dark:text-gray-100 block">
+                          <span className="font-bold text-sm text-gray-900 block">
                             {language === 'hi' ? it.product?.name_hi : it.product?.name_en}
                           </span>
                           <span className="text-xs text-gray-500">
@@ -700,7 +700,7 @@ export const SettlementsPage: React.FC = () => {
                         </div>
                         <div className="text-right">
                           <span className="text-xs text-gray-500 block">कुल बिकी पीस:</span>
-                          <span className="font-mono font-black text-lg text-emerald-800 dark:text-emerald-400">
+                          <span className="font-mono font-black text-lg text-emerald-800">
                             {res.sold_quantity} {t.pieces}
                           </span>
                         </div>
@@ -741,7 +741,7 @@ export const SettlementsPage: React.FC = () => {
               </div>
             </div>
           ) : (
-            <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200 text-xs">
+            <div className="p-4 rounded-xl bg-amber-50 text-amber-900 text-xs">
               कृपया पहले ऊपर से एक सक्रिय निकासी पर्ची चुनें।
             </div>
           )}
@@ -775,22 +775,22 @@ export const SettlementsPage: React.FC = () => {
           </div>
 
           {/* Live Summary Box */}
-          <div className="p-3.5 rounded-2xl bg-cream-100/60 dark:bg-gray-800/80 border border-cream-200 dark:border-gray-700 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div className="p-3.5 rounded-2xl bg-cream-100/60 border border-cream-200 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div>
               <span className="text-gray-500 block">कुल बिक्री</span>
-              <span className="font-bold text-sm text-gray-900 dark:text-gray-100">{formatCurrency(summary.gross_sales)}</span>
+              <span className="font-bold text-sm text-gray-900">{formatCurrency(summary.gross_sales)}</span>
             </div>
             <div>
               <span className="text-gray-500 block">कमीशन</span>
-              <span className="font-bold text-sm text-maroon-800 dark:text-rose-400">{formatCurrency(summary.total_commission)}</span>
+              <span className="font-bold text-sm text-maroon-800">{formatCurrency(summary.total_commission)}</span>
             </div>
             <div>
-              <span className="text-emerald-800 dark:text-emerald-400 font-semibold block">अपेक्षित वसूली</span>
-              <span className="font-bold text-sm text-emerald-950 dark:text-emerald-200">{formatCurrency(summary.expected_collection)}</span>
+              <span className="text-emerald-800 font-semibold block">अपेक्षित वसूली</span>
+              <span className="font-bold text-sm text-emerald-950">{formatCurrency(summary.expected_collection)}</span>
             </div>
             <div>
-              <span className="text-amber-800 dark:text-amber-400 font-semibold block">कुल प्राप्त</span>
-              <span className="font-bold text-sm text-amber-950 dark:text-amber-200">{formatCurrency(summary.total_received)}</span>
+              <span className="text-amber-800 font-semibold block">कुल प्राप्त</span>
+              <span className="font-bold text-sm text-amber-950">{formatCurrency(summary.total_received)}</span>
             </div>
           </div>
 
@@ -800,7 +800,7 @@ export const SettlementsPage: React.FC = () => {
             onChange={(e) => setNotes(e.target.value)}
           />
 
-          <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100 dark:border-gray-800">
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100">
             <Button
               type="button"
               variant="secondary"
@@ -836,7 +836,7 @@ export const SettlementsPage: React.FC = () => {
 
           {currentIssue && (
             <div className="space-y-3">
-              <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
                 उत्पाद वापसी संशोधन (Pieces)
               </h4>
 
@@ -862,11 +862,11 @@ export const SettlementsPage: React.FC = () => {
                   return (
                     <div
                       key={it.id}
-                      className="p-3.5 rounded-2xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 space-y-3"
+                      className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 space-y-3"
                     >
                       <div className="flex items-center justify-between">
                         <div>
-                          <span className="font-bold text-sm text-gray-900 dark:text-gray-100 block">
+                          <span className="font-bold text-sm text-gray-900 block">
                             {language === 'hi' ? it.product?.name_hi : it.product?.name_en}
                           </span>
                           <span className="text-xs text-gray-500">
@@ -875,7 +875,7 @@ export const SettlementsPage: React.FC = () => {
                         </div>
                         <div className="text-right">
                           <span className="text-xs text-gray-500 block">कुल बिकी पीस:</span>
-                          <span className="font-mono font-black text-lg text-emerald-800 dark:text-emerald-400">
+                          <span className="font-mono font-black text-lg text-emerald-800">
                             {res.sold_quantity} {t.pieces}
                           </span>
                         </div>
@@ -944,7 +944,7 @@ export const SettlementsPage: React.FC = () => {
             />
           </div>
 
-          <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100 dark:border-gray-800">
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100">
             <Button type="button" variant="secondary" onClick={() => setEditingPendingSettlement(null)}>
               {t.cancel}
             </Button>
@@ -998,7 +998,7 @@ export const SettlementsPage: React.FC = () => {
 
           {currentIssue && (
             <div className="space-y-3">
-              <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+              <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
                 उत्पाद वापसी व बिक्री संशोधन (Pieces)
               </h4>
 
@@ -1024,11 +1024,11 @@ export const SettlementsPage: React.FC = () => {
                   return (
                     <div
                       key={it.id}
-                      className="p-3.5 rounded-2xl bg-cream-50 dark:bg-gray-800/40 border border-cream-200 dark:border-gray-700 space-y-3"
+                      className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 space-y-3"
                     >
                       <div className="flex items-center justify-between">
                         <div>
-                          <span className="font-bold text-sm text-gray-900 dark:text-gray-100 block">
+                          <span className="font-bold text-sm text-gray-900 block">
                             {language === 'hi' ? it.product?.name_hi : it.product?.name_en}
                           </span>
                           <span className="text-xs text-gray-500">
@@ -1037,7 +1037,7 @@ export const SettlementsPage: React.FC = () => {
                         </div>
                         <div className="text-right">
                           <span className="text-xs text-gray-500 block">नया बिकी पीस:</span>
-                          <span className="font-mono font-black text-lg text-emerald-800 dark:text-emerald-400">
+                          <span className="font-mono font-black text-lg text-emerald-800">
                             {res.sold_quantity} {t.pieces}
                           </span>
                         </div>
@@ -1106,22 +1106,22 @@ export const SettlementsPage: React.FC = () => {
             />
           </div>
 
-          <div className="p-3.5 rounded-2xl bg-cream-100/60 dark:bg-gray-800/80 border border-cream-200 dark:border-gray-700 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div className="p-3.5 rounded-2xl bg-cream-100/60 border border-cream-200 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div>
               <span className="text-gray-500 block">नया Gross Sales</span>
-              <span className="font-bold text-sm text-gray-900 dark:text-gray-100">{formatCurrency(summary.gross_sales)}</span>
+              <span className="font-bold text-sm text-gray-900">{formatCurrency(summary.gross_sales)}</span>
             </div>
             <div>
               <span className="text-gray-500 block">नया कमीशन</span>
-              <span className="font-bold text-sm text-maroon-800 dark:text-rose-400">{formatCurrency(summary.total_commission)}</span>
+              <span className="font-bold text-sm text-maroon-800">{formatCurrency(summary.total_commission)}</span>
             </div>
             <div>
-              <span className="text-emerald-800 dark:text-emerald-400 font-semibold block">अपेक्षित वसूली</span>
-              <span className="font-bold text-sm text-emerald-950 dark:text-emerald-200">{formatCurrency(summary.expected_collection)}</span>
+              <span className="text-emerald-800 font-semibold block">अपेक्षित वसूली</span>
+              <span className="font-bold text-sm text-emerald-950">{formatCurrency(summary.expected_collection)}</span>
             </div>
             <div>
-              <span className="text-amber-800 dark:text-amber-400 font-semibold block">कुल प्राप्त</span>
-              <span className="font-bold text-sm text-amber-950 dark:text-amber-200">{formatCurrency(summary.total_received)}</span>
+              <span className="text-amber-800 font-semibold block">कुल प्राप्त</span>
+              <span className="font-bold text-sm text-amber-950">{formatCurrency(summary.total_received)}</span>
             </div>
           </div>
 
@@ -1140,7 +1140,7 @@ export const SettlementsPage: React.FC = () => {
             onChange={(e) => setNotes(e.target.value)}
           />
 
-          <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100 dark:border-gray-800">
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100">
             <Button type="button" variant="secondary" onClick={() => setCorrectingSettlement(null)}>
               {t.cancel}
             </Button>
