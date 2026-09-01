@@ -78,3 +78,74 @@ export interface OfflineDraft {
   error_message?: string;
   retry_count: number;
 }
+
+// --- Backup Center Types ---
+export type BackupType = 'complete' | 'date_range' | 'expense_bills';
+
+export interface BackupHistory {
+  id: string;
+  backup_type: BackupType;
+  format_version: string;
+  date_from: string | null;
+  date_to: string | null;
+  status: 'success' | 'failed';
+  file_name: string;
+  table_counts: Record<string, number>;
+  checksum_summary: Record<string, string>;
+  error_summary: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export interface BackupManifest {
+  application_name: string;
+  backup_format_version: string;
+  database_schema_version: string;
+  supabase_project_ref: string;
+  created_at_iso: string;
+  created_at_kolkata: string;
+  created_by_user_id: string;
+  backup_type: 'complete' | 'date_range';
+  date_range?: { from: string; to: string } | null;
+  tables: string[];
+  row_counts: Record<string, number>;
+  file_checksums: Record<string, string>;
+  exported_files: string[];
+}
+
+export interface ExpenseBillsManifest {
+  application_name: string;
+  backup_format_version: string;
+  created_at_kolkata: string;
+  created_by_user_id: string;
+  total_files_found: number;
+  total_bytes: number;
+  mapped_expenses: {
+    expense_id: string;
+    expense_date: string;
+    amount: number;
+    category: string;
+    vendor_name?: string | null;
+    description: string;
+    bill_path: string;
+    file_name: string;
+    file_size: number;
+    sha256: string;
+    status: 'found' | 'missing';
+  }[];
+  orphaned_files: string[];
+  missing_files: string[];
+  file_checksums: Record<string, string>;
+}
+
+export interface BackupValidationResult {
+  isValid: boolean;
+  manifest: BackupManifest | null;
+  checksumResults: { file: string; expected: string; actual: string; match: boolean }[];
+  tableCounts: Record<string, number>;
+  missingFiles: string[];
+  unsupportedVersion?: string;
+  errors: string[];
+  warnings: string[];
+}
+

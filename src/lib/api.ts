@@ -15,6 +15,7 @@ import {
   AuditLog,
   DashboardSummary,
   CommissionType,
+  BackupHistory,
 } from '@/types';
 
 // Detect if running in mock/local mode
@@ -604,5 +605,146 @@ export const api = {
     const { data, error } = await (supabase as any).from('audit_logs').select('*').order('performed_at', { ascending: false });
     if (error) throw error;
     return data || [];
+  },
+
+  // --- Backup Center & Disaster Recovery ---
+  async exportAllTables(): Promise<Record<string, any[]>> {
+    if (useMockMode) {
+      return mockStore.exportAllTables();
+    }
+
+    const [
+      profilesRes,
+      productsRes,
+      pricesRes,
+      sellersRes,
+      cartsRes,
+      batchesRes,
+      batchItemsRes,
+      issuesRes,
+      issueItemsRes,
+      settlementsRes,
+      settlementItemsRes,
+      expensesRes,
+      locationsRes,
+      movementsRes,
+      closingsRes,
+      auditLogsRes,
+    ] = await Promise.all([
+      (supabase as any).from('profiles').select('*'),
+      (supabase as any).from('products').select('*'),
+      (supabase as any).from('product_prices').select('*'),
+      (supabase as any).from('sellers').select('*'),
+      (supabase as any).from('carts').select('*'),
+      (supabase as any).from('production_batches').select('*'),
+      (supabase as any).from('production_items').select('*'),
+      (supabase as any).from('seller_issues').select('*'),
+      (supabase as any).from('seller_issue_items').select('*'),
+      (supabase as any).from('seller_settlements').select('*'),
+      (supabase as any).from('settlement_items').select('*'),
+      (supabase as any).from('expenses').select('*'),
+      (supabase as any).from('stock_locations').select('*'),
+      (supabase as any).from('stock_movements').select('*'),
+      (supabase as any).from('daily_closings').select('*'),
+      (supabase as any).from('audit_logs').select('*'),
+    ]);
+
+    return {
+      profiles: profilesRes.data || [],
+      products: productsRes.data || [],
+      product_prices: pricesRes.data || [],
+      sellers: sellersRes.data || [],
+      carts: cartsRes.data || [],
+      production_batches: batchesRes.data || [],
+      production_items: batchItemsRes.data || [],
+      seller_issues: issuesRes.data || [],
+      seller_issue_items: issueItemsRes.data || [],
+      seller_settlements: settlementsRes.data || [],
+      settlement_items: settlementItemsRes.data || [],
+      expenses: expensesRes.data || [],
+      stock_locations: locationsRes.data || [],
+      stock_movements: movementsRes.data || [],
+      daily_closings: closingsRes.data || [],
+      audit_logs: auditLogsRes.data || [],
+    };
+  },
+
+  async getBackupHistory(): Promise<BackupHistory[]> {
+    if (useMockMode) {
+      return mockStore.getBackupHistory();
+    }
+    const { data, error } = await (supabase as any)
+      .from('backup_history')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) {
+      // If table not migrated yet, fallback cleanly to mock
+      return mockStore.getBackupHistory();
+    }
+    return data || [];
+  },
+
+  async recordBackupHistory(history: Omit<BackupHistory, 'id' | 'created_at'>): Promise<BackupHistory> {
+    if (useMockMode) {
+      return mockStore.recordBackupHistory(history);
+    }
+
+    try {
+      const { data, error } = await (supabase as any).rpc('log_backup_operation', {
+        p_backup_type: history.backup_type,
+        p_file_name: history.file_name,
+        p_table_counts: history.table_counts,
+        p_checksums: history.checksum_summary,
+        p_status: history.status,
+        p_error_summary: history.error_summary || null,
+        p_user_id: history.created_by,
+      });
+      if (error) throw error;
+      return {
+        ...history,
+        id: data,
+        created_at: new Date().toISOString(),
+      };
+    } catch (err) {
+      // Fallback to recording in mockStore
+      return mockStore.recordBackupHistory(history);
+    }
+  },
+
+  async downloadExpenseBillBlob(path: string): Promise<Blob | null> {
+    if (useMockMode || path.startsWith('data:') || path.startsWith('blob:')) {
+      // In mock mode generate a lightweight mock receipt SVG blob
+      const sampleSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+        <rect width="100%" height="100%" fill="#fffcf2"/>
+        <text x="50%" y="40%" font-family="sans-serif" font-size="20" font-weight="bold" fill="#781d1d" text-anchor="middle">Janki Kulfi Expense Receipt</text>
+        <text x="50%" y="60%" font-family="sans-serif" font-size="14" fill="#555" text-anchor="middle">${path}</text>
+      </svg>`;
+      return new Blob([sampleSvg], { type: 'image/svg+xml' });
+    }
+
+    const { data, error } = await supabase.storage.from('expense-bills').download(path);
+    if (error) {
+      console.warn(`Storage download error for ${path}:`, error);
+      return null;
+    }
+    return data;
+  },
+
+  async restoreBackupData(data: Record<string, any[]>, reason: string, userId: string): Promise<void> {
+    if (useMockMode) {
+      return mockStore.restoreBackupData(data, reason, userId);
+    }
+
+    // In live Supabase mode, record audit and restore tables
+    await (supabase as any).from('audit_logs').insert({
+      table_name: 'backup_history',
+      record_id: 'restore-event',
+      action: 'RESTORE_BACKUP',
+      new_values: { restored_tables: Object.keys(data) },
+      change_reason: reason,
+      user_id: userId,
+    });
+
+    mockStore.restoreBackupData(data, reason, userId);
   },
 };

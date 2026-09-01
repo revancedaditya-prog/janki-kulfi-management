@@ -20,6 +20,8 @@ interface SyncContextType {
   syncNow: () => Promise<{ success: number; failed: number }>;
   deleteDraft: (id: string) => Promise<void>;
   retryDraft: (id: string) => Promise<void>;
+  exportEmergencyDraftsJson: () => void;
+  clearAllDraftsWithWarning: () => Promise<boolean>;
 }
 
 const SyncContext = createContext<SyncContextType | undefined>(undefined);
@@ -142,6 +144,39 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await syncNow();
   };
 
+  const exportEmergencyDraftsJson = () => {
+    const data = {
+      app: 'Janki Kulfi Management - Emergency Drafts Export',
+      exported_at: new Date().toISOString(),
+      drafts_count: drafts.length,
+      notice: 'EMERGENCY OFFLINE DRAFTS EXPORT. This file contains unsynced IndexedDB drafts.',
+      drafts,
+    };
+    const jsonStr = JSON.stringify(data, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `janki-offline-drafts-${new Date().toISOString().substring(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const clearAllDraftsWithWarning = async (): Promise<boolean> => {
+    const confirmed = window.confirm(
+      '⚠️ महत्वपूर्ण चेतावनी:\n\nस्थानीय ऑफ़लाइन ड्राफ्ट हटाने पर असिंकित (Unsynced) डेटा हमेशा के लिए नष्ट हो जाएगा। IndexedDB डेटाबेस बैकअप नहीं है।\n\nक्या आप वाकई सभी ऑफ़लाइन ड्राफ्ट हटाना चाहते हैं?'
+    );
+    if (!confirmed) return false;
+
+    for (const d of drafts) {
+      await deleteOfflineDraft(d.id);
+    }
+    await refreshDrafts();
+    return true;
+  };
+
   const pendingCount = drafts.filter((d) => d.status === 'pending' || d.status === 'failed').length;
 
   return (
@@ -155,6 +190,8 @@ export const SyncProvider: React.FC<{ children: React.ReactNode }> = ({ children
         syncNow,
         deleteDraft,
         retryDraft,
+        exportEmergencyDraftsJson,
+        clearAllDraftsWithWarning,
       }}
     >
       {children}

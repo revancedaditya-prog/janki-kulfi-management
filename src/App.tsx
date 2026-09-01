@@ -18,6 +18,7 @@ import { StockPage } from './pages/StockPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { AuditLogsPage } from './pages/AuditLogsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { BackupCenterPage } from './pages/BackupCenterPage';
 import { LoginPage } from './pages/LoginPage';
 
 const queryClient = new QueryClient({
@@ -122,6 +123,22 @@ export function App() {
                     element={
                       <ProtectedRoute requiredRole="owner">
                         <AuditLogsPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="backup"
+                    element={
+                      <ProtectedRoute requiredRole="owner">
+                        <BackupCenterPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="settings/backup"
+                    element={
+                      <ProtectedRoute requiredRole="owner">
+                        <BackupCenterPage />
                       </ProtectedRoute>
                     }
                   />

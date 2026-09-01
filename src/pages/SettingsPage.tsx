@@ -1,4 +1,5 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { useSync } from '@/context/SyncContext';
@@ -6,12 +7,13 @@ import { Card, CardHeader } from '@/components/common/Card';
 import { Button } from '@/components/common/Button';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { mockStore } from '@/lib/mockStore';
-import { Settings, RefreshCw, Trash2, Database, Wifi } from 'lucide-react';
+import { Settings, RefreshCw, Trash2, Database, Wifi, ShieldCheck } from 'lucide-react';
 
 export const SettingsPage: React.FC = () => {
   const { t, language, setLanguage } = useLanguage();
-  const { user, role } = useAuth();
+  const { user, role, isOwner } = useAuth();
   const { isOnline, pendingCount, syncNow, isSyncing } = useSync();
+  const navigate = useNavigate();
 
   const handleResetData = () => {
     if (window.confirm('क्या आप स्थानीय डेटा को रीसेट कर प्रारंभिक अवस्था (Default Seed Data) में लाना चाहते हैं?')) {
@@ -153,6 +155,29 @@ export const SettingsPage: React.FC = () => {
           </div>
         )}
       </Card>
+
+      {/* Backup Center Card (Owner Only) */}
+      {isOwner && (
+        <Card className="border-maroon-300 bg-gradient-to-br from-cream-50 to-white">
+          <CardHeader
+            title="डेटा बैकअप केंद्र (Backup & Disaster Recovery Center)"
+            subtitle="सम्पूर्ण ऑफ़लाइन बैकअप, दिनांक-सीमा निर्यात, खर्च बिल बैकअप एवं सत्यापन"
+          />
+          <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <p className="text-xs text-gray-600 max-w-md">
+              व्यवसाय के सभी 16 टेबल्स का संपूर्ण ज़िप आर्काइव (JSON + CSV) डाउनलोड करें अथवा बैकअप फाइल सत्यापित करें।
+            </p>
+            <Button
+              variant="primary"
+              size="sm"
+              leftIcon={<ShieldCheck className="w-4 h-4" />}
+              onClick={() => navigate('/settings/backup')}
+            >
+              बैकअप केंद्र खोलें (Open Backup Center)
+            </Button>
+          </div>
+        </Card>
+      )}
 
       {/* Reset Demo Data Card */}
       <Card className="border-rose-200 bg-rose-50/30">

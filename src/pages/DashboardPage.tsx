@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDashboard } from '@/hooks/useDashboard';
+import { useBackupHistory } from '@/hooks/useBackup';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { Card, CardHeader } from '@/components/common/Card';
@@ -15,6 +16,7 @@ import {
   AlertTriangle,
   Boxes,
   Clock,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -29,9 +31,25 @@ import {
 
 export const DashboardPage: React.FC = () => {
   const { data: summary, isLoading } = useDashboard();
+  const { data: backupHistory = [] } = useBackupHistory();
   const { t, language } = useLanguage();
   const { isOwner, isProduction } = useAuth();
   const navigate = useNavigate();
+
+  // Backup Reminders calculations
+  const lastCompleteBackup = backupHistory.find((h) => h.backup_type === 'complete' && h.status === 'success');
+  const lastBillsBackup = backupHistory.find((h) => h.backup_type === 'expense_bills' && h.status === 'success');
+
+  const completeBackupAgeDays = lastCompleteBackup
+    ? Math.floor((Date.now() - new Date(lastCompleteBackup.created_at).getTime()) / (1000 * 60 * 60 * 24))
+    : null;
+
+  const billsBackupAgeDays = lastBillsBackup
+    ? Math.floor((Date.now() - new Date(lastBillsBackup.created_at).getTime()) / (1000 * 60 * 60 * 24))
+    : null;
+
+  const isCompleteBackupOverdue = isOwner && (completeBackupAgeDays === null || completeBackupAgeDays >= 7);
+  const isBillsBackupOverdue = isOwner && (billsBackupAgeDays === null || billsBackupAgeDays >= 30);
 
   if (isLoading || !summary) {
     return (
@@ -110,6 +128,57 @@ export const DashboardPage: React.FC = () => {
             </div>
             <Button size="sm" variant="primary" onClick={() => navigate('/settlements')}>
               {t.approveSettlement}
+            </Button>
+          </div>
+        )}
+
+        {/* Complete Backup Overdue Warning */}
+        {isCompleteBackupOverdue && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 text-sm">
+            <div className="flex items-center gap-2.5">
+              <ShieldCheck className="w-5 h-5 text-amber-700 flex-shrink-0" />
+              <div>
+                <span className="font-bold block">
+                  डेटा बैकअप चेतावनी (Backup Overdue): {completeBackupAgeDays === null ? 'कोई सम्पूर्ण बैकअप नहीं लिया गया है' : `पिछले ${completeBackupAgeDays} दिनों से कोई सम्पूर्ण बैकअप नहीं लिया गया है`}
+                </span>
+                <span className="text-xs text-amber-800">
+                  आपदा या आकस्मिक नुकसान से सुरक्षा के लिए सम्पूर्ण डेटा बैकअप (Complete Backup) तुरंत डाउनलोड करें।
+                </span>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="primary"
+              className="flex-shrink-0"
+              leftIcon={<ShieldCheck className="w-3.5 h-3.5" />}
+              onClick={() => navigate('/settings/backup')}
+            >
+              बैकअप केंद्र (Backup Center)
+            </Button>
+          </div>
+        )}
+
+        {/* Expense Bills Backup Overdue Warning */}
+        {isBillsBackupOverdue && !isCompleteBackupOverdue && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3.5 rounded-2xl bg-cream-100 border border-amber-300 text-amber-950 text-sm">
+            <div className="flex items-center gap-2.5">
+              <ShieldCheck className="w-5 h-5 text-amber-700 flex-shrink-0" />
+              <div>
+                <span className="font-bold block">
+                  खर्च बिल बैकअप अनुस्मारक: पिछले 30 दिनों से कोई खर्च बिल बैकअप नहीं लिया गया है।
+                </span>
+                <span className="text-xs text-amber-800">
+                  क्लाउड स्टोरेज में रसीदों की सुरक्षा हेतु बिल बैकअप ज़िप डाउनलोड करें।
+                </span>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="flex-shrink-0"
+              onClick={() => navigate('/settings/backup')}
+            >
+              बिल बैकअप लें
             </Button>
           </div>
         )}

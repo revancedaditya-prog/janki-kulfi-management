@@ -15,6 +15,7 @@ import {
   DailyClosing,
   AuditLog,
   DashboardSummary,
+  BackupHistory,
 } from '@/types';
 import {
   calculateSaleableProduction,
@@ -40,9 +41,11 @@ interface LocalStoreState {
   stock_movements: StockMovement[];
   daily_closings: DailyClosing[];
   audit_logs: AuditLog[];
+  backup_history?: BackupHistory[];
 }
 
 const DEFAULT_STATE: LocalStoreState = {
+  backup_history: [],
   profiles: [
     {
       id: 'usr-owner-001',
@@ -1526,6 +1529,158 @@ class MockStore {
       low_stock_products,
       seven_day_sales,
     };
+  }
+
+  // --- Backup Center & Disaster Recovery ---
+  public exportAllTables(): Record<string, any[]> {
+    return {
+      profiles: [...this.state.profiles],
+      products: [...this.state.products],
+      product_prices: [...this.state.product_prices],
+      sellers: [...this.state.sellers],
+      carts: [...this.state.carts],
+      production_batches: this.state.production_batches.map(({ items, ...b }) => b),
+      production_items: this.state.production_batches.flatMap((b) =>
+        b.items.map(({ product, ...it }) => ({
+          ...it,
+          production_batch_id: b.id,
+        }))
+      ),
+      seller_issues: this.state.seller_issues.map(({ seller, cart, items, settlements, ...i }) => i),
+      seller_issue_items: this.state.seller_issues.flatMap((i) =>
+        i.items.map(({ product, ...it }) => ({
+          ...it,
+          seller_issue_id: i.id,
+        }))
+      ),
+      seller_settlements: this.state.seller_settlements.map(({ seller, issue, items, ...s }) => s),
+      settlement_items: this.state.seller_settlements.flatMap((s) =>
+        s.items.map(({ product, ...it }) => ({
+          ...it,
+          settlement_id: s.id,
+        }))
+      ),
+      expenses: [...this.state.expenses],
+      stock_locations: [...this.state.stock_locations],
+      stock_movements: [...this.state.stock_movements],
+      daily_closings: [...this.state.daily_closings],
+      audit_logs: [...this.state.audit_logs],
+    };
+  }
+
+  public getBackupHistory(): BackupHistory[] {
+    return [...(this.state.backup_history || [])].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+  }
+
+  public recordBackupHistory(history: Omit<BackupHistory, 'id' | 'created_at'>): BackupHistory {
+    const id = `bkh-${generateId().slice(0, 8)}`;
+    const now = new Date().toISOString();
+    const entry: BackupHistory = {
+      ...history,
+      id,
+      created_at: now,
+    };
+
+    if (!this.state.backup_history) {
+      this.state.backup_history = [];
+    }
+
+    this.state.backup_history.push(entry);
+    this.logAudit(
+      'backup_history',
+      id,
+      'CREATE_BACKUP',
+      null,
+      entry,
+      `Generated ${history.backup_type} backup: ${history.file_name}`,
+      history.created_by
+    );
+    this.saveState();
+    return entry;
+  }
+
+  public restoreBackupData(data: Record<string, any[]>, reason: string, userId: string): void {
+    const oldSnapshot = {
+      product_count: this.state.products.length,
+      seller_count: this.state.sellers.length,
+      batch_count: this.state.production_batches.length,
+    };
+
+    if (data.profiles) this.state.profiles = data.profiles;
+    if (data.products) this.state.products = data.products;
+    if (data.product_prices) this.state.product_prices = data.product_prices;
+    if (data.sellers) this.state.sellers = data.sellers;
+    if (data.carts) this.state.carts = data.carts;
+    if (data.stock_locations) this.state.stock_locations = data.stock_locations;
+    if (data.expenses) this.state.expenses = data.expenses;
+    if (data.stock_movements) this.state.stock_movements = data.stock_movements;
+    if (data.daily_closings) this.state.daily_closings = data.daily_closings;
+
+    // Reconstruct nested batches
+    if (data.production_batches && data.production_items) {
+      const itemsMap = new Map<string, any[]>();
+      for (const it of data.production_items) {
+        const list = itemsMap.get(it.production_batch_id) || [];
+        const prod = this.state.products.find((p) => p.id === it.product_id);
+        list.push({ ...it, product: prod });
+        itemsMap.set(it.production_batch_id, list);
+      }
+
+      this.state.production_batches = data.production_batches.map((b) => ({
+        ...b,
+        items: itemsMap.get(b.id) || [],
+      }));
+    }
+
+    // Reconstruct nested seller issues
+    if (data.seller_issues && data.seller_issue_items) {
+      const issueItemsMap = new Map<string, any[]>();
+      for (const it of data.seller_issue_items) {
+        const list = issueItemsMap.get(it.seller_issue_id) || [];
+        const prod = this.state.products.find((p) => p.id === it.product_id);
+        list.push({ ...it, product: prod });
+        issueItemsMap.set(it.seller_issue_id, list);
+      }
+
+      this.state.seller_issues = data.seller_issues.map((i) => ({
+        ...i,
+        seller: this.state.sellers.find((s) => s.id === i.seller_id),
+        cart: this.state.carts.find((c) => c.id === i.cart_id),
+        items: issueItemsMap.get(i.id) || [],
+      }));
+    }
+
+    // Reconstruct nested settlements
+    if (data.seller_settlements && data.settlement_items) {
+      const settItemsMap = new Map<string, any[]>();
+      for (const it of data.settlement_items) {
+        const list = settItemsMap.get(it.settlement_id) || [];
+        const prod = this.state.products.find((p) => p.id === it.product_id);
+        list.push({ ...it, product: prod });
+        settItemsMap.set(it.settlement_id, list);
+      }
+
+      this.state.seller_settlements = data.seller_settlements.map((s) => ({
+        ...s,
+        seller: this.state.sellers.find((slr) => slr.id === s.seller_id),
+        issue: this.state.seller_issues.find((iss) => iss.id === s.seller_issue_id),
+        items: settItemsMap.get(s.id) || [],
+      }));
+    }
+
+    this.logAudit(
+      'backup_history',
+      `restore-${generateId().slice(0, 8)}`,
+      'RESTORE_BACKUP',
+      oldSnapshot,
+      { restored_tables: Object.keys(data) },
+      `Executed controlled restore: ${reason}`,
+      userId
+    );
+
+    this.saveState();
   }
 }
 

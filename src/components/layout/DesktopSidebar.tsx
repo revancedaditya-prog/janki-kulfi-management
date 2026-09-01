@@ -15,6 +15,7 @@ import {
   History,
   Settings,
   Boxes,
+  ShieldCheck,
 } from 'lucide-react';
 
 export const DesktopSidebar: React.FC = () => {
@@ -46,6 +47,7 @@ export const DesktopSidebar: React.FC = () => {
         { to: '/products', label: t.navProducts, icon: Package, show: isOwner },
         { to: '/sellers', label: t.navSellers, icon: Users, show: isOwner },
         { to: '/audit', label: t.navAudit, icon: History, show: isOwner },
+        { to: '/settings/backup', label: 'बैकअप केंद्र (Backup)', icon: ShieldCheck, show: isOwner },
         { to: '/settings', label: t.navSettings, icon: Settings, show: true },
       ],
     },
