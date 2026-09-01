@@ -120,7 +120,7 @@ BEGIN
         v_prod_loc_id,
         v_freezer_loc_id,
         v_saleable_qty,
-        'production_in',
+        'production_completed',
         'production_batches',
         v_batch_id,
         'Daily Production: ' || v_batch_number,
