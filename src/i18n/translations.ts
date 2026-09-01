@@ -176,6 +176,9 @@ export const translations = {
     // Sellers & Carts
     sellersList: 'Sellers & Vendors',
     addSeller: 'Add New Seller',
+    editSeller: 'Edit Seller',
+    deleteSeller: 'Delete / Deactivate Seller',
+    confirmDeleteSeller: 'Are you sure you want to remove or deactivate this seller?',
     sellerCode: 'Seller Code',
     sellerName: 'Seller Name',
     phone: 'Phone Number',
@@ -184,8 +187,20 @@ export const translations = {
     currentHeldStock: 'Stock Currently with Seller',
     cartsList: 'Carts / Mobile Units',
     addCart: 'Add New Cart',
+    editCart: 'Edit Cart',
+    deleteCart: 'Delete / Deactivate Cart',
+    confirmDeleteCart: 'Are you sure you want to remove or deactivate this cart?',
     cartCode: 'Cart Code',
     cartName: 'Cart Name / Identifier',
+
+    // Expenses
+    viewExpense: 'View Expense Details',
+    editExpense: 'Edit Expense',
+    deleteExpense: 'Delete Expense',
+    confirmDeleteExpense: 'Are you sure you want to permanently delete this expense record?',
+    expenseDetails: 'Expense Details & Receipt',
+    billPhoto: 'Bill / Receipt Photo',
+    noBillPhoto: 'No bill photo attached',
 
     // Reports & Ledger
     reports: 'Business Reports & Analytics',
@@ -416,6 +431,9 @@ export const translations = {
     // Sellers & Carts
     sellersList: 'विक्रेता सूची',
     addSeller: 'नया विक्रेता जोड़ें',
+    editSeller: 'विक्रेता संपादित करें',
+    deleteSeller: 'विक्रेता हटाएं / निष्क्रिय करें',
+    confirmDeleteSeller: 'क्या आप वाकई इस विक्रेता को हटाना या निष्क्रिय करना चाहते हैं?',
     sellerCode: 'विक्रेता कोड',
     sellerName: 'विक्रेता का नाम',
     phone: 'मोबाइल नंबर',
@@ -424,8 +442,20 @@ export const translations = {
     currentHeldStock: 'विक्रेता के पास वर्तमान स्टॉक',
     cartsList: 'ठेलों की सूची',
     addCart: 'नया ठेला जोड़ें',
+    editCart: 'ठेला संपादित करें',
+    deleteCart: 'ठेला हटाएं / निष्क्रिय करें',
+    confirmDeleteCart: 'क्या आप वाकई इस ठेले को हटाना या निष्क्रिय करना चाहते हैं?',
     cartCode: 'ठेला कोड',
     cartName: 'ठेले का नाम / स्थान',
+
+    // Expenses
+    viewExpense: 'खर्च का विवरण देखें',
+    editExpense: 'खर्चा संपादित करें',
+    deleteExpense: 'खर्चा हटाएं',
+    confirmDeleteExpense: 'क्या आप वाकई इस खर्चे को हमेशा के लिए हटाना चाहते हैं?',
+    expenseDetails: 'खर्च विवरण एवं बिल रसीद',
+    billPhoto: 'बिल / रसीद की फोटो',
+    noBillPhoto: 'कोई बिल फोटो संलग्न नहीं है',
 
     // Reports & Ledger
     reports: 'रिपोर्ट्स व बहीखाता',

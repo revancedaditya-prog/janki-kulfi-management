@@ -431,13 +431,55 @@ class MockStore {
     return this.state.carts;
   }
 
-  public addCart(cart: Omit<Cart, 'id' | 'created_at' | 'updated_at'>): Cart {
+  public addCart(cart: Omit<Cart, 'id' | 'created_at' | 'updated_at'>, userId: string = 'usr-owner-001'): Cart {
     const id = `cart-${generateId().slice(0, 8)}`;
     const now = new Date().toISOString();
     const newCart: Cart = { ...cart, id, created_at: now, updated_at: now };
     this.state.carts.push(newCart);
+    this.logAudit('carts', id, 'CREATE_CART', null, newCart, `Added cart ${newCart.cart_name}`, userId);
     this.saveState();
     return newCart;
+  }
+
+  public updateCart(
+    id: string,
+    updates: Partial<Pick<Cart, 'cart_code' | 'cart_name' | 'location' | 'is_active'>>,
+    userId: string = 'usr-owner-001'
+  ): Cart {
+    const cart = this.state.carts.find((c) => c.id === id);
+    if (!cart) throw new Error('Cart not found');
+    const old = { ...cart };
+    Object.assign(cart, updates, { updated_at: new Date().toISOString() });
+
+    this.logAudit('carts', id, 'UPDATE_CART', old, cart, `Updated cart ${cart.cart_name}`, userId);
+    this.saveState();
+    return cart;
+  }
+
+  public deleteCart(id: string, userId: string = 'usr-owner-001'): { success: boolean; deactivated: boolean; message: string } {
+    const cart = this.state.carts.find((c) => c.id === id);
+    if (!cart) throw new Error('Cart not found');
+
+    const isAssigned = this.state.sellers.some((s) => s.default_cart_id === id && s.is_active);
+    const hasIssues = this.state.seller_issues.some((i) => i.cart_id === id);
+
+    if (hasIssues || isAssigned) {
+      const old = { ...cart };
+      cart.is_active = false;
+      cart.updated_at = new Date().toISOString();
+      this.logAudit('carts', id, 'DEACTIVATE_CART', old, cart, 'Deactivated cart due to existing assignments/issues', userId);
+      this.saveState();
+      return { success: true, deactivated: true, message: 'ठेला निष्क्रिय कर दिया गया है ताकि पुराना रिकॉर्ड सुरक्षित रहे।' };
+    } else {
+      const old = { ...cart };
+      this.state.carts = this.state.carts.filter((c) => c.id !== id);
+      for (const s of this.state.sellers) {
+        if (s.default_cart_id === id) s.default_cart_id = null;
+      }
+      this.logAudit('carts', id, 'DELETE_CART', old, null, 'Deleted unused cart', userId);
+      this.saveState();
+      return { success: true, deactivated: false, message: 'ठेला सफलतापूर्वक हटा दिया गया।' };
+    }
   }
 
   public getSellers(): (Seller & { default_cart?: Cart; current_held_stock?: number })[] {
@@ -468,8 +510,63 @@ class MockStore {
       is_active: true,
     });
 
+    this.logAudit('sellers', id, 'CREATE_SELLER', null, newSeller, `Added seller ${newSeller.full_name}`, userId);
     this.saveState();
     return newSeller;
+  }
+
+  public updateSeller(
+    id: string,
+    updates: Partial<Pick<Seller, 'seller_code' | 'full_name' | 'phone' | 'address' | 'default_cart_id' | 'is_active' | 'opening_balance'>>,
+    userId: string = 'usr-owner-001'
+  ): Seller {
+    const seller = this.state.sellers.find((s) => s.id === id);
+    if (!seller) throw new Error('Seller not found');
+    const old = { ...seller };
+    Object.assign(seller, updates, { updated_at: new Date().toISOString() });
+
+    // Update corresponding stock location if name or cart changed
+    const loc = this.state.stock_locations.find((l) => l.location_type === 'seller' && l.seller_id === id);
+    if (loc) {
+      if (updates.full_name) loc.name = `${updates.full_name} Cart Stock`;
+      if (updates.default_cart_id !== undefined) loc.cart_id = updates.default_cart_id;
+      if (updates.is_active !== undefined) loc.is_active = updates.is_active;
+    }
+
+    this.logAudit('sellers', id, 'UPDATE_SELLER', old, seller, `Updated seller ${seller.full_name}`, userId);
+    this.saveState();
+    return seller;
+  }
+
+  public deleteSeller(id: string, userId: string = 'usr-owner-001'): { success: boolean; deactivated: boolean; message: string } {
+    const seller = this.state.sellers.find((s) => s.id === id);
+    if (!seller) throw new Error('Seller not found');
+
+    const hasIssues = this.state.seller_issues.some((i) => i.seller_id === id);
+    const hasMovements = this.state.stock_movements.some((m) => {
+      const loc = this.state.stock_locations.find((l) => l.seller_id === id);
+      return loc && (m.source_location_id === loc.id || m.destination_location_id === loc.id);
+    });
+
+    if (hasIssues || hasMovements) {
+      // Historical references exist: safely deactivate
+      const old = { ...seller };
+      seller.is_active = false;
+      seller.updated_at = new Date().toISOString();
+      const loc = this.state.stock_locations.find((l) => l.seller_id === id);
+      if (loc) loc.is_active = false;
+      this.logAudit('sellers', id, 'DEACTIVATE_SELLER', old, seller, 'Deactivated seller due to existing transaction history', userId);
+      this.saveState();
+      return { success: true, deactivated: true, message: 'विक्रेता निष्क्रिय कर दिया गया है ताकि पुराना हिसाब व स्टॉक इतिहास सुरक्षित रहे।' };
+    } else {
+      // Unused seller: delete cleanly
+      const old = { ...seller };
+      this.state.sellers = this.state.sellers.filter((s) => s.id !== id);
+      this.state.stock_locations = this.state.stock_locations.filter((l) => l.seller_id !== id);
+      this.logAudit('sellers', id, 'DELETE_SELLER', old, null, 'Deleted unused seller', userId);
+      this.saveState();
+      return { success: true, deactivated: false, message: 'विक्रेता सफलतापूर्वक हटा दिया गया।' };
+    }
   }
 
   // --- Stock Ledger Balances ---
@@ -1076,6 +1173,31 @@ class MockStore {
     this.logAudit('expenses', expenseId, 'VOID_EXPENSE', old, expense, `Voided: ${voidReason}`, userId);
     this.saveState();
     return expense;
+  }
+
+  public updateExpense(
+    expenseId: string,
+    updates: Partial<Pick<Expense, 'expense_date' | 'category' | 'amount' | 'payment_method' | 'description' | 'vendor_name' | 'bill_image_path'>>,
+    userId: string = 'usr-owner-001'
+  ): Expense {
+    const expense = this.state.expenses.find((e) => e.id === expenseId);
+    if (!expense) throw new Error('Expense not found');
+    const old = { ...expense };
+    Object.assign(expense, updates, { updated_at: new Date().toISOString() });
+
+    this.logAudit('expenses', expenseId, 'UPDATE_EXPENSE', old, expense, `Updated expense (₹${expense.amount})`, userId);
+    this.saveState();
+    return expense;
+  }
+
+  public deleteExpense(expenseId: string, userId: string = 'usr-owner-001'): { success: boolean; message: string } {
+    const expense = this.state.expenses.find((e) => e.id === expenseId);
+    if (!expense) throw new Error('Expense not found');
+    const old = { ...expense };
+    this.state.expenses = this.state.expenses.filter((e) => e.id !== expenseId);
+    this.logAudit('expenses', expenseId, 'DELETE_EXPENSE', old, null, `Permanently deleted expense ₹${old.amount}`, userId);
+    this.saveState();
+    return { success: true, message: 'खर्चा सफलतापूर्वक हटा दिया गया।' };
   }
 
   // --- Daily Closing Workflow ---

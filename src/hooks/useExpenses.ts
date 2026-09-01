@@ -47,3 +47,47 @@ export function useVoidExpense() {
     },
   });
 }
+
+export function useUpdateExpense() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({
+      expenseId,
+      updates,
+    }: {
+      expenseId: string;
+      updates: {
+        expense_date?: string;
+        category?: ExpenseCategory;
+        amount?: number;
+        payment_method?: PaymentMethod;
+        description?: string;
+        vendor_name?: string;
+        bill_image_path?: string;
+      };
+    }) => {
+      return api.updateExpense(expenseId, updates, user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['expenses'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}
+
+export function useDeleteExpense() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async (expenseId: string) => {
+      return api.deleteExpense(expenseId, user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['expenses'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}

@@ -37,6 +37,50 @@ export function useCreateSeller() {
   });
 }
 
+export function useUpdateSeller() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({
+      id,
+      updates,
+    }: {
+      id: string;
+      updates: {
+        seller_code?: string;
+        full_name?: string;
+        phone?: string;
+        address?: string;
+        default_cart_id?: string | null;
+        is_active?: boolean;
+        opening_balance?: number;
+      };
+    }) => {
+      return api.updateSeller(id, updates as any, user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sellers'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}
+
+export function useDeleteSeller() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      return api.deleteSeller(id, user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sellers'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}
+
 export function useCreateCart() {
   const queryClient = useQueryClient();
 
@@ -46,6 +90,47 @@ export function useCreateCart() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['carts'] });
+    },
+  });
+}
+
+export function useUpdateCart() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({
+      id,
+      updates,
+    }: {
+      id: string;
+      updates: {
+        cart_code?: string;
+        cart_name?: string;
+        location?: string;
+        is_active?: boolean;
+      };
+    }) => {
+      return api.updateCart(id, updates, user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['carts'] });
+      queryClient.invalidateQueries({ queryKey: ['sellers'] });
+    },
+  });
+}
+
+export function useDeleteCart() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      return api.deleteCart(id, user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['carts'] });
+      queryClient.invalidateQueries({ queryKey: ['sellers'] });
     },
   });
 }

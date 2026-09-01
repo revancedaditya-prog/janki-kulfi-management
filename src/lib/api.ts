@@ -216,6 +216,28 @@ export const api = {
     return data;
   },
 
+  async updateCart(id: string, cart: Partial<Cart>, userId: string): Promise<Cart> {
+    if (useMockMode) {
+      return mockStore.updateCart(id, cart, userId);
+    }
+    const { data, error } = await (supabase as any).from('carts').update(cart).eq('id', id).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  async deleteCart(id: string, userId: string): Promise<{ success: boolean; deactivated: boolean; message: string }> {
+    if (useMockMode) {
+      return mockStore.deleteCart(id, userId);
+    }
+    const { error } = await (supabase as any).from('carts').delete().eq('id', id);
+    if (error) {
+      const { error: deactError } = await (supabase as any).from('carts').update({ is_active: false }).eq('id', id);
+      if (deactError) throw deactError;
+      return { success: true, deactivated: true, message: 'ठेला निष्क्रिय कर दिया गया है ताकि पुराना रिकॉर्ड सुरक्षित रहे।' };
+    }
+    return { success: true, deactivated: false, message: 'ठेला सफलतापूर्वक हटा दिया गया।' };
+  },
+
   async getSellers(): Promise<(Seller & { default_cart?: Cart; current_held_stock?: number })[]> {
     if (useMockMode) {
       return mockStore.getSellers();
@@ -254,6 +276,32 @@ export const api = {
       .single();
     if (error) throw error;
     return data;
+  },
+
+  async updateSeller(
+    id: string,
+    seller: Partial<Seller>,
+    userId: string
+  ): Promise<Seller> {
+    if (useMockMode) {
+      return mockStore.updateSeller(id, seller, userId);
+    }
+    const { data, error } = await (supabase as any).from('sellers').update(seller).eq('id', id).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  async deleteSeller(id: string, userId: string): Promise<{ success: boolean; deactivated: boolean; message: string }> {
+    if (useMockMode) {
+      return mockStore.deleteSeller(id, userId);
+    }
+    const { error } = await (supabase as any).from('sellers').delete().eq('id', id);
+    if (error) {
+      const { error: deactError } = await (supabase as any).from('sellers').update({ is_active: false }).eq('id', id);
+      if (deactError) throw deactError;
+      return { success: true, deactivated: true, message: 'विक्रेता निष्क्रिय कर दिया गया है ताकि पुराना हिसाब सुरक्षित रहे।' };
+    }
+    return { success: true, deactivated: false, message: 'विक्रेता सफलतापूर्वक हटा दिया गया।' };
   },
 
   // --- Production ---
@@ -475,6 +523,24 @@ export const api = {
     });
     if (error) throw error;
     return data;
+  },
+
+  async updateExpense(expenseId: string, expense: any, userId: string): Promise<Expense> {
+    if (useMockMode) {
+      return mockStore.updateExpense(expenseId, expense, userId);
+    }
+    const { data, error } = await (supabase as any).from('expenses').update(expense).eq('id', expenseId).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  async deleteExpense(expenseId: string, userId: string): Promise<{ success: boolean; message: string }> {
+    if (useMockMode) {
+      return mockStore.deleteExpense(expenseId, userId);
+    }
+    const { error } = await (supabase as any).from('expenses').delete().eq('id', expenseId);
+    if (error) throw error;
+    return { success: true, message: 'खर्चा सफलतापूर्वक हटा दिया गया।' };
   },
 
   // --- Daily Closings ---
