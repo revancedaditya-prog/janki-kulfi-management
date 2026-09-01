@@ -348,13 +348,9 @@ export const api = {
       if (!error && data) {
         return data;
       }
-      if (error && !error.message?.includes('schema cache') && !error.message?.includes('Could not find')) {
-        throw error;
-      }
+      console.warn('RPC create_production_batch_transaction failed or outdated, using fallback:', error);
     } catch (rpcErr: any) {
-      if (!rpcErr.message?.includes('schema cache') && !rpcErr.message?.includes('Could not find')) {
-        throw rpcErr;
-      }
+      console.warn('RPC execution exception, using fallback:', rpcErr);
     }
 
     // Fallback: Two-step creation with standard complete_production_batch RPC
