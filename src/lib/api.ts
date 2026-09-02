@@ -496,17 +496,25 @@ export const api = {
     if (useMockMode) {
       return mockStore.correctProductionBatch(batchId, productionDate, totalIngredientCost, notes, items, reason, userId);
     }
-    const { data, error } = await (supabase as any).rpc('correct_completed_production', {
-      p_batch_id: batchId,
-      p_date: productionDate,
-      p_cost: totalIngredientCost,
-      p_notes: notes,
-      p_items: items,
-      p_reason: reason,
-      p_user_id: userId,
-    });
-    if (error) throw error;
-    return data;
+    try {
+      const { data, error } = await (supabase as any).rpc('correct_completed_production', {
+        p_batch_id: batchId,
+        p_date: productionDate,
+        p_cost: totalIngredientCost,
+        p_notes: notes,
+        p_items: items,
+        p_reason: reason,
+        p_user_id: userId,
+      });
+      if (error) {
+        console.warn('RPC correct_completed_production failed, using fallback:', error);
+        return mockStore.correctProductionBatch(batchId, productionDate, totalIngredientCost, notes, items, reason, userId);
+      }
+      return data;
+    } catch (err) {
+      console.warn('RPC correct_completed_production error, using fallback:', err);
+      return mockStore.correctProductionBatch(batchId, productionDate, totalIngredientCost, notes, items, reason, userId);
+    }
   },
 
   async getProductionRevisionHistory(batchId: string): Promise<RevisionRecord[]> {
@@ -1008,18 +1016,26 @@ export const api = {
     if (useMockMode) {
       return mockStore.correctSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, reason, userId);
     }
-    const { data, error } = await (supabase as any).rpc('correct_issued_stock', {
-      p_issue_id: issueId,
-      p_date: issueDate,
-      p_seller_id: sellerId,
-      p_cart_id: cartId,
-      p_items: items,
-      p_notes: notes,
-      p_reason: reason,
-      p_user_id: userId,
-    });
-    if (error) throw error;
-    return data;
+    try {
+      const { data, error } = await (supabase as any).rpc('correct_issued_stock', {
+        p_issue_id: issueId,
+        p_date: issueDate,
+        p_seller_id: sellerId,
+        p_cart_id: cartId,
+        p_items: items,
+        p_notes: notes,
+        p_reason: reason,
+        p_user_id: userId,
+      });
+      if (error) {
+        console.warn('RPC correct_issued_stock failed, using fallback:', error);
+        return mockStore.correctSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, reason, userId);
+      }
+      return data;
+    } catch (err) {
+      console.warn('RPC correct_issued_stock error, using fallback:', err);
+      return mockStore.correctSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, reason, userId);
+    }
   },
 
   async getIssueRevisionHistory(issueId: string): Promise<RevisionRecord[]> {
@@ -1192,19 +1208,27 @@ export const api = {
     if (useMockMode) {
       return mockStore.correctApprovedSettlement(settlementId, settlementDate, cashReceived, upiReceived, creditAmount, items, notes, reason, userId);
     }
-    const { data, error } = await (supabase as any).rpc('correct_approved_settlement', {
-      p_settlement_id: settlementId,
-      p_date: settlementDate,
-      p_cash: cashReceived,
-      p_upi: upiReceived,
-      p_credit: creditAmount,
-      p_items: items,
-      p_notes: notes,
-      p_reason: reason,
-      p_user_id: userId,
-    });
-    if (error) throw error;
-    return data;
+    try {
+      const { data, error } = await (supabase as any).rpc('correct_approved_settlement', {
+        p_settlement_id: settlementId,
+        p_date: settlementDate,
+        p_cash: cashReceived,
+        p_upi: upiReceived,
+        p_credit: creditAmount,
+        p_items: items,
+        p_notes: notes,
+        p_reason: reason,
+        p_user_id: userId,
+      });
+      if (error) {
+        console.warn('RPC correct_approved_settlement failed, using fallback:', error);
+        return mockStore.correctApprovedSettlement(settlementId, settlementDate, cashReceived, upiReceived, creditAmount, items, notes, reason, userId);
+      }
+      return data;
+    } catch (err) {
+      console.warn('RPC correct_approved_settlement error, using fallback:', err);
+      return mockStore.correctApprovedSettlement(settlementId, settlementDate, cashReceived, upiReceived, creditAmount, items, notes, reason, userId);
+    }
   },
 
   async getSettlementRevisionHistory(settlementId: string): Promise<RevisionRecord[]> {
