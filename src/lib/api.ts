@@ -551,6 +551,10 @@ export const api = {
       }
     }
 
+    // Unlink self-referencing correction chains
+    await (supabase as any).from('production_batches').update({ correction_of_id: null }).eq('correction_of_id', batchId);
+    await (supabase as any).from('production_batches').update({ superseded_by_id: null }).eq('superseded_by_id', batchId);
+
     await (supabase as any).from('production_batch_ingredients').delete().eq('batch_id', batchId);
     await (supabase as any).from('production_items').delete().eq('batch_id', batchId);
     const { error: delErr } = await (supabase as any).from('production_batches').delete().eq('id', batchId);
@@ -1408,15 +1412,28 @@ export const api = {
       return mockStore.deleteSellerIssue(issueId, reason, userId);
     }
 
-    // Check if settlements exist
-    const { data: settlements } = await (supabase as any)
+    // Check if active settlements exist
+    const { data: activeSettlements } = await (supabase as any)
       .from('seller_settlements')
-      .select('id, status')
+      .select('id, settlement_number, status')
       .or(`seller_issue_id.eq.${issueId},issue_id.eq.${issueId}`)
-      .not('status', 'in', '("cancelled","rejected","superseded")');
+      .in('status', ['approved', 'pending_approval', 'draft']);
 
-    if (settlements && settlements.length > 0) {
-      throw new Error('इस स्टॉक निकासी को नहीं हटाया जा सकता क्योंकि इसके विरुद्ध हिसाब (Settlement) दर्ज है। पहले हिसाब को हटाएं।');
+    if (activeSettlements && activeSettlements.length > 0) {
+      const numbers = activeSettlements.map((s: any) => s.settlement_number).filter(Boolean).join(', ');
+      throw new Error(`इस स्टॉक निकासी को नहीं हटाया जा सकता क्योंकि इसके विरुद्ध हिसाब (${numbers || 'Settlement'}) दर्ज है। कृपया पहले संबंधित हिसाब को हटाएं।`);
+    }
+
+    // Clean up any remaining superseded/cancelled/rejected settlements for this issue
+    const { data: allLinkedSettlements } = await (supabase as any)
+      .from('seller_settlements')
+      .select('id')
+      .or(`seller_issue_id.eq.${issueId},issue_id.eq.${issueId}`);
+
+    if (allLinkedSettlements && allLinkedSettlements.length > 0) {
+      const setIds = allLinkedSettlements.map((s: any) => s.id);
+      await (supabase as any).from('settlement_items').delete().in('settlement_id', setIds);
+      await (supabase as any).from('seller_settlements').delete().in('id', setIds);
     }
 
     if (issue.status === 'issued' && issue.items && issue.items.length > 0) {
@@ -1445,6 +1462,10 @@ export const api = {
         }
       }
     }
+
+    // Unlink self-referencing correction chains
+    await (supabase as any).from('seller_issues').update({ correction_of_id: null }).eq('correction_of_id', issueId);
+    await (supabase as any).from('seller_issues').update({ superseded_by_id: null }).eq('superseded_by_id', issueId);
 
     await (supabase as any).from('seller_issue_items').delete().eq('seller_issue_id', issueId);
     const { error: delErr } = await (supabase as any).from('seller_issues').delete().eq('id', issueId);
@@ -2080,6 +2101,10 @@ export const api = {
         await (supabase as any).from('seller_issues').update({ status: 'issued', updated_at: new Date().toISOString() }).eq('id', issueId);
       }
     }
+
+    // Unlink self-referencing correction chains
+    await (supabase as any).from('seller_settlements').update({ correction_of_id: null }).eq('correction_of_id', settlementId);
+    await (supabase as any).from('seller_settlements').update({ superseded_by_id: null }).eq('superseded_by_id', settlementId);
 
     await (supabase as any).from('settlement_items').delete().eq('settlement_id', settlementId);
     const { error: delErr } = await (supabase as any).from('seller_settlements').delete().eq('id', settlementId);

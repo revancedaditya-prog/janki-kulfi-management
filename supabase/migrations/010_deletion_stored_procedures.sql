@@ -111,14 +111,15 @@ BEGIN
     RAISE EXCEPTION 'Stock issue not found.';
   END IF;
 
-  -- Check if settlements exist
-  SELECT COUNT(*) INTO v_linked_settlement_count
+  -- Check if active settlements exist (approved, pending_approval, or draft)
+  SELECT settlement_number INTO v_closing
   FROM seller_settlements
   WHERE (seller_issue_id = p_issue_id OR issue_id = p_issue_id)
-    AND status NOT IN ('cancelled', 'rejected', 'superseded');
+    AND status IN ('approved', 'pending_approval', 'draft')
+  LIMIT 1;
 
-  IF v_linked_settlement_count > 0 THEN
-    RAISE EXCEPTION 'Cannot delete stock issue because an active settlement is linked to it. Delete the settlement first.';
+  IF FOUND THEN
+    RAISE EXCEPTION 'Cannot delete stock issue because an active settlement (%) is linked to it. Please delete the settlement first.', v_closing.settlement_number;
   END IF;
 
   -- Check closed business day
@@ -179,6 +180,16 @@ BEGIN
     p_user_id,
     NOW()
   );
+
+  -- Clean up any inactive/superseded/cancelled settlement records
+  DELETE FROM settlement_items WHERE settlement_id IN (
+    SELECT id FROM seller_settlements WHERE seller_issue_id = p_issue_id OR issue_id = p_issue_id
+  );
+  DELETE FROM seller_settlements WHERE seller_issue_id = p_issue_id OR issue_id = p_issue_id;
+
+  -- Unlink self-referencing correction chains
+  UPDATE seller_issues SET correction_of_id = NULL WHERE correction_of_id = p_issue_id;
+  UPDATE seller_issues SET superseded_by_id = NULL WHERE superseded_by_id = p_issue_id;
 
   -- Delete items and issue
   DELETE FROM seller_issue_items WHERE seller_issue_id = p_issue_id;
