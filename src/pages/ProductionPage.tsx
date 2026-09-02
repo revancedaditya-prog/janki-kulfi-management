@@ -29,6 +29,7 @@ import {
 } from '@/lib/formatters';
 import {
   Factory,
+  Calculator,
   Plus,
   CheckCircle,
   AlertCircle,
@@ -352,13 +353,24 @@ export const ProductionPage: React.FC = () => {
           </p>
         </div>
 
-        <Button
-          variant="primary"
-          leftIcon={<Plus className="w-5 h-5" />}
-          onClick={handleOpenNewModal}
-        >
-          {t.newBatch}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Link to="/production/cost-calculator">
+            <Button
+              variant="outline"
+              leftIcon={<Calculator className="w-5 h-5 text-maroon-800" />}
+              className="border-maroon-800 text-maroon-900 font-bold"
+            >
+              {language === 'hi' ? 'उत्पादन लागत कैलकुलेटर' : 'Cost Calculator'}
+            </Button>
+          </Link>
+          <Button
+            variant="primary"
+            leftIcon={<Plus className="w-5 h-5" />}
+            onClick={handleOpenNewModal}
+          >
+            {t.newBatch}
+          </Button>
+        </div>
       </div>
 
       {/* Batches List */}

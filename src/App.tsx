@@ -19,6 +19,7 @@ import { ReportsPage } from './pages/ReportsPage';
 import { AuditLogsPage } from './pages/AuditLogsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { BackupCenterPage } from './pages/BackupCenterPage';
+import { ProductionCostCalculatorPage } from './pages/ProductionCostCalculatorPage';
 import { LoginPage } from './pages/LoginPage';
 
 const queryClient = new QueryClient({
@@ -75,6 +76,7 @@ export function App() {
                 >
                   <Route index element={<DashboardPage />} />
                   <Route path="production" element={<ProductionPage />} />
+                  <Route path="production/cost-calculator" element={<ProductionCostCalculatorPage />} />
                   <Route path="issues" element={<StockIssuesPage />} />
                   <Route path="settlements" element={<SettlementsPage />} />
                   <Route

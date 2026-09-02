@@ -178,4 +178,164 @@ export interface RevisionRecord {
   };
 }
 
+// --- Recipe & Costing Calculator Types ---
+export type UnitType = 'kg' | 'g' | 'litre' | 'ml' | 'piece' | 'pack';
+export type IngredientCategory =
+  | 'dairy'
+  | 'sweetener'
+  | 'dry_fruit'
+  | 'spice'
+  | 'flavoring'
+  | 'packaging'
+  | 'other';
+
+export interface Ingredient {
+  id: string;
+  code: string;
+  name_en: string;
+  name_hi: string;
+  category: IngredientCategory;
+  base_unit: UnitType;
+  current_rate: number;
+  rate_unit: UnitType;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface IngredientPrice {
+  id: string;
+  ingredient_id: string;
+  rate: number;
+  unit: UnitType;
+  effective_from: string;
+  effective_to?: string | null;
+  created_by?: string;
+  created_at?: string;
+}
+
+export interface AdditionalOverheads {
+  electricity: number;
+  generator_fuel: number;
+  gas: number;
+  direct_labour: number;
+  water: number;
+  packaging_extra: number;
+  transport: number;
+  other: number;
+}
+
+export interface RecipeItem {
+  id?: string;
+  recipe_id?: string;
+  ingredient_id: string;
+  quantity: number;
+  unit: UnitType;
+  is_optional?: boolean;
+  sort_order?: number;
+  ingredient?: Ingredient;
+}
+
+export interface Recipe {
+  id: string;
+  product_id: string;
+  version_number: number;
+  name: string;
+  standard_output_pieces: number;
+  default_overheads: AdditionalOverheads;
+  notes?: string | null;
+  is_default: boolean;
+  effective_from: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RecipeWithItems extends Recipe {
+  items: (RecipeItem & { ingredient?: Ingredient })[];
+  product?: Product;
+}
+
+export interface CostingIngredientRow {
+  ingredient_id: string;
+  name_en: string;
+  name_hi: string;
+  category: IngredientCategory;
+  is_selected: boolean;
+  quantity: number;
+  unit: UnitType;
+  rate: number;
+  rate_unit: UnitType;
+  calculated_cost: number;
+  save_rate_to_master?: boolean;
+  is_custom?: boolean;
+}
+
+export interface ProductionBatchIngredient {
+  id: string;
+  batch_id: string;
+  ingredient_id?: string | null;
+  ingredient_name: string;
+  quantity_used: number;
+  unit: UnitType;
+  converted_base_quantity: number;
+  rate_snapshot: number;
+  rate_unit: UnitType;
+  calculated_cost: number;
+  is_packaging: boolean;
+  created_at?: string;
+}
+
+export interface CostCalculationBreakdown {
+  milk_cost: number;
+  sugar_cost: number;
+  khoya_cost: number;
+  cashew_cost: number;
+  pistachio_cost: number;
+  almond_cost: number;
+  custard_cost: number;
+  cardamom_cost: number;
+  saffron_cost: number;
+  flavour_cost: number;
+  sticks_cost: number;
+  wrappers_cost: number;
+  packing_cost: number;
+  other_ingredient_cost: number;
+  total_ingredient_cost: number;
+  total_packaging_cost: number;
+  electricity_fuel_cost: number;
+  labour_cost: number;
+  other_overheads_cost: number;
+  total_overheads_cost: number;
+  total_batch_cost: number;
+  actual_pieces_produced: number;
+  damaged_pieces: number;
+  saleable_pieces: number;
+  cost_per_saleable_kulfi: number;
+  selling_price_per_kulfi: number;
+  estimated_profit_per_kulfi: number;
+  expected_total_sales: number;
+  estimated_total_gross_profit: number;
+  gross_margin_percentage: number;
+  missing_rate_ingredients: string[];
+}
+
+export interface ProductionScalingResult {
+  required_quantity: number;
+  standard_output: number;
+  scale_factor: number;
+  required_batches: number;
+  scaled_ingredients: {
+    name_en: string;
+    name_hi: string;
+    quantity: number;
+    unit: UnitType;
+    estimated_cost: number;
+  }[];
+  scaled_overheads: AdditionalOverheads;
+  estimated_total_cost: number;
+  estimated_cost_per_piece: number;
+}
+
+
 

@@ -17,6 +17,14 @@ import {
   DashboardSummary,
   BackupHistory,
   RevisionRecord,
+  Ingredient,
+  IngredientPrice,
+  Recipe,
+  RecipeItem,
+  RecipeWithItems,
+  ProductionBatchIngredient,
+  AdditionalOverheads,
+  UnitType,
 } from '@/types';
 import {
   calculateSaleableProduction,
@@ -43,6 +51,11 @@ interface LocalStoreState {
   daily_closings: DailyClosing[];
   audit_logs: AuditLog[];
   backup_history?: BackupHistory[];
+  ingredients?: Ingredient[];
+  ingredient_prices?: IngredientPrice[];
+  recipes?: Recipe[];
+  recipe_items?: RecipeItem[];
+  production_batch_ingredients?: ProductionBatchIngredient[];
 }
 
 const DEFAULT_STATE: LocalStoreState = {
@@ -274,6 +287,143 @@ const DEFAULT_STATE: LocalStoreState = {
   stock_movements: [],
   daily_closings: [],
   audit_logs: [],
+  ingredients: [
+    { id: 'ing-milk-01', code: 'ING-MILK', name_en: 'Milk', name_hi: 'दूध', category: 'dairy', base_unit: 'litre', current_rate: 60.0, rate_unit: 'litre', is_active: true },
+    { id: 'ing-sug-02', code: 'ING-SUGAR', name_en: 'Sugar', name_hi: 'चीनी', category: 'sweetener', base_unit: 'kg', current_rate: 48.0, rate_unit: 'kg', is_active: true },
+    { id: 'ing-khoy-03', code: 'ING-KHOYA', name_en: 'Khoya', name_hi: 'खोया / मावा', category: 'dairy', base_unit: 'kg', current_rate: 320.0, rate_unit: 'kg', is_active: true },
+    { id: 'ing-cash-04', code: 'ING-CASHEW', name_en: 'Cashew', name_hi: 'काजू', category: 'dry_fruit', base_unit: 'kg', current_rate: 800.0, rate_unit: 'kg', is_active: true },
+    { id: 'ing-pist-05', code: 'ING-PISTA', name_en: 'Pistachio', name_hi: 'पिस्ता', category: 'dry_fruit', base_unit: 'kg', current_rate: 1200.0, rate_unit: 'kg', is_active: true },
+    { id: 'ing-almd-06', code: 'ING-ALMOND', name_en: 'Almond', name_hi: 'बादाम', category: 'dry_fruit', base_unit: 'kg', current_rate: 750.0, rate_unit: 'kg', is_active: true },
+    { id: 'ing-cust-07', code: 'ING-CUSTARD', name_en: 'Custard powder', name_hi: 'कस्टर्ड पाउडर', category: 'flavoring', base_unit: 'kg', current_rate: 160.0, rate_unit: 'kg', is_active: true },
+    { id: 'ing-card-08', code: 'ING-CARDAMOM', name_en: 'Cardamom', name_hi: 'इलायची', category: 'spice', base_unit: 'kg', current_rate: 2400.0, rate_unit: 'kg', is_active: true },
+    { id: 'ing-saff-09', code: 'ING-SAFFRON', name_en: 'Saffron', name_hi: 'केसर', category: 'spice', base_unit: 'g', current_rate: 250.0, rate_unit: 'g', is_active: true },
+    { id: 'ing-flav-10', code: 'ING-FLAVOUR', name_en: 'Flavour', name_hi: 'फ्लेवर', category: 'flavoring', base_unit: 'ml', current_rate: 1.5, rate_unit: 'ml', is_active: true },
+    { id: 'ing-stk-11', code: 'ING-STICK', name_en: 'Kulfi stick', name_hi: 'कुल्फी स्टिक', category: 'packaging', base_unit: 'piece', current_rate: 0.3, rate_unit: 'piece', is_active: true },
+    { id: 'ing-wrp-12', code: 'ING-WRAPPER', name_en: 'Wrapper', name_hi: 'रैपर', category: 'packaging', base_unit: 'piece', current_rate: 0.4, rate_unit: 'piece', is_active: true },
+    { id: 'ing-pck-13', code: 'ING-POUCH', name_en: 'Pouch/packing', name_hi: 'पैकिंग', category: 'packaging', base_unit: 'piece', current_rate: 0.5, rate_unit: 'piece', is_active: true },
+    { id: 'ing-oth-14', code: 'ING-OTHER', name_en: 'Other ingredient', name_hi: 'अन्य सामग्री', category: 'other', base_unit: 'kg', current_rate: 100.0, rate_unit: 'kg', is_active: true },
+  ],
+  ingredient_prices: [
+    { id: 'ip-01', ingredient_id: 'ing-milk-01', rate: 60.0, unit: 'litre', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-02', ingredient_id: 'ing-sug-02', rate: 48.0, unit: 'kg', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-03', ingredient_id: 'ing-khoy-03', rate: 320.0, unit: 'kg', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-04', ingredient_id: 'ing-cash-04', rate: 800.0, unit: 'kg', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-05', ingredient_id: 'ing-pist-05', rate: 1200.0, unit: 'kg', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-06', ingredient_id: 'ing-almd-06', rate: 750.0, unit: 'kg', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-07', ingredient_id: 'ing-cust-07', rate: 160.0, unit: 'kg', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-08', ingredient_id: 'ing-card-08', rate: 2400.0, unit: 'kg', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-09', ingredient_id: 'ing-saff-09', rate: 250.0, unit: 'g', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-10', ingredient_id: 'ing-flav-10', rate: 1.5, unit: 'ml', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-11', ingredient_id: 'ing-stk-11', rate: 0.3, unit: 'piece', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-12', ingredient_id: 'ing-wrp-12', rate: 0.4, unit: 'piece', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-13', ingredient_id: 'ing-pck-13', rate: 0.5, unit: 'piece', effective_from: '2026-01-01T00:00:00.000Z' },
+    { id: 'ip-14', ingredient_id: 'ing-oth-14', rate: 100.0, unit: 'kg', effective_from: '2026-01-01T00:00:00.000Z' },
+  ],
+  recipes: [
+    {
+      id: 'rec-sada-01',
+      product_id: 'prod-sada-01',
+      version_number: 1,
+      name: '₹10 Sada Kulfi Standard Recipe',
+      standard_output_pieces: 100,
+      default_overheads: {
+        electricity: 30,
+        generator_fuel: 0,
+        gas: 50,
+        direct_labour: 60,
+        water: 0,
+        packaging_extra: 0,
+        transport: 10,
+        other: 10,
+      },
+      notes: 'Classic standard stick kulfi with pure milk and cardamom',
+      is_default: true,
+      effective_from: '2026-01-01T00:00:00.000Z',
+      created_by: 'usr-owner-001',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'rec-rabri-02',
+      product_id: 'prod-rabri-02',
+      version_number: 1,
+      name: '₹20 Rabri Kulfi Standard Recipe',
+      standard_output_pieces: 100,
+      default_overheads: {
+        electricity: 50,
+        generator_fuel: 0,
+        gas: 90,
+        direct_labour: 100,
+        water: 0,
+        packaging_extra: 0,
+        transport: 20,
+        other: 20,
+      },
+      notes: 'Rich rabri kulfi with crushed almonds and pistachios',
+      is_default: true,
+      effective_from: '2026-01-01T00:00:00.000Z',
+      created_by: 'usr-owner-001',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'rec-prem-03',
+      product_id: 'prod-prem-03',
+      version_number: 1,
+      name: '₹40 Premium Kulfi Standard Recipe',
+      standard_output_pieces: 100,
+      default_overheads: {
+        electricity: 70,
+        generator_fuel: 0,
+        gas: 130,
+        direct_labour: 150,
+        water: 0,
+        packaging_extra: 0,
+        transport: 30,
+        other: 30,
+      },
+      notes: 'Royal saffron-infused kulfi loaded with cashews, pistachios and almonds',
+      is_default: true,
+      effective_from: '2026-01-01T00:00:00.000Z',
+      created_by: 'usr-owner-001',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    },
+  ],
+  recipe_items: [
+    // ₹10 Sada Kulfi
+    { id: 'rit-sada-01', recipe_id: 'rec-sada-01', ingredient_id: 'ing-milk-01', quantity: 10, unit: 'litre', sort_order: 1 },
+    { id: 'rit-sada-02', recipe_id: 'rec-sada-01', ingredient_id: 'ing-sug-02', quantity: 1.2, unit: 'kg', sort_order: 2 },
+    { id: 'rit-sada-03', recipe_id: 'rec-sada-01', ingredient_id: 'ing-khoy-03', quantity: 0.5, unit: 'kg', sort_order: 3 },
+    { id: 'rit-sada-04', recipe_id: 'rec-sada-01', ingredient_id: 'ing-card-08', quantity: 15, unit: 'g', sort_order: 4 },
+    { id: 'rit-sada-05', recipe_id: 'rec-sada-01', ingredient_id: 'ing-stk-11', quantity: 100, unit: 'piece', sort_order: 5 },
+    { id: 'rit-sada-06', recipe_id: 'rec-sada-01', ingredient_id: 'ing-wrp-12', quantity: 100, unit: 'piece', sort_order: 6 },
+
+    // ₹20 Rabri Kulfi
+    { id: 'rit-rabri-01', recipe_id: 'rec-rabri-02', ingredient_id: 'ing-milk-01', quantity: 18, unit: 'litre', sort_order: 1 },
+    { id: 'rit-rabri-02', recipe_id: 'rec-rabri-02', ingredient_id: 'ing-sug-02', quantity: 1.8, unit: 'kg', sort_order: 2 },
+    { id: 'rit-rabri-03', recipe_id: 'rec-rabri-02', ingredient_id: 'ing-khoy-03', quantity: 1.5, unit: 'kg', sort_order: 3 },
+    { id: 'rit-rabri-04', recipe_id: 'rec-rabri-02', ingredient_id: 'ing-almd-06', quantity: 200, unit: 'g', sort_order: 4 },
+    { id: 'rit-rabri-05', recipe_id: 'rec-rabri-02', ingredient_id: 'ing-pist-05', quantity: 100, unit: 'g', sort_order: 5 },
+    { id: 'rit-rabri-06', recipe_id: 'rec-rabri-02', ingredient_id: 'ing-card-08', quantity: 25, unit: 'g', sort_order: 6 },
+    { id: 'rit-rabri-07', recipe_id: 'rec-rabri-02', ingredient_id: 'ing-stk-11', quantity: 100, unit: 'piece', sort_order: 7 },
+    { id: 'rit-rabri-08', recipe_id: 'rec-rabri-02', ingredient_id: 'ing-wrp-12', quantity: 100, unit: 'piece', sort_order: 8 },
+    { id: 'rit-rabri-09', recipe_id: 'rec-rabri-02', ingredient_id: 'ing-pck-13', quantity: 100, unit: 'piece', sort_order: 9 },
+
+    // ₹40 Premium Kulfi
+    { id: 'rit-prem-01', recipe_id: 'rec-prem-03', ingredient_id: 'ing-milk-01', quantity: 25, unit: 'litre', sort_order: 1 },
+    { id: 'rit-prem-02', recipe_id: 'rec-prem-03', ingredient_id: 'ing-sug-02', quantity: 2.5, unit: 'kg', sort_order: 2 },
+    { id: 'rit-prem-03', recipe_id: 'rec-prem-03', ingredient_id: 'ing-khoy-03', quantity: 3.0, unit: 'kg', sort_order: 3 },
+    { id: 'rit-prem-04', recipe_id: 'rec-prem-03', ingredient_id: 'ing-cash-04', quantity: 300, unit: 'g', sort_order: 4 },
+    { id: 'rit-prem-05', recipe_id: 'rec-prem-03', ingredient_id: 'ing-pist-05', quantity: 250, unit: 'g', sort_order: 5 },
+    { id: 'rit-prem-06', recipe_id: 'rec-prem-03', ingredient_id: 'ing-almd-06', quantity: 300, unit: 'g', sort_order: 6 },
+    { id: 'rit-prem-07', recipe_id: 'rec-prem-03', ingredient_id: 'ing-saff-09', quantity: 2, unit: 'g', sort_order: 7 },
+    { id: 'rit-prem-08', recipe_id: 'rec-prem-03', ingredient_id: 'ing-card-08', quantity: 40, unit: 'g', sort_order: 8 },
+    { id: 'rit-prem-09', recipe_id: 'rec-prem-03', ingredient_id: 'ing-stk-11', quantity: 100, unit: 'piece', sort_order: 9 },
+    { id: 'rit-prem-10', recipe_id: 'rec-prem-03', ingredient_id: 'ing-wrp-12', quantity: 100, unit: 'piece', sort_order: 10 },
+    { id: 'rit-prem-11', recipe_id: 'rec-prem-03', ingredient_id: 'ing-pck-13', quantity: 100, unit: 'piece', sort_order: 11 },
+  ],
+  production_batch_ingredients: [],
 };
 
 class MockStore {
@@ -291,6 +441,21 @@ class MockStore {
         const owner = parsed.profiles?.find((p) => p.id === 'usr-owner-001');
         if (owner && owner.phone !== '7906564964') {
           owner.phone = '7906564964';
+        }
+        if (!parsed.ingredients || parsed.ingredients.length === 0) {
+          parsed.ingredients = JSON.parse(JSON.stringify(DEFAULT_STATE.ingredients));
+        }
+        if (!parsed.recipes || parsed.recipes.length === 0) {
+          parsed.recipes = JSON.parse(JSON.stringify(DEFAULT_STATE.recipes));
+        }
+        if (!parsed.recipe_items || parsed.recipe_items.length === 0) {
+          parsed.recipe_items = JSON.parse(JSON.stringify(DEFAULT_STATE.recipe_items));
+        }
+        if (!parsed.ingredient_prices || parsed.ingredient_prices.length === 0) {
+          parsed.ingredient_prices = JSON.parse(JSON.stringify(DEFAULT_STATE.ingredient_prices || []));
+        }
+        if (!parsed.production_batch_ingredients) {
+          parsed.production_batch_ingredients = [];
         }
         return parsed;
       }
@@ -1010,6 +1175,372 @@ class MockStore {
       };
     });
   }
+
+  // --- Recipe & Ingredient Master Workflow ---
+  public getIngredients(): Ingredient[] {
+    return (this.state.ingredients || []).filter((i) => i.is_active !== false);
+  }
+
+  public getIngredientById(id: string): Ingredient | undefined {
+    return (this.state.ingredients || []).find((i) => i.id === id);
+  }
+
+  public addIngredient(
+    ingredient: Omit<Ingredient, 'id' | 'created_at' | 'updated_at'>,
+    userId: string = 'usr-owner-001'
+  ): Ingredient {
+    const id = `ing-custom-${generateId().slice(0, 8)}`;
+    const now = new Date().toISOString();
+    const newIng: Ingredient = {
+      ...ingredient,
+      id,
+      created_at: now,
+      updated_at: now,
+    };
+
+    if (!this.state.ingredients) this.state.ingredients = [];
+    this.state.ingredients.push(newIng);
+
+    if (!this.state.ingredient_prices) this.state.ingredient_prices = [];
+    this.state.ingredient_prices.push({
+      id: `ip-${generateId().slice(0, 8)}`,
+      ingredient_id: id,
+      rate: ingredient.current_rate,
+      unit: ingredient.rate_unit,
+      effective_from: now,
+      effective_to: null,
+      created_by: userId,
+      created_at: now,
+    });
+
+    this.logAudit('ingredients', id, 'CREATE_INGREDIENT', null, newIng, `Added ingredient ${newIng.name_en}`, userId);
+    this.saveState();
+    return newIng;
+  }
+
+  public updateIngredientRate(
+    ingredientId: string,
+    newRate: number,
+    unit: UnitType,
+    saveToMaster: boolean = true,
+    userId: string = 'usr-owner-001'
+  ): Ingredient {
+    const ing = (this.state.ingredients || []).find((i) => i.id === ingredientId);
+    if (!ing) throw new Error('Ingredient not found');
+
+    if (saveToMaster) {
+      const now = new Date().toISOString();
+      const old = { ...ing };
+      ing.current_rate = newRate;
+      ing.rate_unit = unit;
+      ing.updated_at = now;
+
+      // Close previous price record
+      if (!this.state.ingredient_prices) this.state.ingredient_prices = [];
+      const activePrice = this.state.ingredient_prices.find(
+        (p) => p.ingredient_id === ingredientId && !p.effective_to
+      );
+      if (activePrice) {
+        activePrice.effective_to = now;
+      }
+
+      this.state.ingredient_prices.push({
+        id: `ip-${generateId().slice(0, 8)}`,
+        ingredient_id: ingredientId,
+        rate: newRate,
+        unit,
+        effective_from: now,
+        effective_to: null,
+        created_by: userId,
+        created_at: now,
+      });
+
+      this.logAudit('ingredients', ingredientId, 'UPDATE_RATE', old, ing, `Updated rate for ${ing.name_en} to ₹${newRate}/${unit}`, userId);
+      this.saveState();
+    }
+
+    return ing;
+  }
+
+  public getRecipes(): RecipeWithItems[] {
+    const recipes = this.state.recipes || [];
+    const items = this.state.recipe_items || [];
+    const ingredients = this.state.ingredients || [];
+    const products = this.state.products || [];
+
+    return recipes.map((r) => {
+      const rItems = items
+        .filter((it) => it.recipe_id === r.id)
+        .map((it) => ({
+          ...it,
+          ingredient: ingredients.find((ing) => ing.id === it.ingredient_id),
+        }));
+      const product = products.find((p) => p.id === r.product_id);
+      return { ...r, items: rItems, product };
+    });
+  }
+
+  public getRecipeForProduct(productId: string): RecipeWithItems | undefined {
+    const all = this.getRecipes();
+    return all.find((r) => r.product_id === productId && r.is_default);
+  }
+
+  public getRecipeHistory(productId: string): RecipeWithItems[] {
+    const all = this.getRecipes();
+    return all
+      .filter((r) => r.product_id === productId)
+      .sort((a, b) => b.version_number - a.version_number);
+  }
+
+  public saveRecipe(
+    data: {
+      product_id: string;
+      name?: string;
+      standard_output_pieces: number;
+      default_overheads: AdditionalOverheads;
+      notes?: string;
+      items: {
+        ingredient_id: string;
+        quantity: number;
+        unit: UnitType;
+        save_rate_to_master?: boolean;
+        rate?: number;
+      }[];
+    },
+    userId: string = 'usr-owner-001'
+  ): RecipeWithItems {
+    if (!this.state.recipes) this.state.recipes = [];
+    if (!this.state.recipe_items) this.state.recipe_items = [];
+
+    const existingRecipes = this.state.recipes.filter((r) => r.product_id === data.product_id);
+    const latestVersion = existingRecipes.sort((a, b) => b.version_number - a.version_number)[0];
+    const newVersion = (latestVersion?.version_number || 0) + 1;
+
+    // Mark previous defaults as false
+    for (const r of existingRecipes) {
+      r.is_default = false;
+    }
+
+    const now = new Date().toISOString();
+    const recipeId = `rec-${generateId().slice(0, 8)}`;
+    const product = this.state.products.find((p) => p.id === data.product_id);
+
+    const newRecipe: Recipe = {
+      id: recipeId,
+      product_id: data.product_id,
+      version_number: newVersion,
+      name: data.name || `${product?.name_hi || product?.name_en || 'कुल्फी'} Standard Recipe v${newVersion}`,
+      standard_output_pieces: Math.max(1, data.standard_output_pieces || 100),
+      default_overheads: data.default_overheads || {
+        electricity: 0,
+        generator_fuel: 0,
+        gas: 0,
+        direct_labour: 0,
+        water: 0,
+        packaging_extra: 0,
+        transport: 0,
+        other: 0,
+      },
+      notes: data.notes || null,
+      is_default: true,
+      effective_from: now,
+      created_by: userId,
+      created_at: now,
+      updated_at: now,
+    };
+
+    this.state.recipes.push(newRecipe);
+
+    // Save recipe items
+    const insertedItems: RecipeItem[] = [];
+    data.items.forEach((it, idx) => {
+      const itemId = `rit-${generateId().slice(0, 8)}`;
+      const rItem: RecipeItem = {
+        id: itemId,
+        recipe_id: recipeId,
+        ingredient_id: it.ingredient_id,
+        quantity: Number(it.quantity) || 0,
+        unit: it.unit,
+        sort_order: idx + 1,
+      };
+      this.state.recipe_items!.push(rItem);
+      insertedItems.push(rItem);
+
+      // Optionally update ingredient rate in master if requested
+      if (it.save_rate_to_master && typeof it.rate === 'number' && it.rate > 0) {
+        this.updateIngredientRate(it.ingredient_id, it.rate, it.unit, true, userId);
+      }
+    });
+
+    this.logAudit(
+      'recipes',
+      recipeId,
+      'SAVE_RECIPE',
+      null,
+      newRecipe,
+      `Saved recipe version ${newVersion} for product ${product?.name_en}`,
+      userId
+    );
+    this.saveState();
+
+    return {
+      ...newRecipe,
+      items: insertedItems.map((it) => ({
+        ...it,
+        ingredient: this.getIngredientById(it.ingredient_id),
+      })),
+      product,
+    };
+  }
+
+  public createProductionCostingBatch(
+    data: {
+      productionDate: string;
+      productId: string;
+      recipeId?: string;
+      producedQuantity: number;
+      damagedQuantity: number;
+      totalIngredientCost: number;
+      overheadCosts: AdditionalOverheads;
+      totalBatchCost: number;
+      costPerPiece: number;
+      expectedSales: number;
+      estimatedGrossProfit: number;
+      grossMarginPercentage: number;
+      ingredients: {
+        ingredient_id?: string;
+        ingredient_name: string;
+        quantity_used: number;
+        unit: UnitType;
+        converted_base_quantity: number;
+        rate_snapshot: number;
+        rate_unit: UnitType;
+        calculated_cost: number;
+        is_packaging: boolean;
+      }[];
+      notes?: string;
+    },
+    userId: string = 'usr-owner-001'
+  ): ProductionBatchWithItems {
+    const produced = Math.max(0, Math.round(Number(data.producedQuantity) || 0));
+    const damaged = Math.max(0, Math.round(Number(data.damagedQuantity) || 0));
+    if (damaged > produced) {
+      throw new Error('खराब मात्रा उत्पादित मात्रा से अधिक नहीं हो सकती');
+    }
+    const saleable = produced - damaged;
+    if (saleable <= 0) {
+      throw new Error('बिक्री योग्य मात्रा (Saleable quantity) 0 से अधिक होनी चाहिए');
+    }
+
+    const batchId = `batch-${generateId().slice(0, 8)}`;
+    const dateStr = data.productionDate.replace(/-/g, '');
+    const seq = String(
+      this.state.production_batches.filter((b) => b.production_date === data.productionDate).length + 1
+    ).padStart(3, '0');
+    const batchNumber = `BAT-${dateStr}-${seq}`;
+    const now = new Date().toISOString();
+
+    const product = this.state.products.find((p) => p.id === data.productId);
+    const prodItemId = `pitem-${generateId().slice(0, 8)}`;
+
+    const batchItem = {
+      id: prodItemId,
+      batch_id: batchId,
+      product_id: data.productId,
+      produced_quantity: produced,
+      damaged_quantity: damaged,
+      saleable_quantity: saleable,
+      allocated_ingredient_cost: data.totalIngredientCost,
+      unit_production_cost: data.costPerPiece,
+      notes: data.notes || null,
+      product,
+    };
+
+    const newBatch: ProductionBatchWithItems = {
+      id: batchId,
+      batch_number: batchNumber,
+      production_date: data.productionDate,
+      status: 'completed',
+      total_ingredient_cost: data.totalIngredientCost,
+      recipe_id: data.recipeId || null,
+      overhead_costs: data.overheadCosts,
+      total_batch_cost: data.totalBatchCost,
+      cost_per_saleable_piece: data.costPerPiece,
+      expected_sales: data.expectedSales,
+      estimated_gross_profit: data.estimatedGrossProfit,
+      gross_margin_percentage: data.grossMarginPercentage,
+      notes: data.notes || null,
+      completed_at: now,
+      version_number: 1,
+      is_current_version: true,
+      correction_of_id: null,
+      superseded_by_id: null,
+      correction_reason: null,
+      corrected_by: null,
+      corrected_at: null,
+      created_by: userId,
+      created_at: now,
+      updated_at: now,
+      items: [batchItem],
+    } as any;
+
+    this.state.production_batches.push(newBatch);
+
+    // Store ingredient snapshots
+    if (!this.state.production_batch_ingredients) {
+      this.state.production_batch_ingredients = [];
+    }
+
+    for (const ing of data.ingredients || []) {
+      this.state.production_batch_ingredients.push({
+        id: `pbi-${generateId().slice(0, 8)}`,
+        batch_id: batchId,
+        ingredient_id: ing.ingredient_id || null,
+        ingredient_name: ing.ingredient_name,
+        quantity_used: ing.quantity_used,
+        unit: ing.unit,
+        converted_base_quantity: ing.converted_base_quantity,
+        rate_snapshot: ing.rate_snapshot,
+        rate_unit: ing.rate_unit,
+        calculated_cost: ing.calculated_cost,
+        is_packaging: ing.is_packaging || false,
+        created_at: now,
+      });
+    }
+
+    // Stock Movement: Move saleable pieces to Main Freezer
+    const prodLoc = this.state.stock_locations.find((l) => l.location_type === 'production')!;
+    const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer')!;
+
+    this.state.stock_movements.push({
+      id: `mv-${generateId().slice(0, 8)}`,
+      movement_date: now,
+      product_id: data.productId,
+      source_location_id: prodLoc.id,
+      destination_location_id: freezerLoc.id,
+      quantity: saleable,
+      movement_type: 'production_completed',
+      reference_table: 'production_batches',
+      reference_id: batchId,
+      notes: `Costing batch completed: ${batchNumber} (${saleable} pcs of ${product?.name_en || 'Kulfi'})`,
+      created_by: userId,
+      created_at: now,
+    });
+
+    this.logAudit(
+      'production_batches',
+      batchId,
+      'CREATE_COSTING_BATCH',
+      null,
+      newBatch,
+      `Completed production batch with recipe costing for ${product?.name_en} (${saleable} pcs, Cost: ₹${data.costPerPiece}/pc)`,
+      userId
+    );
+
+    this.saveState();
+    return newBatch;
+  }
+
 
   // --- Seller Stock Issue Workflow ---
   public getSellerIssues(): SellerIssueWithDetails[] {

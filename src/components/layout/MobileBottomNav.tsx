@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import {
   LayoutDashboard,
   Factory,
+  Calculator,
   Truck,
   Receipt,
   Wallet,
@@ -32,6 +33,7 @@ export const MobileBottomNav: React.FC = () => {
   ].filter((item) => item.show);
 
   const moreNavItems = [
+    { to: '/production/cost-calculator', label: t.productionCostCalculatorHi || 'लागत कैलकुलेटर', icon: Calculator, show: isProduction || isOwner },
     { to: '/expenses', label: t.navExpenses, icon: Wallet, show: isOwner },
     { to: '/closing', label: t.navClosing, icon: CalendarCheck, show: isOwner },
     { to: '/stock', label: t.navStock, icon: Boxes, show: isProduction || isOwner },

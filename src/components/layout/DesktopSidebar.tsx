@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import {
   LayoutDashboard,
   Factory,
+  Calculator,
   Truck,
   Receipt,
   Wallet,
@@ -28,6 +29,12 @@ export const DesktopSidebar: React.FC = () => {
       items: [
         { to: '/', label: t.navDashboard, icon: LayoutDashboard, show: true },
         { to: '/production', label: t.navProduction, icon: Factory, show: isProduction },
+        {
+          to: '/production/cost-calculator',
+          label: t.productionCostCalculatorHi || 'लागत कैलकुलेटर',
+          icon: Calculator,
+          show: isProduction || isOwner,
+        },
         { to: '/issues', label: t.navStockIssues, icon: Truck, show: isProduction || isOwner },
         { to: '/settlements', label: t.navSettlements, icon: Receipt, show: true },
         { to: '/stock', label: t.navStock, icon: Boxes, show: isProduction || isOwner },

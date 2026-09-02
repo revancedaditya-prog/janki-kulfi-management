@@ -17,6 +17,10 @@ import {
   CommissionType,
   BackupHistory,
   RevisionRecord,
+  Ingredient,
+  RecipeWithItems,
+  UnitType,
+  AdditionalOverheads,
 } from '@/types';
 
 // Detect if running in mock/local mode
@@ -546,6 +550,301 @@ export const api = {
       details: b,
       financial_effect: { cost: b.total_ingredient_cost },
     }));
+  },
+
+  // --- Recipe & Production Costing Methods ---
+  async getIngredients(): Promise<Ingredient[]> {
+    if (useMockMode) {
+      return mockStore.getIngredients();
+    }
+    const { data, error } = await (supabase as any)
+      .from('ingredients')
+      .select('*')
+      .eq('is_active', true)
+      .order('code', { ascending: true });
+    if (error) {
+      console.warn('Failed to fetch ingredients from Supabase, falling back to mock:', error);
+      return mockStore.getIngredients();
+    }
+    return data || [];
+  },
+
+  async createIngredient(
+    ingredient: Omit<Ingredient, 'id' | 'created_at' | 'updated_at'>,
+    userId: string
+  ): Promise<Ingredient> {
+    if (useMockMode) {
+      return mockStore.addIngredient(ingredient, userId);
+    }
+    const { data, error } = await (supabase as any)
+      .from('ingredients')
+      .insert(ingredient)
+      .select()
+      .single();
+    if (error) throw error;
+
+    // Log initial price
+    await (supabase as any).from('ingredient_prices').insert({
+      ingredient_id: data.id,
+      rate: ingredient.current_rate,
+      unit: ingredient.rate_unit,
+      effective_from: new Date().toISOString(),
+      created_by: userId,
+    });
+
+    return data;
+  },
+
+  async updateIngredientRate(
+    ingredientId: string,
+    newRate: number,
+    unit: UnitType,
+    saveToMaster: boolean = true,
+    userId: string = 'usr-owner-001'
+  ): Promise<Ingredient> {
+    if (useMockMode) {
+      return mockStore.updateIngredientRate(ingredientId, newRate, unit, saveToMaster, userId);
+    }
+    if (saveToMaster) {
+      // Close active price
+      await (supabase as any)
+        .from('ingredient_prices')
+        .update({ effective_to: new Date().toISOString() })
+        .eq('ingredient_id', ingredientId)
+        .is('effective_to', null);
+
+      await (supabase as any).from('ingredient_prices').insert({
+        ingredient_id: ingredientId,
+        rate: newRate,
+        unit,
+        effective_from: new Date().toISOString(),
+        created_by: userId,
+      });
+
+      const { data, error } = await (supabase as any)
+        .from('ingredients')
+        .update({
+          current_rate: newRate,
+          rate_unit: unit,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', ingredientId)
+        .select()
+        .single();
+      if (error) throw error;
+      return data;
+    }
+    const { data } = await (supabase as any).from('ingredients').select('*').eq('id', ingredientId).single();
+    return data;
+  },
+
+  async getRecipes(): Promise<RecipeWithItems[]> {
+    if (useMockMode) {
+      return mockStore.getRecipes();
+    }
+    const { data, error } = await (supabase as any)
+      .from('recipes')
+      .select(`
+        *,
+        product:products(*),
+        items:recipe_items(
+          *,
+          ingredient:ingredients(*)
+        )
+      `)
+      .order('version_number', { ascending: false });
+    if (error) {
+      console.warn('Failed to fetch recipes from Supabase, fallback to mock:', error);
+      return mockStore.getRecipes();
+    }
+    return data || [];
+  },
+
+  async getRecipeForProduct(productId: string): Promise<RecipeWithItems | undefined> {
+    if (useMockMode) {
+      return mockStore.getRecipeForProduct(productId);
+    }
+    const { data, error } = await (supabase as any)
+      .from('recipes')
+      .select(`
+        *,
+        product:products(*),
+        items:recipe_items(
+          *,
+          ingredient:ingredients(*)
+        )
+      `)
+      .eq('product_id', productId)
+      .eq('is_default', true)
+      .order('version_number', { ascending: false })
+      .maybeSingle();
+    if (error) {
+      console.warn('Failed to fetch recipe for product from Supabase, fallback to mock:', error);
+      return mockStore.getRecipeForProduct(productId);
+    }
+    return data || mockStore.getRecipeForProduct(productId);
+  },
+
+  async getRecipeHistory(productId: string): Promise<RecipeWithItems[]> {
+    if (useMockMode) {
+      return mockStore.getRecipeHistory(productId);
+    }
+    const { data, error } = await (supabase as any)
+      .from('recipes')
+      .select(`
+        *,
+        product:products(*),
+        items:recipe_items(
+          *,
+          ingredient:ingredients(*)
+        )
+      `)
+      .eq('product_id', productId)
+      .order('version_number', { ascending: false });
+    if (error) {
+      console.warn('Failed to fetch recipe history, fallback to mock:', error);
+      return mockStore.getRecipeHistory(productId);
+    }
+    return data || [];
+  },
+
+  async saveRecipe(
+    data: {
+      product_id: string;
+      name?: string;
+      standard_output_pieces: number;
+      default_overheads: AdditionalOverheads;
+      notes?: string;
+      items: {
+        ingredient_id: string;
+        quantity: number;
+        unit: UnitType;
+        save_rate_to_master?: boolean;
+        rate?: number;
+      }[];
+    },
+    userId: string
+  ): Promise<RecipeWithItems> {
+    if (useMockMode) {
+      return mockStore.saveRecipe(data, userId);
+    }
+
+    // Get current version number
+    const { data: existing } = await (supabase as any)
+      .from('recipes')
+      .select('version_number')
+      .eq('product_id', data.product_id)
+      .order('version_number', { ascending: false })
+      .limit(1);
+
+    const newVersion = (existing?.[0]?.version_number || 0) + 1;
+
+    // Mark previous defaults as false
+    await (supabase as any)
+      .from('recipes')
+      .update({ is_default: false })
+      .eq('product_id', data.product_id);
+
+    const { data: newRecipe, error: recError } = await (supabase as any)
+      .from('recipes')
+      .insert({
+        product_id: data.product_id,
+        version_number: newVersion,
+        name: data.name || `Standard Recipe v${newVersion}`,
+        standard_output_pieces: data.standard_output_pieces || 100,
+        default_overheads: data.default_overheads,
+        notes: data.notes || null,
+        is_default: true,
+        created_by: userId,
+      })
+      .select()
+      .single();
+    if (recError) throw recError;
+
+    // Insert recipe items
+    const itemsToInsert = data.items.map((it, idx) => ({
+      recipe_id: newRecipe.id,
+      ingredient_id: it.ingredient_id,
+      quantity: it.quantity,
+      unit: it.unit,
+      sort_order: idx + 1,
+    }));
+
+    const { error: itemsError } = await (supabase as any)
+      .from('recipe_items')
+      .insert(itemsToInsert);
+    if (itemsError) throw itemsError;
+
+    // Optionally update rates
+    for (const it of data.items) {
+      if (it.save_rate_to_master && typeof it.rate === 'number' && it.rate > 0) {
+        await this.updateIngredientRate(it.ingredient_id, it.rate, it.unit, true, userId);
+      }
+    }
+
+    return this.getRecipeForProduct(data.product_id) as any;
+  },
+
+  async createProductionCostingBatch(
+    data: {
+      productionDate: string;
+      productId: string;
+      recipeId?: string;
+      producedQuantity: number;
+      damagedQuantity: number;
+      totalIngredientCost: number;
+      overheadCosts: AdditionalOverheads;
+      totalBatchCost: number;
+      costPerPiece: number;
+      expectedSales: number;
+      estimatedGrossProfit: number;
+      grossMarginPercentage: number;
+      ingredients: {
+        ingredient_id?: string;
+        ingredient_name: string;
+        quantity_used: number;
+        unit: UnitType;
+        converted_base_quantity: number;
+        rate_snapshot: number;
+        rate_unit: UnitType;
+        calculated_cost: number;
+        is_packaging: boolean;
+      }[];
+      notes?: string;
+    },
+    userId: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.createProductionCostingBatch(data, userId);
+    }
+
+    const { data: res, error } = await (supabase as any).rpc(
+      'create_production_costing_batch_transaction',
+      {
+        p_date: data.productionDate,
+        p_product_id: data.productId,
+        p_recipe_id: data.recipeId || null,
+        p_produced_qty: data.producedQuantity,
+        p_damaged_qty: data.damagedQuantity,
+        p_total_ingredient_cost: data.totalIngredientCost,
+        p_overhead_costs: data.overheadCosts,
+        p_total_batch_cost: data.totalBatchCost,
+        p_cost_per_piece: data.costPerPiece,
+        p_expected_sales: data.expectedSales,
+        p_gross_profit: data.estimatedGrossProfit,
+        p_gross_margin: data.grossMarginPercentage,
+        p_ingredients: data.ingredients,
+        p_notes: data.notes || '',
+        p_user_id: userId,
+      }
+    );
+
+    if (error) {
+      console.warn('RPC create_production_costing_batch_transaction failed, using fallback:', error);
+      return mockStore.createProductionCostingBatch(data, userId);
+    }
+
+    return res;
   },
 
   // --- Seller Stock Issues ---
