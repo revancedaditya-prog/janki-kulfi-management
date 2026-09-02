@@ -416,13 +416,7 @@ BEGIN
   v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
   v_adj_loc_id := get_or_create_stock_location('damaged', NULL, 'Inventory Adjustment');
 
-  SELECT COALESCE(
-    (SELECT SUM(quantity) FROM stock_movements WHERE product_id = p_product_id AND destination_location_id = v_freezer_loc_id), 0
-  ) - COALESCE(
-    (SELECT SUM(quantity) FROM stock_movements WHERE product_id = p_product_id AND source_location_id = v_freezer_loc_id), 0
-  ) INTO v_current_qty;
-
-  v_current_qty := GREATEST(0, v_current_qty);
+  v_current_qty := get_available_freezer_stock(p_product_id);
   v_target_qty := GREATEST(0, p_new_quantity);
   v_diff := v_target_qty - v_current_qty;
 

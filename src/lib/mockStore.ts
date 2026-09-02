@@ -753,21 +753,52 @@ class MockStore {
     }
   }
 
-  // --- Stock Ledger Balances ---
+  // --- Authoritative Stock Ledger Balances ---
   public getAvailableFreezerStock(productId: string): number {
-    const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer');
-    if (!freezerLoc) return 0;
+    const product = this.state.products.find(
+      (p) => p.id === productId || p.sku === productId || p.name_en === productId || p.name_hi === productId
+    );
+    const validProductIds = new Set<string>([productId]);
+    if (product) {
+      validProductIds.add(product.id);
+      validProductIds.add(product.sku);
+      validProductIds.add(product.name_en);
+      validProductIds.add(product.name_hi);
+    }
+
+    const freezerLocIds = new Set<string>(
+      this.state.stock_locations
+        .filter((l) => l.location_type === 'main_freezer')
+        .map((l) => l.id)
+    );
+    freezerLocIds.add('loc-freezer');
+    freezerLocIds.add('loc-freezer-01');
 
     let incoming = 0;
     let outgoing = 0;
 
     for (const m of this.state.stock_movements) {
-      if (m.product_id === productId) {
-        if (m.destination_location_id === freezerLoc.id) incoming += m.quantity;
-        if (m.source_location_id === freezerLoc.id) outgoing += m.quantity;
+      if (validProductIds.has(m.product_id)) {
+        const isDestFreezer = Boolean(m.destination_location_id && freezerLocIds.has(m.destination_location_id));
+        const isSrcFreezer = Boolean(m.source_location_id && freezerLocIds.has(m.source_location_id));
+        const qty = Number(m.quantity) || 0;
+
+        if (isDestFreezer && !isSrcFreezer) {
+          incoming += qty;
+        } else if (isSrcFreezer && !isDestFreezer) {
+          outgoing += qty;
+        }
       }
     }
     return Math.max(0, incoming - outgoing);
+  }
+
+  public getFreezerBalances(): Record<string, number> {
+    const balances: Record<string, number> = {};
+    for (const p of this.state.products) {
+      balances[p.id] = this.getAvailableFreezerStock(p.id);
+    }
+    return balances;
   }
 
   public getSellerHeldStock(sellerId: string, productId?: string): number {
