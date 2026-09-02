@@ -255,7 +255,6 @@ export const ProductionCostCalculatorPage: React.FC = () => {
     setIngredientRows((prev) => {
       const copy = [...prev];
       copy[index].rate = Math.max(0, rateVal);
-      copy[index].save_rate_to_master = true;
       copy[index].calculated_cost = calculateIngredientRowCost(
         copy[index].quantity,
         copy[index].unit,
@@ -270,7 +269,6 @@ export const ProductionCostCalculatorPage: React.FC = () => {
     setIngredientRows((prev) => {
       const copy = [...prev];
       copy[index].rate_unit = rateUnit;
-      copy[index].save_rate_to_master = true;
       copy[index].calculated_cost = calculateIngredientRowCost(
         copy[index].quantity,
         copy[index].unit,

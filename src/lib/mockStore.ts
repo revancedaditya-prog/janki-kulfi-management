@@ -1236,6 +1236,114 @@ class MockStore {
     return { success: true, message: 'Production batch deleted successfully' };
   }
 
+  public adjustFreezerStock(
+    productId: string,
+    newQuantity: number,
+    reason: string = 'Manual Adjustment',
+    userId: string = 'usr-owner-001'
+  ): { success: boolean; previousQuantity: number; newQuantity: number; difference: number; message: string } {
+    const product = this.state.products.find((p) => p.id === productId);
+    if (!product) throw new Error('Product not found');
+
+    const targetQty = Math.max(0, Math.round(Number(newQuantity) || 0));
+    const currentQty = this.getAvailableFreezerStock(productId);
+    const difference = targetQty - currentQty;
+
+    if (difference === 0) {
+      return {
+        success: true,
+        previousQuantity: currentQty,
+        newQuantity: targetQty,
+        difference: 0,
+        message: 'No change in freezer stock quantity',
+      };
+    }
+
+    const now = new Date().toISOString();
+    let freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer');
+    if (!freezerLoc) {
+      freezerLoc = {
+        id: 'loc-freezer-01',
+        name: 'Main Cold Storage Freezer',
+        location_type: 'main_freezer',
+        seller_id: null,
+        cart_id: null,
+        is_active: true,
+      };
+      this.state.stock_locations.push(freezerLoc);
+    }
+
+    let adjLoc = this.state.stock_locations.find((l) => l.location_type === 'damaged' || l.location_type === 'production');
+    if (!adjLoc) {
+      adjLoc = {
+        id: 'loc-adj-01',
+        name: 'Inventory Adjustment Floor',
+        location_type: 'production',
+        seller_id: null,
+        cart_id: null,
+        is_active: true,
+      };
+      this.state.stock_locations.push(adjLoc);
+    }
+
+    const safeFreezerLoc = freezerLoc;
+    const safeAdjLoc = adjLoc;
+
+    if (difference > 0) {
+      // Stock increase: source = adjLoc, destination = freezerLoc
+      this.state.stock_movements.push({
+        id: `mv-${generateId().slice(0, 8)}`,
+        movement_date: now,
+        product_id: productId,
+        source_location_id: safeAdjLoc.id,
+        destination_location_id: safeFreezerLoc.id,
+        quantity: difference,
+        movement_type: 'manual_adjustment' as any,
+        reference_table: 'stock_locations',
+        reference_id: safeFreezerLoc.id,
+        notes: `Freezer stock adjusted (+${difference} pcs): ${currentQty} -> ${targetQty}. Reason: ${reason}`,
+        created_by: userId,
+        created_at: now,
+      });
+    } else {
+      // Stock decrease: source = freezerLoc, destination = adjLoc
+      const reduceQty = Math.abs(difference);
+      this.state.stock_movements.push({
+        id: `mv-${generateId().slice(0, 8)}`,
+        movement_date: now,
+        product_id: productId,
+        source_location_id: safeFreezerLoc.id,
+        destination_location_id: safeAdjLoc.id,
+        quantity: reduceQty,
+        movement_type: 'manual_adjustment' as any,
+        reference_table: 'stock_locations',
+        reference_id: safeFreezerLoc.id,
+        notes: `Freezer stock adjusted (-${reduceQty} pcs): ${currentQty} -> ${targetQty}. Reason: ${reason}`,
+        created_by: userId,
+        created_at: now,
+      });
+    }
+
+    this.logAudit(
+      'stock_locations',
+      safeFreezerLoc.id,
+      'FREEZER_STOCK_ADJUSTMENT',
+      { product_id: productId, product_name: product.name_en, previous_quantity: currentQty },
+      { product_id: productId, product_name: product.name_en, new_quantity: targetQty, difference },
+      reason,
+      userId
+    );
+    this.saveState();
+
+    return {
+      success: true,
+      previousQuantity: currentQty,
+      newQuantity: targetQty,
+      difference,
+      message: `Freezer stock successfully updated from ${currentQty} to ${targetQty} pcs`,
+    };
+  }
+
   // --- Recipe & Ingredient Master Workflow ---
   public getIngredients(): Ingredient[] {
     return (this.state.ingredients || []).filter((i) => i.is_active !== false);
@@ -1249,11 +1357,12 @@ class MockStore {
     ingredient: Omit<Ingredient, 'id' | 'created_at' | 'updated_at'>,
     userId: string = 'usr-owner-001'
   ): Ingredient {
-    const id = `ing-custom-${generateId().slice(0, 8)}`;
+    const id = `ing-${generateId().slice(0, 8)}`;
     const now = new Date().toISOString();
+
     const newIng: Ingredient = {
-      ...ingredient,
       id,
+      ...ingredient,
       created_at: now,
       updated_at: now,
     };
@@ -1281,7 +1390,7 @@ class MockStore {
   public updateIngredientRate(
     ingredientId: string,
     newRate: number,
-    unit: UnitType,
+    unit?: UnitType,
     saveToMaster: boolean = true,
     userId: string = 'usr-owner-001'
   ): Ingredient {
@@ -1291,8 +1400,9 @@ class MockStore {
     if (saveToMaster) {
       const now = new Date().toISOString();
       const old = { ...ing };
+      const effectiveRateUnit = unit || ing.rate_unit || ing.base_unit;
       ing.current_rate = newRate;
-      ing.rate_unit = unit;
+      ing.rate_unit = effectiveRateUnit;
       ing.updated_at = now;
 
       // Close previous price record
@@ -1308,41 +1418,53 @@ class MockStore {
         id: `ip-${generateId().slice(0, 8)}`,
         ingredient_id: ingredientId,
         rate: newRate,
-        unit,
+        unit: effectiveRateUnit,
         effective_from: now,
         effective_to: null,
         created_by: userId,
         created_at: now,
       });
 
-      this.logAudit('ingredients', ingredientId, 'UPDATE_RATE', old, ing, `Updated rate for ${ing.name_en} to ₹${newRate}/${unit}`, userId);
+      this.logAudit('ingredients', ingredientId, 'UPDATE_RATE', old, ing, `Updated rate for ${ing.name_en} to ₹${newRate}/${effectiveRateUnit}`, userId);
       this.saveState();
     }
-
     return ing;
+  }
+
+  public getIngredientPriceHistory(ingredientId: string): IngredientPrice[] {
+    return (this.state.ingredient_prices || [])
+      .filter((p) => p.ingredient_id === ingredientId)
+      .sort((a, b) => new Date(b.effective_from).getTime() - new Date(a.effective_from).getTime());
   }
 
   public getRecipes(): RecipeWithItems[] {
     const recipes = this.state.recipes || [];
-    const items = this.state.recipe_items || [];
-    const ingredients = this.state.ingredients || [];
-    const products = this.state.products || [];
-
     return recipes.map((r) => {
-      const rItems = items
+      const items = (this.state.recipe_items || [])
         .filter((it) => it.recipe_id === r.id)
         .map((it) => ({
           ...it,
-          ingredient: ingredients.find((ing) => ing.id === it.ingredient_id),
+          ingredient: this.getIngredientById(it.ingredient_id),
         }));
-      const product = products.find((p) => p.id === r.product_id);
-      return { ...r, items: rItems, product };
+      const product = this.state.products.find((p) => p.id === r.product_id);
+      return {
+        ...r,
+        items,
+        product,
+      };
     });
   }
 
+  public getRecipeByProductId(productId: string): RecipeWithItems | undefined {
+    const recipes = this.getRecipes();
+    return (
+      recipes.find((r) => r.product_id === productId && r.is_default) ||
+      recipes.filter((r) => r.product_id === productId).sort((a, b) => b.version_number - a.version_number)[0]
+    );
+  }
+
   public getRecipeForProduct(productId: string): RecipeWithItems | undefined {
-    const all = this.getRecipes();
-    return all.find((r) => r.product_id === productId && r.is_default);
+    return this.getRecipeByProductId(productId);
   }
 
   public getRecipeHistory(productId: string): RecipeWithItems[] {
@@ -1426,9 +1548,11 @@ class MockStore {
       this.state.recipe_items!.push(rItem);
       insertedItems.push(rItem);
 
-      // Optionally update ingredient rate in master if requested
+      // Optionally update ingredient rate in master if requested, WITHOUT mutating rate_unit
       if (it.save_rate_to_master && typeof it.rate === 'number' && it.rate > 0) {
-        this.updateIngredientRate(it.ingredient_id, it.rate, it.unit, true, userId);
+        const ing = this.getIngredientById(it.ingredient_id);
+        const persistentRateUnit = ing?.rate_unit || ing?.base_unit || 'kg';
+        this.updateIngredientRate(it.ingredient_id, it.rate, persistentRateUnit, true, userId);
       }
     });
 
@@ -2033,31 +2157,52 @@ class MockStore {
     const issue = this.state.seller_issues.find((i) => i.id === issueId);
     if (!issue) throw new Error('Stock issue not found');
 
-    // Check if settlement exists for this issue
+    // Resolve the active issue in the correction chain if this is superseded or has corrections
+    let activeIssue = issue;
+    while (activeIssue.superseded_by_id) {
+      const next = this.state.seller_issues.find((i) => i.id === activeIssue.superseded_by_id);
+      if (!next) break;
+      activeIssue = next;
+    }
+
+    // Collect all issue IDs in this version chain
+    const chainIds = new Set<string>([issue.id, activeIssue.id]);
+    this.state.seller_issues.forEach((si) => {
+      if (
+        si.correction_of_id === issue.id ||
+        si.correction_of_id === activeIssue.id ||
+        si.superseded_by_id === issue.id ||
+        si.superseded_by_id === activeIssue.id
+      ) {
+        chainIds.add(si.id);
+      }
+    });
+
+    // Check if settlement exists for any issue in chain
     const linkedSettlement = this.state.seller_settlements.find(
-      (s) => s.seller_issue_id === issueId && s.status !== 'superseded' && s.status !== 'rejected'
+      (s) => chainIds.has(s.seller_issue_id) && s.status !== 'superseded' && (s.status as any) !== 'rejected' && (s.status as any) !== 'cancelled'
     );
     if (linkedSettlement) {
       throw new Error('इस स्टॉक निकासी को नहीं हटाया जा सकता क्योंकि इसके विरुद्ध हिसाब (Settlement) दर्ज है। पहले संबंधित हिसाब को हटाएं।');
     }
 
-    if (issue.status === 'issued') {
-      const closing = this.state.daily_closings.find((c) => c.business_date === issue.issue_date);
+    if (activeIssue.status === 'issued') {
+      const closing = this.state.daily_closings.find((c) => c.business_date === activeIssue.issue_date);
       if (closing && closing.status === 'closed') {
-        throw new Error(`Business day (${issue.issue_date}) is closed. Reopen the business day before deleting this record.`);
+        throw new Error(`Business day (${activeIssue.issue_date}) is closed. Reopen the business day before deleting this record.`);
       }
 
       const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer')!;
       let sellerLoc = this.state.stock_locations.find(
-        (l) => l.location_type === 'seller' && l.seller_id === issue.seller_id
+        (l) => l.location_type === 'seller' && l.seller_id === activeIssue.seller_id
       );
       if (!sellerLoc) {
         sellerLoc = {
-          id: `loc-seller-${issue.seller_id}`,
+          id: `loc-seller-${activeIssue.seller_id}`,
           location_type: 'seller',
           name: 'Seller Cart Stock',
-          seller_id: issue.seller_id,
-          cart_id: issue.cart_id || null,
+          seller_id: activeIssue.seller_id,
+          cart_id: activeIssue.cart_id || null,
           is_active: true,
         };
         this.state.stock_locations.push(sellerLoc);
@@ -2065,7 +2210,7 @@ class MockStore {
 
       const now = new Date().toISOString();
 
-      for (const it of issue.items) {
+      for (const it of activeIssue.items) {
         if (it.issued_quantity > 0) {
           this.state.stock_movements.push({
             id: `mv-${generateId().slice(0, 8)}`,
@@ -2076,8 +2221,8 @@ class MockStore {
             quantity: it.issued_quantity,
             movement_type: 'issue_reversal',
             reference_table: 'seller_issues',
-            reference_id: issue.id,
-            notes: `Stock reversal for deleted issue ${issue.issue_number}: ${reason}`,
+            reference_id: activeIssue.id,
+            notes: `Stock reversal for deleted issue ${activeIssue.issue_number}: ${reason}`,
             created_by: userId,
             created_at: now,
           });
@@ -2085,9 +2230,12 @@ class MockStore {
       }
     }
 
-    const old = { ...issue };
-    this.state.seller_issues = this.state.seller_issues.filter((i) => i.id !== issueId);
-    this.logAudit('seller_issues', issueId, 'DELETE_ISSUE', old, null, reason, userId);
+    // Clean up all superseded settlements linked to this chain
+    this.state.seller_settlements = this.state.seller_settlements.filter((s) => !chainIds.has(s.seller_issue_id));
+
+    // Remove all versions in the chain
+    this.state.seller_issues = this.state.seller_issues.filter((i) => !chainIds.has(i.id));
+    this.logAudit('seller_issues', activeIssue.id, 'DELETE_ISSUE', activeIssue, null, reason, userId);
     this.saveState();
     return { success: true, message: 'Stock issue deleted successfully' };
   }

@@ -43,6 +43,45 @@ export function setSimulatedProfile(profile: Profile) {
   localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(profile));
 }
 
+async function getOrCreateDefaultStockLocations() {
+  const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type, name, seller_id');
+  let freezerLoc = locs?.find((l: any) => l.location_type === 'main_freezer');
+  let prodLoc = locs?.find((l: any) => l.location_type === 'production');
+  let damagedLoc = locs?.find((l: any) => l.location_type === 'damaged');
+  let compLoc = locs?.find((l: any) => l.location_type === 'complimentary');
+
+  if (!freezerLoc) {
+    const { data: newLoc } = await (supabase as any).from('stock_locations').insert({
+      name: 'Main Cold Storage Freezer',
+      location_type: 'main_freezer',
+    }).select().single();
+    if (newLoc) freezerLoc = newLoc;
+  }
+  if (!prodLoc) {
+    const { data: newLoc } = await (supabase as any).from('stock_locations').insert({
+      name: 'Production Floor',
+      location_type: 'production',
+    }).select().single();
+    if (newLoc) prodLoc = newLoc;
+  }
+  if (!damagedLoc) {
+    const { data: newLoc } = await (supabase as any).from('stock_locations').insert({
+      name: 'Damaged Stock Location',
+      location_type: 'damaged',
+    }).select().single();
+    if (newLoc) damagedLoc = newLoc;
+  }
+  if (!compLoc) {
+    const { data: newLoc } = await (supabase as any).from('stock_locations').insert({
+      name: 'Complimentary Stock Location',
+      location_type: 'complimentary',
+    }).select().single();
+    if (newLoc) compLoc = newLoc;
+  }
+
+  return { freezerLoc, prodLoc, damagedLoc, compLoc };
+}
+
 export const api = {
   // --- Auth & Profiles ---
   async getProfile(): Promise<Profile | null> {
@@ -102,20 +141,58 @@ export const api = {
 
     if (error) throw error;
 
-    const { data: stockData } = await (supabase as any).from('v_freezer_stock').select('*');
+    // Fetch stock from v_freezer_stock or fallback to stock_movements
+    let stockData: any[] = [];
+    try {
+      const { data, error: vErr } = await (supabase as any).from('v_freezer_stock').select('*');
+      if (!vErr && data && data.length > 0) {
+        stockData = data;
+      }
+    } catch {
+      // Ignore and fallback to direct movements
+    }
+
+    // Direct movement calculation map
+    const movementStockMap = new Map<string, number>();
+    if (stockData.length === 0) {
+      try {
+        const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type');
+        const freezerLocId = locs?.find((l: any) => l.location_type === 'main_freezer')?.id;
+        if (freezerLocId) {
+          const { data: movements } = await (supabase as any)
+            .from('stock_movements')
+            .select('product_id, quantity, source_location_id, destination_location_id');
+
+          if (movements) {
+            for (const m of movements) {
+              const current = movementStockMap.get(m.product_id) || 0;
+              if (m.destination_location_id === freezerLocId) {
+                movementStockMap.set(m.product_id, current + (Number(m.quantity) || 0));
+              } else if (m.source_location_id === freezerLocId) {
+                movementStockMap.set(m.product_id, current - (Number(m.quantity) || 0));
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to calculate stock from movements:', err);
+      }
+    }
 
     return (products || []).map((p: any) => {
       const activePrice = p.product_prices
         ?.filter((pr: any) => !pr.effective_to || new Date(pr.effective_to) > new Date())
         ?.sort((a: any, b: any) => new Date(b.effective_from).getTime() - new Date(a.effective_from).getTime())[0];
-      const stock = stockData?.find((s: any) => s.product_id === p.id);
+
+      const stock = stockData.find((s: any) => s.product_id === p.id);
+      const calculatedQty = stock ? stock.available_quantity : (movementStockMap.get(p.id) || 0);
 
       return {
         ...p,
         current_price: activePrice?.selling_price || 0,
         commission_type: (activePrice?.commission_type as CommissionType) || 'fixed',
         commission_value: activePrice?.commission_value || 0,
-        available_quantity: stock?.available_quantity || 0,
+        available_quantity: Math.max(0, calculatedQty || 0),
       };
     });
   },
@@ -400,7 +477,7 @@ export const api = {
 
     if (itemsErr) throw itemsErr;
 
-    // Call standard complete_production_batch RPC
+    // Call standard complete_production_batch RPC or fallback
     try {
       const { data: completedRes, error: compErr } = await (supabase as any).rpc('complete_production_batch', {
         p_batch_id: batch.id,
@@ -409,7 +486,7 @@ export const api = {
       if (compErr) throw compErr;
       return completedRes || { success: true, batch_id: batch.id, batch_number: batchNumber };
     } catch {
-      return { success: true, batch_id: batch.id, batch_number: batchNumber };
+      return this.completeProductionBatch(batch.id, userId);
     }
   },
 
@@ -441,6 +518,10 @@ export const api = {
       return mockStore.completeProductionBatch(batchId, userId);
     }
 
+    if (batch.status === 'completed') {
+      return { success: true, batch_id: batchId, message: 'Batch is already completed' };
+    }
+
     await (supabase as any)
       .from('production_batches')
       .update({
@@ -452,9 +533,7 @@ export const api = {
 
     // Stock movements (Production -> Main Freezer)
     if (batch.items && batch.items.length > 0) {
-      const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type');
-      const freezerLoc = locs?.find((l: any) => l.location_type === 'main_freezer');
-      const prodLoc = locs?.find((l: any) => l.location_type === 'production');
+      const { freezerLoc, prodLoc } = await getOrCreateDefaultStockLocations();
 
       if (freezerLoc && prodLoc) {
         const now = new Date().toISOString();
@@ -811,7 +890,7 @@ export const api = {
   async updateIngredientRate(
     ingredientId: string,
     newRate: number,
-    unit: UnitType,
+    unit?: UnitType,
     saveToMaster: boolean = true,
     userId: string = 'usr-owner-001'
   ): Promise<Ingredient> {
@@ -820,6 +899,15 @@ export const api = {
     }
     try {
       if (saveToMaster) {
+        // Fetch existing ingredient to preserve rate_unit if unit is not passed
+        const { data: existingIng } = await (supabase as any)
+          .from('ingredients')
+          .select('rate_unit, base_unit')
+          .eq('id', ingredientId)
+          .maybeSingle();
+
+        const effectiveRateUnit = unit || existingIng?.rate_unit || existingIng?.base_unit || 'kg';
+
         // Close active price
         await (supabase as any)
           .from('ingredient_prices')
@@ -830,7 +918,7 @@ export const api = {
         await (supabase as any).from('ingredient_prices').insert({
           ingredient_id: ingredientId,
           rate: newRate,
-          unit,
+          unit: effectiveRateUnit,
           effective_from: new Date().toISOString(),
           created_by: userId,
         });
@@ -839,14 +927,14 @@ export const api = {
           .from('ingredients')
           .update({
             current_rate: newRate,
-            rate_unit: unit,
+            rate_unit: effectiveRateUnit,
             updated_at: new Date().toISOString(),
           })
           .eq('id', ingredientId)
           .select()
           .single();
         if (error) {
-          return mockStore.updateIngredientRate(ingredientId, newRate, unit, saveToMaster, userId);
+          return mockStore.updateIngredientRate(ingredientId, newRate, effectiveRateUnit, saveToMaster, userId);
         }
         return data;
       }
@@ -1012,10 +1100,10 @@ export const api = {
         return mockStore.saveRecipe(data, userId);
       }
 
-      // Optionally update rates
+      // Optionally update rates WITHOUT modifying rate_unit
       for (const it of data.items) {
         if (it.save_rate_to_master && typeof it.rate === 'number' && it.rate > 0) {
-          await this.updateIngredientRate(it.ingredient_id, it.rate, it.unit, true, userId);
+          await this.updateIngredientRate(it.ingredient_id, it.rate, undefined, true, userId);
         }
       }
 
@@ -1082,16 +1170,205 @@ export const api = {
         }
       );
 
-      if (error) {
-        console.warn('RPC create_production_costing_batch_transaction failed, using fallback:', error);
-        return mockStore.createProductionCostingBatch(data, userId);
+      if (!error && res) {
+        return res;
       }
-
-      return res;
+      console.warn('RPC create_production_costing_batch_transaction failed or not present, using direct Supabase creation:', error);
     } catch (err) {
-      console.warn('createProductionCostingBatch error, using fallback:', err);
-      return mockStore.createProductionCostingBatch(data, userId);
+      console.warn('createProductionCostingBatch RPC error, using direct Supabase creation:', err);
     }
+
+    // Direct Supabase implementation
+    const produced = Math.max(0, Math.round(Number(data.producedQuantity) || 0));
+    const damaged = Math.max(0, Math.round(Number(data.damagedQuantity) || 0));
+    const saleable = produced - damaged;
+    const now = new Date().toISOString();
+    const batchNumber = `BAT-${data.productionDate.replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const { data: batch, error: bErr } = await (supabase as any)
+      .from('production_batches')
+      .insert({
+        batch_number: batchNumber,
+        production_date: data.productionDate,
+        status: 'completed',
+        total_ingredient_cost: data.totalIngredientCost,
+        recipe_id: data.recipeId || null,
+        overhead_costs: data.overheadCosts,
+        total_batch_cost: data.totalBatchCost,
+        cost_per_saleable_piece: data.costPerPiece,
+        expected_sales: data.expectedSales,
+        estimated_gross_profit: data.estimatedGrossProfit,
+        gross_margin_percentage: data.grossMarginPercentage,
+        notes: data.notes || null,
+        completed_at: now,
+        created_by: userId,
+      })
+      .select()
+      .single();
+
+    if (bErr) throw bErr;
+
+    // Insert production item
+    await (supabase as any).from('production_items').insert({
+      batch_id: batch.id,
+      product_id: data.productId,
+      produced_quantity: produced,
+      damaged_quantity: damaged,
+      saleable_quantity: saleable,
+      allocated_ingredient_cost: data.totalIngredientCost,
+      unit_production_cost: data.costPerPiece,
+      notes: data.notes || null,
+    });
+
+    // Insert ingredients snapshots
+    if (data.ingredients && data.ingredients.length > 0) {
+      const ingItems = data.ingredients.map((ing) => ({
+        batch_id: batch.id,
+        ingredient_id: ing.ingredient_id || null,
+        ingredient_name: ing.ingredient_name,
+        quantity_used: ing.quantity_used,
+        unit: ing.unit,
+        converted_base_quantity: ing.converted_base_quantity,
+        rate_snapshot: ing.rate_snapshot,
+        rate_unit: ing.rate_unit,
+        calculated_cost: ing.calculated_cost,
+        is_packaging: ing.is_packaging || false,
+      }));
+      await (supabase as any).from('production_batch_ingredients').insert(ingItems);
+    }
+
+    // Insert stock movements (production -> main_freezer)
+    const { freezerLoc, prodLoc } = await getOrCreateDefaultStockLocations();
+    if (freezerLoc && prodLoc && saleable > 0) {
+      await (supabase as any).from('stock_movements').insert({
+        movement_date: now,
+        product_id: data.productId,
+        source_location_id: prodLoc.id,
+        destination_location_id: freezerLoc.id,
+        quantity: saleable,
+        movement_type: 'production_completed',
+        reference_table: 'production_batches',
+        reference_id: batch.id,
+        notes: `Costing batch completed: ${batchNumber} (${saleable} pcs)`,
+        created_by: userId,
+      });
+    }
+
+    return batch;
+  },
+
+  async adjustFreezerStock(
+    productId: string,
+    newQuantity: number,
+    reason: string = 'Manual Adjustment',
+    userId: string = 'usr-owner-001'
+  ): Promise<{ success: boolean; previousQuantity: number; newQuantity: number; difference: number; message: string }> {
+    if (useMockMode) {
+      return mockStore.adjustFreezerStock(productId, newQuantity, reason, userId);
+    }
+
+    try {
+      const { data, error } = await (supabase as any).rpc('adjust_freezer_stock_transaction', {
+        p_product_id: productId,
+        p_new_quantity: newQuantity,
+        p_reason: reason,
+        p_user_id: userId,
+      });
+      if (!error && data) {
+        return data;
+      }
+      console.warn('RPC adjust_freezer_stock_transaction failed or not installed, using direct Supabase adjustment:', error);
+    } catch (err) {
+      console.warn('adjustFreezerStock RPC error, using direct Supabase adjustment:', err);
+    }
+
+    // Direct Supabase implementation
+    const { freezerLoc, prodLoc, damagedLoc } = await getOrCreateDefaultStockLocations();
+    if (!freezerLoc) throw new Error('Main Freezer location not found');
+
+    // Calculate current available freezer stock
+    const { data: movements } = await (supabase as any)
+      .from('stock_movements')
+      .select('product_id, quantity, source_location_id, destination_location_id')
+      .eq('product_id', productId);
+
+    let currentQty = 0;
+    if (movements) {
+      for (const m of movements) {
+        if (m.destination_location_id === freezerLoc.id) {
+          currentQty += Number(m.quantity) || 0;
+        } else if (m.source_location_id === freezerLoc.id) {
+          currentQty -= Number(m.quantity) || 0;
+        }
+      }
+    }
+    currentQty = Math.max(0, currentQty);
+    const targetQty = Math.max(0, Math.round(Number(newQuantity) || 0));
+    const difference = targetQty - currentQty;
+
+    if (difference === 0) {
+      return {
+        success: true,
+        previousQuantity: currentQty,
+        newQuantity: targetQty,
+        difference: 0,
+        message: 'No change in freezer stock quantity',
+      };
+    }
+
+    const now = new Date().toISOString();
+    const adjLoc = damagedLoc || prodLoc || freezerLoc;
+
+    if (difference > 0) {
+      // Stock increase
+      await (supabase as any).from('stock_movements').insert({
+        movement_date: now,
+        product_id: productId,
+        source_location_id: adjLoc.id,
+        destination_location_id: freezerLoc.id,
+        quantity: difference,
+        movement_type: 'manual_adjustment',
+        reference_table: 'stock_locations',
+        reference_id: freezerLoc.id,
+        notes: `Freezer stock adjusted (+${difference} pcs): ${currentQty} -> ${targetQty}. Reason: ${reason}`,
+        created_by: userId,
+      });
+    } else {
+      // Stock decrease
+      const reduceQty = Math.abs(difference);
+      await (supabase as any).from('stock_movements').insert({
+        movement_date: now,
+        product_id: productId,
+        source_location_id: freezerLoc.id,
+        destination_location_id: adjLoc.id,
+        quantity: reduceQty,
+        movement_type: 'manual_adjustment',
+        reference_table: 'stock_locations',
+        reference_id: freezerLoc.id,
+        notes: `Freezer stock adjusted (-${reduceQty} pcs): ${currentQty} -> ${targetQty}. Reason: ${reason}`,
+        created_by: userId,
+      });
+    }
+
+    // Insert audit log
+    await (supabase as any).from('audit_logs').insert({
+      table_name: 'stock_locations',
+      record_id: freezerLoc.id,
+      action: 'FREEZER_STOCK_ADJUSTMENT',
+      old_values: { product_id: productId, previous_quantity: currentQty },
+      new_values: { product_id: productId, new_quantity: targetQty, difference },
+      change_reason: reason,
+      user_id: userId,
+      created_at: now,
+    });
+
+    return {
+      success: true,
+      previousQuantity: currentQty,
+      newQuantity: targetQty,
+      difference,
+      message: `Freezer stock updated from ${currentQty} to ${targetQty} pcs`,
+    };
   },
 
   // --- Seller Stock Issues ---

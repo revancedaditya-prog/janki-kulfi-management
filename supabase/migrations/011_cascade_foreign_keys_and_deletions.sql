@@ -392,3 +392,127 @@ BEGIN
   RETURN jsonb_build_object('success', true, 'message', 'Settlement deleted successfully');
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 7. Adjust Freezer Stock Stored Procedure
+CREATE OR REPLACE FUNCTION adjust_freezer_stock_transaction(
+  p_product_id UUID,
+  p_new_quantity INTEGER,
+  p_reason TEXT DEFAULT 'Manual Adjustment',
+  p_user_id UUID DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_freezer_loc_id UUID;
+  v_adj_loc_id UUID;
+  v_current_qty INTEGER;
+  v_target_qty INTEGER;
+  v_diff INTEGER;
+  v_product RECORD;
+BEGIN
+  SELECT * INTO v_product FROM products WHERE id = p_product_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Product not found.';
+  END IF;
+
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
+  v_adj_loc_id := get_or_create_stock_location('damaged', NULL, 'Inventory Adjustment');
+
+  SELECT COALESCE(
+    (SELECT SUM(quantity) FROM stock_movements WHERE product_id = p_product_id AND destination_location_id = v_freezer_loc_id), 0
+  ) - COALESCE(
+    (SELECT SUM(quantity) FROM stock_movements WHERE product_id = p_product_id AND source_location_id = v_freezer_loc_id), 0
+  ) INTO v_current_qty;
+
+  v_current_qty := GREATEST(0, v_current_qty);
+  v_target_qty := GREATEST(0, p_new_quantity);
+  v_diff := v_target_qty - v_current_qty;
+
+  IF v_diff = 0 THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'previous_quantity', v_current_qty,
+      'new_quantity', v_target_qty,
+      'difference', 0,
+      'message', 'No change in stock'
+    );
+  END IF;
+
+  IF v_diff > 0 THEN
+    INSERT INTO stock_movements (
+      movement_date,
+      product_id,
+      source_location_id,
+      destination_location_id,
+      quantity,
+      movement_type,
+      reference_table,
+      reference_id,
+      notes,
+      created_by
+    ) VALUES (
+      NOW(),
+      p_product_id,
+      v_adj_loc_id,
+      v_freezer_loc_id,
+      v_diff,
+      'manual_adjustment',
+      'stock_locations',
+      v_freezer_loc_id,
+      'Freezer stock adjusted (+' || v_diff || ' pcs): ' || v_current_qty || ' -> ' || v_target_qty || '. Reason: ' || COALESCE(p_reason, 'Manual Adjustment'),
+      p_user_id
+    );
+  ELSE
+    INSERT INTO stock_movements (
+      movement_date,
+      product_id,
+      source_location_id,
+      destination_location_id,
+      quantity,
+      movement_type,
+      reference_table,
+      reference_id,
+      notes,
+      created_by
+    ) VALUES (
+      NOW(),
+      p_product_id,
+      v_freezer_loc_id,
+      v_adj_loc_id,
+      ABS(v_diff),
+      'manual_adjustment',
+      'stock_locations',
+      v_freezer_loc_id,
+      'Freezer stock adjusted (-' || ABS(v_diff) || ' pcs): ' || v_current_qty || ' -> ' || v_target_qty || '. Reason: ' || COALESCE(p_reason, 'Manual Adjustment'),
+      p_user_id
+    );
+  END IF;
+
+  INSERT INTO audit_logs (
+    table_name,
+    record_id,
+    action,
+    old_values,
+    new_values,
+    change_reason,
+    user_id,
+    created_at
+  ) VALUES (
+    'stock_locations',
+    v_freezer_loc_id,
+    'FREEZER_STOCK_ADJUSTMENT',
+    jsonb_build_object('product_id', p_product_id, 'previous_quantity', v_current_qty),
+    jsonb_build_object('product_id', p_product_id, 'new_quantity', v_target_qty, 'difference', v_diff),
+    p_reason,
+    p_user_id,
+    NOW()
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'previous_quantity', v_current_qty,
+    'new_quantity', v_target_qty,
+    'difference', v_diff,
+    'message', 'Freezer stock adjusted successfully'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+

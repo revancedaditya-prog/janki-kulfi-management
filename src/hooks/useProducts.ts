@@ -77,3 +77,29 @@ export function useUpdateProductPrice() {
     },
   });
 }
+
+export function useAdjustFreezerStock() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({
+      productId,
+      newQuantity,
+      reason,
+    }: {
+      productId: string;
+      newQuantity: number;
+      reason: string;
+    }) => {
+      return api.adjustFreezerStock(productId, newQuantity, reason, user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+      queryClient.invalidateQueries({ queryKey: ['freezer_stock'] });
+    },
+  });
+}
+
