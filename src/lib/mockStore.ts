@@ -444,6 +444,17 @@ class MockStore {
         }
         if (!parsed.ingredients || parsed.ingredients.length === 0) {
           parsed.ingredients = JSON.parse(JSON.stringify(DEFAULT_STATE.ingredients));
+        } else {
+          // Auto-heal legacy corrupted rate_unit for standard kg/litre ingredients
+          parsed.ingredients.forEach((ing) => {
+            if (
+              (ing.base_unit === 'kg' || ing.base_unit === 'litre') &&
+              (ing.rate_unit === 'g' || ing.rate_unit === 'ml') &&
+              ing.code !== 'ING-SAFFRON'
+            ) {
+              ing.rate_unit = ing.base_unit;
+            }
+          });
         }
         if (!parsed.recipes || parsed.recipes.length === 0) {
           parsed.recipes = JSON.parse(JSON.stringify(DEFAULT_STATE.recipes));

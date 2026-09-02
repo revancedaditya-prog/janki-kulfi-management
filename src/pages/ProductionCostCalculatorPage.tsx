@@ -51,6 +51,7 @@ import {
   Milk,
   PackageCheck,
   ShieldAlert,
+  AlertCircle,
 } from 'lucide-react';
 
 const UNIT_OPTIONS: { value: UnitType; labelEn: string; labelHi: string }[] = [
@@ -174,8 +175,13 @@ export const ProductionCostCalculatorPage: React.FC = () => {
       const qty = recItem ? recItem.quantity : 0;
       const unit = recItem ? recItem.unit : ing.base_unit;
       const rate = Number(ing.current_rate) || 0;
-      const rateUnit = ing.rate_unit || ing.base_unit;
-      const calculated_cost = calculateIngredientRowCost(qty, unit, rate, rateUnit);
+      
+      // If an ingredient is standard kg/litre (e.g. Cardamom, Sugar, Khoya, Cashew) but was stored as 'g'/'ml', default rate_unit to its master base_unit ('kg'/'litre')
+      const isKgBase = (ing.base_unit === 'kg' || ing.base_unit === 'litre') && ing.code !== 'ING-SAFFRON';
+      const effectiveRateUnit: UnitType = isKgBase && (ing.rate_unit === 'g' || ing.rate_unit === 'ml')
+        ? ing.base_unit
+        : (ing.rate_unit || ing.base_unit || 'kg');
+      const calculated_cost = calculateIngredientRowCost(qty, unit, rate, effectiveRateUnit);
 
       return {
         ingredient_id: ing.id,
@@ -186,7 +192,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
         quantity: qty,
         unit,
         rate,
-        rate_unit: rateUnit,
+        rate_unit: effectiveRateUnit,
         calculated_cost,
         save_rate_to_master: false,
       };
@@ -882,7 +888,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
                           >
                             {UNIT_OPTIONS.map((u) => (
                               <option key={u.value} value={u.value}>
-                                per {u.value}
+                                {language === 'hi' ? `प्रति ${u.labelHi}` : `per ${u.labelEn}`}
                               </option>
                             ))}
                           </select>
@@ -896,11 +902,18 @@ export const ProductionCostCalculatorPage: React.FC = () => {
 
                     {/* Right: Calculated Cost & Save Rate Check */}
                     {row.is_selected && (
-                      <div className="flex flex-col md:items-end justify-center min-w-[120px] pt-1 md:pt-0 border-t md:border-t-0 border-cream-100">
+                      <div className="flex flex-col md:items-end justify-center min-w-[140px] pt-1 md:pt-0 border-t md:border-t-0 border-cream-100 text-right">
                         <span className="text-[11px] font-bold text-gray-500">{t.ingredientCost}</span>
                         <span className="font-mono font-extrabold text-base text-maroon-900">
                           {formatCurrency(row.calculated_cost)}
                         </span>
+                        {row.quantity > 0 && row.rate > 0 && row.unit !== row.rate_unit && (
+                          <span className="text-[10px] text-gray-500 font-mono">
+                            {row.unit === 'g' && row.rate_unit === 'kg'
+                              ? `${row.quantity / 1000} kg × ₹${row.rate}`
+                              : `${row.quantity} ${row.unit} @ ₹${row.rate}/${row.rate_unit}`}
+                          </span>
+                        )}
                         {row.save_rate_to_master && (
                           <span className="text-[10px] font-bold text-amber-700 bg-amber-100/70 px-1.5 py-0.5 rounded-md mt-0.5">
                             💾 Save to Master
@@ -909,6 +922,25 @@ export const ProductionCostCalculatorPage: React.FC = () => {
                       </div>
                     )}
                   </div>
+
+                  {/* Warning and Quick-Fix if Rate is high and Rate Unit is erroneously set to 'per g' */}
+                  {row.is_selected && row.rate > 400 && row.rate_unit === 'g' && (row.unit === 'g' || row.unit === 'kg') && (
+                    <div className="mt-2 p-2.5 bg-amber-50 border border-amber-300 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-amber-950">
+                      <div className="flex items-center gap-1.5">
+                        <AlertCircle className="w-4 h-4 text-amber-700 flex-shrink-0" />
+                        <span>
+                          दर <strong>₹{row.rate}/g (प्रति ग्राम)</strong> चयनित है, जिससे 1 किलो की दर ₹{(row.rate * 1000).toLocaleString()} हो जाएगी। क्या यह दर <strong>प्रति किलो (per kg)</strong> है?
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRowRateUnitChange(idx, 'kg')}
+                        className="px-2.5 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded-lg text-xs font-bold shadow-sm whitespace-nowrap self-end sm:self-auto"
+                      >
+                        दर को प्रति किलो (per kg) करें (लागत {formatCurrency(calculateIngredientRowCost(row.quantity, row.unit, row.rate, 'kg'))})
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}

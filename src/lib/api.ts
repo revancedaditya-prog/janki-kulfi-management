@@ -847,7 +847,17 @@ export const api = {
         console.warn('Ingredients table not found or empty in Supabase, using mock fallback:', error);
         return mockStore.getIngredients();
       }
-      return data;
+      return data.map((ing: Ingredient) => {
+        // Auto-heal legacy corrupted rate_unit for standard kg/litre ingredients
+        if (
+          (ing.base_unit === 'kg' || ing.base_unit === 'litre') &&
+          (ing.rate_unit === 'g' || ing.rate_unit === 'ml') &&
+          ing.code !== 'ING-SAFFRON'
+        ) {
+          return { ...ing, rate_unit: ing.base_unit };
+        }
+        return ing;
+      });
     } catch (err) {
       console.warn('Failed to fetch ingredients, fallback to mock:', err);
       return mockStore.getIngredients();
