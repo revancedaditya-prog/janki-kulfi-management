@@ -868,13 +868,34 @@ class MockStore {
   public completeProductionBatch(batchId: string, userId: string): ProductionBatchWithItems {
     const batch = this.state.production_batches.find((b) => b.id === batchId);
     if (!batch) throw new Error('Production batch not found');
-    if (batch.status === 'completed') throw new Error('Batch is already completed');
+    if (batch.status === 'completed') return batch;
     if (batch.status === 'cancelled') throw new Error('Cannot complete a cancelled batch');
 
     const now = new Date().toISOString();
-    const prodLoc = this.state.stock_locations.find((l) => l.location_type === 'production')!;
-    const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer')!;
-    const damagedLoc = this.state.stock_locations.find((l) => l.location_type === 'damaged')!;
+    const prodLoc = this.state.stock_locations.find((l) => l.location_type === 'production') || {
+      id: 'loc-prod-01',
+      name: 'Production Floor',
+      location_type: 'production' as const,
+      seller_id: null,
+      cart_id: null,
+      is_active: true,
+    };
+    const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer') || {
+      id: 'loc-freezer-01',
+      name: 'Main Cold Storage Freezer',
+      location_type: 'main_freezer' as const,
+      seller_id: null,
+      cart_id: null,
+      is_active: true,
+    };
+    const damagedLoc = this.state.stock_locations.find((l) => l.location_type === 'damaged') || {
+      id: 'loc-damaged-01',
+      name: 'Damaged / Wastage',
+      location_type: 'damaged' as const,
+      seller_id: null,
+      cart_id: null,
+      is_active: true,
+    };
 
     // Create stock movements for each item
     for (const it of batch.items) {

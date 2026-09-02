@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { useProducts } from '@/hooks/useProducts';
 import {
   useIngredients,
@@ -7,12 +7,9 @@ import {
   useRecipeForProduct,
   useRecipeHistory,
   useSaveRecipe,
-  useCreateProductionCostingBatch,
 } from '@/hooks/useProductionCosting';
-import { useDailyClosings } from '@/hooks/useDailyClosing';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
-import { useSync } from '@/context/SyncContext';
 import { Card } from '@/components/common/Card';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
@@ -21,7 +18,6 @@ import { Modal } from '@/components/common/Modal';
 import {
   formatCurrency,
   formatDate,
-  getTodayDateString,
 } from '@/lib/formatters';
 import {
   calculateProductionCosting,
@@ -36,22 +32,18 @@ import {
 } from '@/types';
 import {
   Calculator,
-  Factory,
   Sparkles,
   Save,
   CheckCircle2,
-  AlertTriangle,
   RotateCcw,
   Scale,
   History,
   Plus,
   Layers,
-  ChevronDown,
-  ChevronUp,
   Milk,
-  PackageCheck,
-  ShieldAlert,
   AlertCircle,
+  ArrowRight,
+  Factory,
 } from 'lucide-react';
 
 const UNIT_OPTIONS: { value: UnitType; labelEn: string; labelHi: string }[] = [
@@ -65,14 +57,11 @@ const UNIT_OPTIONS: { value: UnitType; labelEn: string; labelHi: string }[] = [
 
 export const ProductionCostCalculatorPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const navigate = useNavigate();
   const { t, language } = useLanguage();
-  const { isOwner, isProduction } = useAuth();
-  const { isOnline, saveDraft } = useSync();
+  const { isOwner } = useAuth();
 
   const { data: products = [] } = useProducts();
   const { data: allIngredients = [] } = useIngredients();
-  const { data: closings = [] } = useDailyClosings();
 
   // Selected Product State
   const defaultProductId = searchParams.get('product') || products[0]?.id || 'prod-sada-01';
@@ -90,15 +79,11 @@ export const ProductionCostCalculatorPage: React.FC = () => {
 
   // Mutations
   const saveRecipeMutation = useSaveRecipe();
-  const createBatchMutation = useCreateProductionCostingBatch();
   const addIngredientMutation = useAddIngredient();
 
-  // Form State
-  const [productionDate, setProductionDate] = useState(getTodayDateString());
-  const [expectedPieces, setExpectedPieces] = useState<number>(100);
-  const [producedQuantity, setProducedQuantity] = useState<number>(100);
-  const [damagedQuantity, setDamagedQuantity] = useState<number>(0);
-  const [notes, setNotes] = useState('');
+  // Recipe Modeling Batch Size
+  const [standardOutputPieces, setStandardOutputPieces] = useState<number>(100);
+  const [recipeNotes, setRecipeNotes] = useState('');
 
   // Overheads State
   const [overheads, setOverheads] = useState<AdditionalOverheads>({
@@ -148,14 +133,14 @@ export const ProductionCostCalculatorPage: React.FC = () => {
       activeRecipe.items.forEach((it) => {
         recipeItemMap.set(it.ingredient_id, { quantity: it.quantity, unit: it.unit });
       });
-      setExpectedPieces(activeRecipe.standard_output_pieces || 100);
-      setProducedQuantity(activeRecipe.standard_output_pieces || 100);
+      setStandardOutputPieces(activeRecipe.standard_output_pieces || 100);
+      setRecipeNotes(activeRecipe.notes || '');
       if (activeRecipe.default_overheads) {
         setOverheads({ ...activeRecipe.default_overheads });
       }
     } else {
-      setExpectedPieces(100);
-      setProducedQuantity(100);
+      setStandardOutputPieces(100);
+      setRecipeNotes('');
       setOverheads({
         electricity: 0,
         generator_fuel: 0,
@@ -199,7 +184,6 @@ export const ProductionCostCalculatorPage: React.FC = () => {
     });
 
     setIngredientRows(rows);
-    setDamagedQuantity(0);
     setFormError(null);
   }, [activeRecipe, allIngredients, selectedProductId]);
 
@@ -207,32 +191,28 @@ export const ProductionCostCalculatorPage: React.FC = () => {
   const handleProductSelect = (productId: string) => {
     setSelectedProductId(productId);
     setSearchParams({ product: productId });
-    setFormError(null);
-    setSuccessMessage(null);
+    setShowScalingDrawer(false);
+    setRequiredQuantity('');
   };
 
-  // Ingredient row updates
-  const handleRowToggle = (index: number) => {
+  // Row change handlers
+  const handleRowCheckbox = (index: number, checked: boolean) => {
     setIngredientRows((prev) => {
       const copy = [...prev];
-      copy[index].is_selected = !copy[index].is_selected;
-      if (copy[index].is_selected && copy[index].quantity === 0) {
-        copy[index].quantity = copy[index].unit === 'piece' ? expectedPieces : 1;
+      copy[index].is_selected = checked;
+      if (!checked) {
+        copy[index].quantity = 0;
+        copy[index].calculated_cost = 0;
       }
-      copy[index].calculated_cost = calculateIngredientRowCost(
-        copy[index].quantity,
-        copy[index].unit,
-        copy[index].rate,
-        copy[index].rate_unit
-      );
       return copy;
     });
   };
 
-  const handleRowQuantityChange = (index: number, val: number) => {
+  const handleRowQuantityChange = (index: number, qty: number) => {
     setIngredientRows((prev) => {
       const copy = [...prev];
-      copy[index].quantity = Math.max(0, val);
+      copy[index].quantity = Math.max(0, qty);
+      copy[index].is_selected = copy[index].quantity > 0 || copy[index].is_selected;
       copy[index].calculated_cost = calculateIngredientRowCost(
         copy[index].quantity,
         copy[index].unit,
@@ -293,32 +273,29 @@ export const ProductionCostCalculatorPage: React.FC = () => {
     }));
   };
 
-  // Live Costing Calculation Breakdown
+  // Live Costing Calculation
   const costingBreakdown = useMemo(() => {
+    if (!activeProduct) return null;
     try {
-      const sellingPrice = activeProduct?.current_price || 0;
       return calculateProductionCosting(
         ingredientRows,
         overheads,
-        producedQuantity,
-        damagedQuantity,
-        sellingPrice
+        standardOutputPieces || 100,
+        0, // No damaged for standard recipe modeling
+        activeProduct.current_price || 0
       );
-    } catch (err: any) {
+    } catch {
       return null;
     }
-  }, [ingredientRows, overheads, producedQuantity, damagedQuantity, activeProduct]);
+  }, [ingredientRows, overheads, standardOutputPieces, activeProduct]);
 
-  // Scaling Calculation
-  const scalingResult = useMemo(() => {
-    if (!activeRecipe || !requiredQuantity || Number(requiredQuantity) <= 0) return null;
+  // Scaled Ingredients calculation
+  const scaledResults = useMemo(() => {
+    if (!requiredQuantity || requiredQuantity <= 0 || !activeRecipe) return null;
     return scaleProductionRecipe(activeRecipe, Number(requiredQuantity));
-  }, [activeRecipe, requiredQuantity]);
+  }, [requiredQuantity, activeRecipe]);
 
-  // Is day closed check
-  const isDayClosed = closings.find((c) => c.business_date === productionDate)?.status === 'closed';
-
-  // Save As Default Recipe Handler
+  // Save Default Recipe (Owner only)
   const handleSaveDefaultRecipe = async () => {
     setFormError(null);
     setSuccessMessage(null);
@@ -334,7 +311,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
         ingredient_id: r.ingredient_id,
         quantity: r.quantity,
         unit: r.unit,
-        save_rate_to_master: r.save_rate_to_master,
+        save_rate_to_master: false, // Do not mutate master ingredient rate unit!
         rate: r.rate,
       }));
 
@@ -347,137 +324,56 @@ export const ProductionCostCalculatorPage: React.FC = () => {
       await saveRecipeMutation.mutateAsync({
         product_id: selectedProductId,
         name: `${activeProduct?.name_hi || activeProduct?.name_en} Standard Recipe`,
-        standard_output_pieces: producedQuantity || 100,
+        standard_output_pieces: standardOutputPieces || 100,
         default_overheads: overheads,
-        notes,
+        notes: recipeNotes,
         items: selectedItems,
       });
 
-      setSuccessMessage('डिफ़ॉल्ट रेसिपी सफलतापूर्वक सुरक्षित हो गई! नया संस्करण सक्रिय है।');
+      setSuccessMessage('मानक रेसिपी सफलतापूर्वक सुरक्षित हो गई! नया संस्करण सक्रिय है।');
       setTimeout(() => setSuccessMessage(null), 5000);
     } catch (err: any) {
       setFormError(err.message || 'रेसिपी सुरक्षित करने में त्रुटि हुई');
     }
   };
 
-  // Complete Production Batch Handler
-  const handleCompleteProduction = async () => {
+  // Reset Form to Default Recipe
+  const handleResetForm = () => {
+    if (activeRecipe) {
+      setStandardOutputPieces(activeRecipe.standard_output_pieces || 100);
+      setRecipeNotes(activeRecipe.notes || '');
+      setOverheads(activeRecipe.default_overheads || {
+        electricity: 0,
+        generator_fuel: 0,
+        gas: 0,
+        direct_labour: 0,
+        water: 0,
+        packaging_extra: 0,
+        transport: 0,
+        other: 0,
+      });
+    }
     setFormError(null);
     setSuccessMessage(null);
-
-    if (isDayClosed) {
-      setFormError(`कार्य दिवस (${productionDate}) बंद है। उत्पादन दर्ज करने से पहले दिन पुनः खोलें।`);
-      return;
-    }
-
-    if (producedQuantity <= 0) {
-      setFormError('उत्पादित पीस की संख्या 0 से अधिक होनी चाहिए।');
-      return;
-    }
-
-    if (damagedQuantity > producedQuantity) {
-      setFormError('खराब मात्रा उत्पादित मात्रा से अधिक नहीं हो सकती।');
-      return;
-    }
-
-    const saleablePieces = producedQuantity - damagedQuantity;
-    if (saleablePieces <= 0) {
-      setFormError('बिक्री योग्य मात्रा (Saleable quantity) कम से कम 1 होनी चाहिए।');
-      return;
-    }
-
-    if (costingBreakdown && costingBreakdown.missing_rate_ingredients.length > 0) {
-      setFormError(
-        `निम्नलिखित सामग्रियों की खरीद दर दर्ज नहीं है: ${costingBreakdown.missing_rate_ingredients.join(', ')}`
-      );
-      return;
-    }
-
-    const selectedIngredients = ingredientRows
-      .filter((r) => r.is_selected && r.quantity > 0)
-      .map((r) => ({
-        ingredient_id: r.ingredient_id,
-        ingredient_name: `${r.name_hi} (${r.name_en})`,
-        quantity_used: r.quantity,
-        unit: r.unit,
-        converted_base_quantity: r.quantity,
-        rate_snapshot: r.rate,
-        rate_unit: r.rate_unit,
-        calculated_cost: r.calculated_cost,
-        is_packaging: r.category === 'packaging',
-      }));
-
-    if (selectedIngredients.length === 0) {
-      setFormError('कम से कम एक सामग्री चुनकर मात्रा दर्ज करें।');
-      return;
-    }
-
-    const batchData = {
-      productionDate,
-      productId: selectedProductId,
-      recipeId: activeRecipe?.id,
-      producedQuantity,
-      damagedQuantity,
-      totalIngredientCost: costingBreakdown?.total_ingredient_cost || 0,
-      overheadCosts: overheads,
-      totalBatchCost: costingBreakdown?.total_batch_cost || 0,
-      costPerPiece: costingBreakdown?.cost_per_saleable_kulfi || 0,
-      expectedSales: costingBreakdown?.expected_total_sales || 0,
-      estimatedGrossProfit: costingBreakdown?.estimated_total_gross_profit || 0,
-      grossMarginPercentage: costingBreakdown?.gross_margin_percentage || 0,
-      ingredients: selectedIngredients,
-      notes,
-    };
-
-    try {
-      if (!isOnline) {
-        await saveDraft('production_batch', batchData);
-        alert('ऑफ़लाइन ड्राफ्ट सुरक्षित हो गया! इंटरनेट कनेक्ट होने पर यह सिंक हो जाएगा।');
-        navigate('/production');
-      } else {
-        await createBatchMutation.mutateAsync(batchData);
-        alert(
-          `उत्पादन बैच सफलतापूर्वक पूर्ण हुआ!\n${saleablePieces} पीस मुख्य फ्रीजर में जोड़ दिए गए हैं।\nप्रति कुल्फी लागत: ₹${costingBreakdown?.cost_per_saleable_kulfi}`
-        );
-        navigate('/production');
-      }
-    } catch (err: any) {
-      setFormError(err.message || 'उत्पादन बैच पूर्ण करने में त्रुटि हुई');
-    }
   };
 
-  // Reset Form
-  const handleResetForm = () => {
-    if (confirm('क्या आप फॉर्म को रीसेट करके मूल रेसिपी लोड करना चाहते हैं?')) {
-      if (activeRecipe) {
-        setSelectedProductId(activeRecipe.product_id);
-      }
-      setDamagedQuantity(0);
-      setNotes('');
-      setRequiredQuantity('');
-      setFormError(null);
-      setSuccessMessage(null);
-    }
-  };
-
-  // Add Custom Ingredient Modal Submit
-  const handleAddCustomIngredient = async (e: React.FormEvent) => {
+  // Add Custom Ingredient Modal submit
+  const handleAddCustomIngredientSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customIngNameEn.trim() || !customIngNameHi.trim()) {
-      alert('कृपया अंग्रेजी व हिंदी दोनों नाम दर्ज करें।');
+    if (!customIngNameEn.trim() && !customIngNameHi.trim()) {
+      setFormError('सामग्री का नाम आवश्यक है।');
       return;
     }
 
     try {
-      const rateNum = parseFloat(customIngRate) || 0;
-      await addIngredientMutation.mutateAsync({
-        code: `ING-${customIngNameEn.toUpperCase().replace(/\s+/g, '_').slice(0, 10)}`,
-        name_en: customIngNameEn.trim(),
-        name_hi: customIngNameHi.trim(),
+      const newIng = await addIngredientMutation.mutateAsync({
+        code: `ING-CUSTOM-${Date.now().toString().slice(-4)}`,
+        name_en: customIngNameEn || customIngNameHi,
+        name_hi: customIngNameHi || customIngNameEn,
         category: customIngCategory,
         base_unit: customIngUnit,
-        current_rate: rateNum,
         rate_unit: customIngUnit,
+        current_rate: parseFloat(customIngRate) || 0,
         is_active: true,
       });
 
@@ -485,292 +381,221 @@ export const ProductionCostCalculatorPage: React.FC = () => {
       setCustomIngNameEn('');
       setCustomIngNameHi('');
       setCustomIngRate('0');
+      setSuccessMessage(`नई सामग्री "${newIng.name_hi}" सफलतापूर्वक जोड़ी गई!`);
+      setTimeout(() => setSuccessMessage(null), 4000);
     } catch (err: any) {
-      alert(err.message || 'सामग्री जोड़ने में त्रुटि हुई');
+      setFormError(err.message || 'सामग्री जोड़ने में त्रुटि हुई');
     }
   };
 
-  // Seller Role Block
-  if (!isProduction && !isOwner) {
-    return (
-      <Card className="py-12 text-center text-rose-700 max-w-lg mx-auto my-10">
-        <ShieldAlert className="w-16 h-16 mx-auto mb-3 text-rose-600" />
-        <h2 className="text-xl font-bold">अनुमति नहीं है (Access Denied)</h2>
-        <p className="text-sm text-gray-600 mt-2">
-          उत्पादन लागत कैलकुलेटर केवल कारखाने के प्रभारी और मालिक के लिए उपलब्ध है।
-        </p>
-      </Card>
-    );
-  }
-
   return (
-    <div className="space-y-6 pb-24 max-w-5xl mx-auto">
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="space-y-5">
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 flex items-center gap-2.5">
-            <Calculator className="w-8 h-8 text-maroon-800 flex-shrink-0" />
-            <span>{language === 'hi' ? t.productionCostCalculatorHi : t.productionCostCalculator}</span>
+          <h1 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight flex items-center gap-2">
+            <Calculator className="w-6 h-6 text-maroon-800" />
+            <span>{t.productionCostCalculator}</span>
           </h1>
-          <p className="text-sm text-gray-600 mt-1">
-            {language === 'hi' ? t.productCostingTagline : t.productCostingTagline}
+          <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
+            मानक कुल्फी रेसिपी लागत, सामग्री अनुपात और ग्रॉस मार्जिन (Gross Margin) मॉडलिंग टूल
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            leftIcon={<History className="w-4 h-4" />}
-            onClick={() => setIsHistoryModalOpen(true)}
-          >
-            {t.recipeHistory} ({recipeHistory.length})
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            leftIcon={<Factory className="w-4 h-4" />}
-            onClick={() => navigate('/production')}
-          >
-            {t.productionBatches}
-          </Button>
+          {activeRecipe && (
+            <Button
+              variant="outline"
+              size="sm"
+              leftIcon={<History className="w-4 h-4 text-gray-600" />}
+              onClick={() => setIsHistoryModalOpen(true)}
+            >
+              {t.recipeHistory}
+            </Button>
+          )}
+
+          <Link to="/production?new=true">
+            <Button
+              variant="primary"
+              size="sm"
+              leftIcon={<Factory className="w-4 h-4" />}
+            >
+              दैनिक उत्पादन दर्ज करें (New Batch)
+            </Button>
+          </Link>
         </div>
       </div>
 
-      {/* Success & Error Banners */}
-      {successMessage && (
-        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-sm font-semibold flex items-center gap-2 shadow-sm animate-fadeIn">
-          <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-          <span>{successMessage}</span>
+      {/* Quick Navigation Alert Banner */}
+      <div className="p-3.5 bg-gradient-to-r from-cream-100 via-amber-50 to-cream-100 border border-amber-300/80 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+        <div className="flex items-center gap-2.5 text-xs text-maroon-950">
+          <Factory className="w-5 h-5 text-maroon-800 flex-shrink-0" />
+          <span>
+            <strong>दैनिक उत्पादन प्रविष्टि (Daily Production):</strong> कारखाने में तैयार कुल्फी को फ्रीजर में दर्ज करने और स्टॉक निकासी के लिए उपलब्ध कराने हेतु <strong>उत्पादन (Production) पेज</strong> पर नया बैच बनाएं।
+          </span>
         </div>
-      )}
+        <Link to="/production?new=true" className="self-end sm:self-auto">
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs border-maroon-800 text-maroon-900 font-bold bg-white hover:bg-cream-50"
+            rightIcon={<ArrowRight className="w-3.5 h-3.5" />}
+          >
+            उत्पादन बैच बनाएं
+          </Button>
+        </Link>
+      </div>
 
+      {/* Messages */}
       {formError && (
-        <div className="p-4 rounded-xl bg-rose-50 border border-rose-300 text-rose-900 text-sm font-semibold flex items-center gap-2 shadow-sm animate-fadeIn">
-          <AlertTriangle className="w-5 h-5 text-rose-600 flex-shrink-0" />
+        <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs font-semibold flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-600" />
           <span>{formError}</span>
         </div>
       )}
 
-      {/* 1. Large Top Product / Type Selection Cards */}
-      <div className="space-y-2">
-        <label className="text-xs font-bold uppercase tracking-wider text-gray-600 block px-1">
-          {language === 'hi' ? '1. उत्पाद / कुल्फी किस्म चुनें (Select Kulfi Variety)' : '1. Select Kulfi Product'}
-        </label>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {products.slice(0, 3).map((prod) => {
-            const isSelected = prod.id === selectedProductId;
-            return (
-              <button
-                key={prod.id}
-                type="button"
-                onClick={() => handleProductSelect(prod.id)}
-                className={`flex flex-col text-left p-4 rounded-2xl border-2 transition-all shadow-sm ${
-                  isSelected
-                    ? 'border-maroon-800 bg-gradient-to-br from-amber-50 to-orange-50 ring-2 ring-maroon-800/30 text-gray-900 scale-[1.02]'
-                    : 'border-cream-300 bg-white hover:border-maroon-400 text-gray-700'
+      {successMessage && (
+        <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-600" />
+          <span>{successMessage}</span>
+        </div>
+      )}
+
+      {/* 1. Product Tabs Bar */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+        {products.map((p) => {
+          const isSelected = p.id === selectedProductId;
+          return (
+            <button
+              key={p.id}
+              onClick={() => handleProductSelect(p.id)}
+              className={`px-4 py-2.5 rounded-2xl font-bold text-xs sm:text-sm whitespace-nowrap transition-all duration-150 flex items-center gap-2 ${
+                isSelected
+                  ? 'bg-maroon-900 text-white shadow-md shadow-maroon-900/20 scale-[1.02]'
+                  : 'bg-white text-gray-700 hover:bg-cream-100/70 border border-cream-200'
+              }`}
+            >
+              <span>{language === 'hi' ? p.name_hi : p.name_en}</span>
+              <span
+                className={`text-[11px] px-2 py-0.5 rounded-full font-mono font-extrabold ${
+                  isSelected ? 'bg-amber-400 text-maroon-950' : 'bg-cream-200 text-gray-800'
                 }`}
               >
-                <div className="flex items-center justify-between w-full mb-1.5">
-                  <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-cream-200 text-maroon-900">
-                    ₹{prod.current_price}
-                  </span>
-                  {isSelected && <Sparkles className="w-4 h-4 text-amber-600 animate-pulse" />}
-                </div>
-                <span className="text-base font-extrabold text-gray-900 truncate">
-                  {language === 'hi' ? prod.name_hi : prod.name_en}
-                </span>
-                <span className="text-xs text-gray-500 truncate">{prod.name_en}</span>
-                <div className="mt-2 pt-2 border-t border-cream-200/80 flex items-center justify-between text-[11px] font-semibold text-gray-600">
-                  <span>{prod.sku}</span>
-                  {activeRecipe && activeRecipe.product_id === prod.id && (
-                    <span className="text-emerald-700 font-bold">v{activeRecipe.version_number}</span>
-                  )}
-                </div>
-              </button>
-            );
-          })}
-
-          {/* Other Products Dropdown / Selector */}
-          <div
-            className={`flex flex-col justify-between p-4 rounded-2xl border-2 transition-all ${
-              !products.slice(0, 3).some((p) => p.id === selectedProductId)
-                ? 'border-maroon-800 bg-amber-50/70 ring-2 ring-maroon-800/30'
-                : 'border-cream-300 bg-white'
-            }`}
-          >
-            <span className="text-xs font-bold text-gray-600 mb-1">{t.otherProduct}</span>
-            <select
-              value={selectedProductId}
-              onChange={(e) => handleProductSelect(e.target.value)}
-              className="w-full bg-cream-50 border border-cream-300 rounded-xl px-2.5 py-2 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
-            >
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {language === 'hi' ? p.name_hi : p.name_en} (₹{p.current_price})
-                </option>
-              ))}
-            </select>
-            <span className="text-[11px] text-gray-500 mt-2 block truncate">
-              {activeProduct?.description || 'अन्य विशेष कुल्फी किस्में'}
-            </span>
-          </div>
-        </div>
+                {formatCurrency(p.current_price)}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* 2. Optional Production Scaling Drawer */}
-      <Card className="border-amber-200 bg-gradient-to-r from-amber-50/80 to-cream-50">
-        <div
-          className="flex items-center justify-between cursor-pointer"
-          onClick={() => setShowScalingDrawer(!showScalingDrawer)}
-        >
-          <div className="flex items-center gap-2.5">
-            <Scale className="w-5 h-5 text-amber-700" />
-            <div>
-              <h3 className="text-sm font-bold text-gray-900">{t.scaleRecipeTitle}</h3>
-              <p className="text-xs text-gray-600">
-                {language === 'hi'
-                  ? 'कुल्फी की आवश्यकता दर्ज करें और आवश्यक कच्चा माल देखें'
-                  : 'Enter required kulfi count to compute material requirements'}
-              </p>
-            </div>
+      {/* 2. Recipe Batch Size & Scaling Card */}
+      <Card className="border-cream-300 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-gray-100">
+          <div>
+            <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-amber-600" />
+              <span>मानक रेसिपी विवरण (Standard Recipe Template)</span>
+            </h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              उत्पाद: <strong>{language === 'hi' ? activeProduct?.name_hi : activeProduct?.name_en}</strong> | दर: <strong>{formatCurrency(activeProduct?.current_price)}</strong> / piece
+            </p>
           </div>
-          <button type="button" className="text-amber-800 p-1">
-            {showScalingDrawer ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-          </button>
+
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              leftIcon={<Scale className="w-4 h-4 text-indigo-700" />}
+              onClick={() => setShowScalingDrawer(!showScalingDrawer)}
+            >
+              {showScalingDrawer ? 'स्केलिंग कैलकुलेटर छिपाएं' : 'बैच स्केलिंग (Scaling)'}
+            </Button>
+          </div>
         </div>
 
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+          <Input
+            label="मानक बैच साइज (Standard Output Pieces)"
+            type="number"
+            inputMode="numeric"
+            value={standardOutputPieces}
+            onChange={(e) => setStandardOutputPieces(Math.max(1, parseInt(e.target.value) || 0))}
+            helperText="उदा. 100 पीस के लिए आवश्यक सामग्री का अनुपात"
+            min={1}
+            required
+          />
+
+          <div className="md:col-span-2">
+            <Input
+              label="रेसिपी विवरण / नोट्स (Recipe Notes)"
+              placeholder="उदा. इलायची युक्त मानक खोया कुल्फी रेसिपी"
+              value={recipeNotes}
+              onChange={(e) => setRecipeNotes(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* Scaling Drawer */}
         {showScalingDrawer && (
-          <div className="mt-4 pt-4 border-t border-amber-200/80 space-y-4 animate-fadeIn">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-              <div className="flex-1 max-w-sm">
-                <Input
-                  label={t.requiredKulfiQuantity}
-                  type="number"
-                  inputMode="numeric"
-                  placeholder="उदा. 500"
-                  value={requiredQuantity}
-                  onChange={(e) => setRequiredQuantity(e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0))}
-                  min={0}
-                />
-              </div>
-              {scalingResult && (
-                <div className="flex items-center gap-3 pt-2 text-xs font-semibold text-gray-700">
-                  <Badge variant="info">
-                    {t.scaleFactor}: {scalingResult.scale_factor}x
-                  </Badge>
-                  <Badge variant="warning">
-                    {t.requiredBatches}: {scalingResult.required_batches}
-                  </Badge>
-                </div>
-              )}
+          <div className="p-4 bg-indigo-50/70 border border-indigo-200 rounded-2xl space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                <Scale className="w-4 h-4 text-indigo-700" />
+                <span>आवश्यक उत्पादन के अनुसार सामग्री की गणना (Recipe Scaler)</span>
+              </h3>
             </div>
 
-            {scalingResult && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 mt-3">
-                {scalingResult.scaled_ingredients.map((sc, i) => (
+            <div className="max-w-xs">
+              <Input
+                label="वांछित कुल्फी पीस (Target Output Pieces)"
+                type="number"
+                inputMode="numeric"
+                placeholder="उदा. 500 पीस"
+                value={requiredQuantity}
+                onChange={(e) =>
+                  setRequiredQuantity(e.target.value === '' ? '' : parseInt(e.target.value) || 0)
+                }
+                min={1}
+              />
+            </div>
+
+            {scaledResults && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2">
+                {scaledResults.scaled_ingredients.map((sc, idx) => (
                   <div
-                    key={i}
-                    className="p-2.5 rounded-xl bg-white/90 border border-amber-200 text-xs shadow-xs"
+                    key={idx}
+                    className="p-2 bg-white rounded-xl border border-indigo-100 text-xs flex justify-between items-center"
                   >
-                    <span className="font-bold text-gray-900 block truncate">
+                    <span className="font-semibold text-gray-800">
                       {language === 'hi' ? sc.name_hi : sc.name_en}
                     </span>
-                    <div className="flex justify-between items-center mt-1 text-gray-600 font-mono">
-                      <span>{sc.quantity} {sc.unit}</span>
-                      <span className="font-bold text-maroon-900">{formatCurrency(sc.estimated_cost)}</span>
+                    <div className="text-right">
+                      <span className="font-bold text-indigo-900 block">
+                        {sc.quantity} {sc.unit}
+                      </span>
+                      <span className="text-[10px] text-gray-500">
+                        {formatCurrency(sc.estimated_cost)}
+                      </span>
                     </div>
                   </div>
                 ))}
               </div>
             )}
-            <p className="text-[11px] text-gray-500 italic">
-              {language === 'hi' ? t.scalingDisclaimer : t.scalingDisclaimer}
-            </p>
           </div>
         )}
       </Card>
 
-      {/* 3. Single Consolidated Costing Form */}
+      {/* 3. Ingredient Details Table */}
       <Card className="border-cream-300 divide-y divide-gray-100 shadow-sm">
-        {/* Basic Details Header */}
-        <div className="pb-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
-              <Factory className="w-5 h-5 text-maroon-800" />
-              <span>
-                {language === 'hi' ? '2. बुनियादी विवरण (Basic Production Details)' : '2. Production Batch Details'}
-              </span>
-            </h2>
-            <div className="flex items-center gap-2">
-              <Badge variant="info">
-                {activeProduct?.name_en} (₹{activeProduct?.current_price})
-              </Badge>
-              {activeRecipe && (
-                <Badge variant="success">
-                  {t.recipeVersion} {activeRecipe.version_number}
-                </Badge>
-              )}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-2">
-            <Input
-              label={t.productionDate}
-              type="date"
-              value={productionDate}
-              onChange={(e) => setProductionDate(e.target.value)}
-              required
-            />
-            <Input
-              label={t.actualOutput}
-              type="number"
-              inputMode="numeric"
-              value={producedQuantity}
-              onChange={(e) => setProducedQuantity(Math.max(0, parseInt(e.target.value) || 0))}
-              required
-              min={1}
-            />
-            <Input
-              label={t.damagedOutput}
-              type="number"
-              inputMode="numeric"
-              value={damagedQuantity}
-              onChange={(e) => setDamagedQuantity(Math.max(0, parseInt(e.target.value) || 0))}
-              min={0}
-            />
-            <div className="flex flex-col justify-end">
-              <label className="text-xs font-bold text-gray-700 mb-1">{t.saleableOutput}</label>
-              <div className="px-3.5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-300 font-mono font-extrabold text-emerald-900 text-base">
-                {Math.max(0, producedQuantity - damagedQuantity)} {t.pieces}
-              </div>
-            </div>
-          </div>
-
-          <div className="pt-2">
-            <Input
-              label="बैच नोट्स / टिप्पणियाँ (Notes)"
-              placeholder="उदा. सुबह की पहली शिफ्ट, विशेष मावा इस्तेमाल किया"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
-          </div>
-        </div>
-
-        {/* Ingredient Details Table / Mobile Responsive List */}
-        <div className="py-5 space-y-4">
+        <div className="pb-4 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
                 <Milk className="w-5 h-5 text-amber-700" />
-                <span>
-                  {language === 'hi' ? '3. सामग्री विवरण (Ingredient Quantities & Rates)' : '3. Ingredient Rates & Costs'}
-                </span>
+                <span>3. सामग्री विवरण (Ingredient Quantities & Rates)</span>
               </h2>
               <p className="text-xs text-gray-500">
-                {language === 'hi'
-                  ? 'चयनित सामग्री का ही खर्च जोड़ा जाएगा। दर मास्टर से स्वतः लोड होती है।'
-                  : 'Only checked ingredients are calculated. Rates loaded from master.'}
+                चयनित सामग्री का ही खर्च जोड़ा जाएगा। दर मास्टर से स्वतः लोड होती है।
               </p>
             </div>
 
@@ -780,46 +605,45 @@ export const ProductionCostCalculatorPage: React.FC = () => {
               leftIcon={<Plus className="w-4 h-4" />}
               onClick={() => setIsAddIngredientModalOpen(true)}
             >
-              {t.addIngredient}
+              कस्टम सामग्री जोड़ें
             </Button>
           </div>
 
-          {/* Ingredient Rows Container */}
-          <div className="space-y-2.5">
+          <div className="space-y-3">
             {ingredientRows.map((row, idx) => {
-              const isMissingRate = row.is_selected && row.quantity > 0 && (row.rate <= 0 || isNaN(row.rate));
+              const isMissingRate = row.is_selected && row.rate <= 0;
 
               return (
                 <div
                   key={row.ingredient_id}
-                  className={`p-3 rounded-2xl border transition-all ${
+                  className={`p-3.5 rounded-2xl border transition-all duration-150 ${
                     row.is_selected
-                      ? isMissingRate
-                        ? 'border-rose-300 bg-rose-50/60 ring-1 ring-rose-300'
-                        : 'border-cream-300 bg-white shadow-xs'
-                      : 'border-gray-200 bg-gray-50/60 opacity-65'
+                      ? 'bg-cream-50/80 border-cream-300 shadow-xs'
+                      : 'bg-white/60 border-gray-100 opacity-65'
                   }`}
                 >
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                    {/* Left: Checkbox + Name */}
+                    {/* Left: Checkbox & Ingredient Name */}
                     <div className="flex items-center gap-3 min-w-[200px]">
                       <input
                         type="checkbox"
                         checked={row.is_selected}
-                        onChange={() => handleRowToggle(idx)}
-                        className="w-5 h-5 text-maroon-800 rounded-lg border-cream-400 focus:ring-maroon-800 cursor-pointer"
+                        onChange={(e) => handleRowCheckbox(idx, e.target.checked)}
+                        className="w-4 h-4 text-maroon-800 rounded focus:ring-maroon-800 border-gray-300"
                       />
                       <div>
-                        <span className="font-extrabold text-sm text-gray-900 block">
+                        <span className="font-bold text-sm text-gray-900 block">
                           {language === 'hi' ? row.name_hi : row.name_en}
                         </span>
-                        <span className="text-xs text-gray-500">{row.name_en}</span>
+                        <span className="text-[11px] text-gray-500 block">
+                          {language === 'hi' ? row.name_en : row.name_hi}
+                        </span>
                       </div>
                     </div>
 
-                    {/* Middle: Quantity + Unit + Rate + RateUnit */}
+                    {/* Middle: Quantity, Unit, Rate, Rate Unit */}
                     {row.is_selected ? (
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 flex-1 items-center">
+                      <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                         {/* Quantity */}
                         <div>
                           <label className="text-[10px] font-bold text-gray-500 block mb-0.5">
@@ -896,11 +720,11 @@ export const ProductionCostCalculatorPage: React.FC = () => {
                       </div>
                     ) : (
                       <div className="flex-1 text-xs text-gray-400 italic py-2">
-                        {language === 'hi' ? 'यह सामग्री इस बैच में शामिल नहीं है' : 'Unchecked (not included in costing)'}
+                        {language === 'hi' ? 'यह सामग्री इस रेसिपी में शामिल नहीं है' : 'Unchecked (not included in costing)'}
                       </div>
                     )}
 
-                    {/* Right: Calculated Cost & Save Rate Check */}
+                    {/* Right: Calculated Cost */}
                     {row.is_selected && (
                       <div className="flex flex-col md:items-end justify-center min-w-[140px] pt-1 md:pt-0 border-t md:border-t-0 border-cream-100 text-right">
                         <span className="text-[11px] font-bold text-gray-500">{t.ingredientCost}</span>
@@ -912,11 +736,6 @@ export const ProductionCostCalculatorPage: React.FC = () => {
                             {row.unit === 'g' && row.rate_unit === 'kg'
                               ? `${row.quantity / 1000} kg × ₹${row.rate}`
                               : `${row.quantity} ${row.unit} @ ₹${row.rate}/${row.rate_unit}`}
-                          </span>
-                        )}
-                        {row.save_rate_to_master && (
-                          <span className="text-[10px] font-bold text-amber-700 bg-amber-100/70 px-1.5 py-0.5 rounded-md mt-0.5">
-                            💾 Save to Master
                           </span>
                         )}
                       </div>
@@ -947,17 +766,15 @@ export const ProductionCostCalculatorPage: React.FC = () => {
           </div>
         </div>
 
-        {/* 4. Additional Batch Costs (Overheads) */}
+        {/* 4. Additional Recipe Overheads */}
         <div className="py-5 space-y-3">
           <div>
             <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
               <Layers className="w-5 h-5 text-indigo-700" />
-              <span>{t.additionalBatchCosts}</span>
+              <span>4. अतिरिक्त खर्चे (Overheads per Batch)</span>
             </h2>
             <p className="text-xs text-gray-500">
-              {language === 'hi'
-                ? 'सभी अतिरिक्त खर्चे वैकल्पिक हैं (डिफ़ॉल्ट ₹0)। पैकिंग सामग्री पहले ही ऊपर गिनी गई है।'
-                : 'All additional costs are optional (default 0). Packaging from recipe is auto-counted.'}
+              मानक बैच के लिए ईंधन, मजदूरी व अन्य खर्चे (वैकल्पिक, डिफ़ॉल्ट ₹0)।
             </p>
           </div>
 
@@ -1002,64 +819,12 @@ export const ProductionCostCalculatorPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="text-xs font-semibold text-gray-700 block mb-1">{t.generatorFuel}</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={overheads.generator_fuel || ''}
-                onChange={(e) => handleOverheadChange('generator_fuel', parseFloat(e.target.value) || 0)}
-                className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
-                placeholder="₹ 0"
-                min={0}
-              />
-            </div>
-
-            <div>
               <label className="text-xs font-semibold text-gray-700 block mb-1">{t.transportExpense}</label>
               <input
                 type="number"
                 inputMode="decimal"
                 value={overheads.transport || ''}
                 onChange={(e) => handleOverheadChange('transport', parseFloat(e.target.value) || 0)}
-                className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
-                placeholder="₹ 0"
-                min={0}
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-gray-700 block mb-1">{t.water}</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={overheads.water || ''}
-                onChange={(e) => handleOverheadChange('water', parseFloat(e.target.value) || 0)}
-                className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
-                placeholder="₹ 0"
-                min={0}
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-gray-700 block mb-1">{t.packagingExtra}</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={overheads.packaging_extra || ''}
-                onChange={(e) => handleOverheadChange('packaging_extra', parseFloat(e.target.value) || 0)}
-                className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
-                placeholder="₹ 0"
-                min={0}
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-gray-700 block mb-1">{t.otherExpense}</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={overheads.other || ''}
-                onChange={(e) => handleOverheadChange('other', parseFloat(e.target.value) || 0)}
                 className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
                 placeholder="₹ 0"
                 min={0}
@@ -1075,7 +840,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-white/15">
                 <div>
                   <span className="text-xs font-bold uppercase tracking-wider text-amber-300">
-                    {language === 'hi' ? 'अनुमानित उत्पादन परिणाम' : 'Live Calculation Result'}
+                    रेसिपी परिणाम ({standardOutputPieces} पीस बैच)
                   </span>
                   <h3 className="text-lg font-black text-white">
                     {t.estimatedProductionCostAndProfit}
@@ -1091,106 +856,35 @@ export const ProductionCostCalculatorPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Cost Breakdown Pills */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 my-4 text-xs">
-                <div className="p-2.5 rounded-xl bg-white/10 backdrop-blur-xs">
-                  <span className="text-gray-300 block">दूध (Milk)</span>
-                  <span className="font-mono font-bold text-white text-sm">
-                    {formatCurrency(costingBreakdown.milk_cost)}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-white/10 backdrop-blur-xs">
-                  <span className="text-gray-300 block">चीनी (Sugar)</span>
-                  <span className="font-mono font-bold text-white text-sm">
-                    {formatCurrency(costingBreakdown.sugar_cost)}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-white/10 backdrop-blur-xs">
-                  <span className="text-gray-300 block">खोया (Khoya)</span>
-                  <span className="font-mono font-bold text-white text-sm">
-                    {formatCurrency(costingBreakdown.khoya_cost)}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-white/10 backdrop-blur-xs">
-                  <span className="text-gray-300 block">मेवे (Dry Fruits)</span>
-                  <span className="font-mono font-bold text-white text-sm">
-                    {formatCurrency(
-                      costingBreakdown.cashew_cost +
-                        costingBreakdown.pistachio_cost +
-                        costingBreakdown.almond_cost
-                    )}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-white/10 backdrop-blur-xs">
-                  <span className="text-gray-300 block">मसाला व फ्लेवर</span>
-                  <span className="font-mono font-bold text-white text-sm">
-                    {formatCurrency(
-                      costingBreakdown.cardamom_cost +
-                        costingBreakdown.saffron_cost +
-                        costingBreakdown.flavour_cost +
-                        costingBreakdown.custard_cost
-                    )}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-white/10 backdrop-blur-xs">
-                  <span className="text-gray-300 block">कुल पैकिंग (Packaging)</span>
-                  <span className="font-mono font-bold text-white text-sm">
-                    {formatCurrency(costingBreakdown.total_packaging_cost)}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-white/10 backdrop-blur-xs">
-                  <span className="text-gray-300 block">ईंधन व गैस (Fuel/Gas)</span>
-                  <span className="font-mono font-bold text-white text-sm">
-                    {formatCurrency(costingBreakdown.electricity_fuel_cost)}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-white/10 backdrop-blur-xs">
-                  <span className="text-gray-300 block">मजदूरी (Labour)</span>
-                  <span className="font-mono font-bold text-white text-sm">
-                    {formatCurrency(costingBreakdown.labour_cost)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Highlight KPI Grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-white/15">
-                <div className="p-3.5 rounded-2xl bg-white/15 backdrop-blur-sm">
-                  <span className="text-xs text-amber-200 font-semibold block">कुल बैच लागत</span>
-                  <span className="text-xl sm:text-2xl font-black font-mono text-white block mt-0.5">
-                    {formatCurrency(costingBreakdown.total_batch_cost)}
-                  </span>
-                  <span className="text-[11px] text-gray-300 mt-1 block">
-                    सामग्री + ओवरहेड्स
-                  </span>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-white/15 backdrop-blur-sm">
-                  <span className="text-xs text-amber-200 font-semibold block">{t.costPerKulfi}</span>
-                  <span className="text-xl sm:text-2xl font-black font-mono text-amber-300 block mt-0.5">
+              {/* Summary KPIs */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 pt-4">
+                <div className="p-3.5 rounded-2xl bg-white/10 backdrop-blur-sm">
+                  <span className="text-xs text-gray-300 font-semibold block">प्रति पीस लागत</span>
+                  <span className="text-2xl sm:text-3xl font-black font-mono text-amber-300 block mt-0.5">
                     ₹{costingBreakdown.cost_per_saleable_kulfi.toFixed(2)}
                   </span>
                   <span className="text-[11px] text-gray-300 mt-1 block">
-                    {costingBreakdown.saleable_pieces} बिक्री योग्य पीस
+                    कुल बैच लागत: {formatCurrency(costingBreakdown.total_batch_cost)}
                   </span>
                 </div>
 
-                <div className="p-3.5 rounded-2xl bg-white/15 backdrop-blur-sm">
-                  <span className="text-xs text-emerald-300 font-semibold block">{t.profitPerKulfi}</span>
-                  <span className="text-xl sm:text-2xl font-black font-mono text-emerald-300 block mt-0.5">
+                <div className="p-3.5 rounded-2xl bg-white/10 backdrop-blur-sm">
+                  <span className="text-xs text-gray-300 font-semibold block">प्रति पीस मुनाफा</span>
+                  <span className="text-2xl sm:text-3xl font-black font-mono text-emerald-300 block mt-0.5">
                     ₹{costingBreakdown.estimated_profit_per_kulfi.toFixed(2)}
                   </span>
                   <span className="text-[11px] text-emerald-200 mt-1 block">
-                    मार्जिन: {costingBreakdown.gross_margin_percentage}%
+                    ग्रॉस मार्जिन: <strong>{costingBreakdown.gross_margin_percentage}%</strong>
                   </span>
                 </div>
 
                 <div className="p-3.5 rounded-2xl bg-white/15 backdrop-blur-sm">
-                  <span className="text-xs text-emerald-300 font-semibold block">{t.estimatedGrossProfit}</span>
+                  <span className="text-xs text-emerald-300 font-semibold block">कुल अनुमानित मुनाफा</span>
                   <span className="text-xl sm:text-2xl font-black font-mono text-emerald-300 block mt-0.5">
                     {formatCurrency(costingBreakdown.estimated_total_gross_profit)}
                   </span>
                   <span className="text-[11px] text-gray-300 mt-1 block">
-                    कुल बिक्री: {formatCurrency(costingBreakdown.expected_total_sales)}
+                    कुल बिक्री मूल्य: {formatCurrency(costingBreakdown.expected_total_sales)}
                   </span>
                 </div>
               </div>
@@ -1198,46 +892,31 @@ export const ProductionCostCalculatorPage: React.FC = () => {
           </div>
         )}
 
-        {/* 6. Sticky Form Action Bar */}
+        {/* 6. Form Action Bar */}
         <div className="pt-6">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-cream-50 p-4 rounded-2xl border border-cream-200">
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              <Button
-                variant="outline"
-                size="md"
-                leftIcon={<RotateCcw className="w-4 h-4" />}
-                onClick={handleResetForm}
-                className="w-full sm:w-auto"
-              >
-                {t.resetForm}
-              </Button>
-            </div>
+            <Button
+              variant="outline"
+              size="md"
+              leftIcon={<RotateCcw className="w-4 h-4" />}
+              onClick={handleResetForm}
+              className="w-full sm:w-auto"
+            >
+              {t.resetForm}
+            </Button>
 
-            <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full sm:w-auto">
-              {isOwner && (
-                <Button
-                  variant="outline"
-                  size="md"
-                  leftIcon={<Save className="w-4 h-4 text-maroon-800" />}
-                  onClick={handleSaveDefaultRecipe}
-                  isLoading={saveRecipeMutation.isPending}
-                  className="w-full sm:w-auto border-maroon-800 text-maroon-900 font-bold"
-                >
-                  {t.saveDefaultRecipe}
-                </Button>
-              )}
-
+            {isOwner && (
               <Button
                 variant="primary"
                 size="lg"
-                leftIcon={<PackageCheck className="w-5 h-5" />}
-                onClick={handleCompleteProduction}
-                isLoading={createBatchMutation.isPending}
+                leftIcon={<Save className="w-4 h-4" />}
+                onClick={handleSaveDefaultRecipe}
+                isLoading={saveRecipeMutation.isPending}
                 className="w-full sm:w-auto font-extrabold shadow-md shadow-maroon-900/20"
               >
-                {t.completeProduction}
+                {t.saveDefaultRecipe}
               </Button>
-            </div>
+            )}
           </div>
         </div>
       </Card>
@@ -1258,32 +937,22 @@ export const ProductionCostCalculatorPage: React.FC = () => {
                 key={rec.id}
                 className="p-4 rounded-2xl border border-cream-200 bg-cream-50/70 space-y-2 text-xs"
               >
-                <div className="flex items-center justify-between pb-2 border-b border-cream-200">
+                <div className="flex items-center justify-between border-b border-cream-200 pb-2">
                   <div className="flex items-center gap-2">
-                    <Badge variant={rec.is_default ? 'success' : 'default'}>
-                      v{rec.version_number} {rec.is_default && '(Active Default)'}
-                    </Badge>
-                    <span className="font-bold text-sm text-gray-900">{rec.name}</span>
+                    <span className="font-bold text-sm text-gray-900">
+                      संस्करण v{rec.version_number}
+                    </span>
+                    {rec.is_default && <Badge variant="success">डिफ़ॉल्ट</Badge>}
                   </div>
-                  <span className="text-gray-500 font-mono">
-                    {formatDate(rec.created_at || rec.effective_from)}
-                  </span>
+                  <span className="text-gray-500">{formatDate(rec.created_at)}</span>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 py-1">
-                  {rec.items.map((it, i) => (
-                    <div key={i} className="p-2 rounded-lg bg-white border border-cream-200">
-                      <span className="font-bold block text-gray-900">
-                        {it.ingredient?.name_hi || it.ingredient?.name_en}
-                      </span>
-                      <span className="font-mono text-gray-600">
-                        {it.quantity} {it.unit}
-                      </span>
-                    </div>
-                  ))}
+                <div className="grid grid-cols-2 gap-2 text-gray-700">
+                  <div>मानक उत्पादन: <strong>{rec.standard_output_pieces} pcs</strong></div>
+                  <div>सामग्री प्रकार: <strong>{rec.items?.length || 0} आइटम्स</strong></div>
                 </div>
 
-                {rec.notes && <p className="text-gray-600 italic">टिप्पणी: {rec.notes}</p>}
+                {rec.notes && <p className="text-gray-500 italic mt-1">{rec.notes}</p>}
               </div>
             ))
           )}
@@ -1294,47 +963,52 @@ export const ProductionCostCalculatorPage: React.FC = () => {
       <Modal
         isOpen={isAddIngredientModalOpen}
         onClose={() => setIsAddIngredientModalOpen(false)}
-        title={t.addIngredient}
-        maxWidth="md"
+        title="कस्टम सामग्री जोड़ें (Add Custom Ingredient)"
       >
-        <form onSubmit={handleAddCustomIngredient} className="space-y-4">
-          <Input
-            label="Ingredient Name (English)"
-            placeholder="e.g. Vanilla Extract"
-            value={customIngNameEn}
-            onChange={(e) => setCustomIngNameEn(e.target.value)}
-            required
-          />
+        <form onSubmit={handleAddCustomIngredientSubmit} className="space-y-4">
           <Input
             label="सामग्री का नाम (हिंदी)"
-            placeholder="उदा. वैनिला एसेंस"
+            placeholder="उदा. पिस्ता कतरन, बादाम गिरी"
             value={customIngNameHi}
             onChange={(e) => setCustomIngNameHi(e.target.value)}
             required
           />
+
+          <Input
+            label="Ingredient Name (English)"
+            placeholder="e.g. Sliced Almonds, Vanilla Extract"
+            value={customIngNameEn}
+            onChange={(e) => setCustomIngNameEn(e.target.value)}
+          />
+
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1">श्रेणी (Category)</label>
+              <label className="text-xs font-bold text-gray-700 block mb-1">
+                श्रेणी (Category)
+              </label>
               <select
                 value={customIngCategory}
                 onChange={(e) => setCustomIngCategory(e.target.value as IngredientCategory)}
-                className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-800"
+                className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-xs font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
               >
-                <option value="dairy">Dairy (दूध/मावा)</option>
-                <option value="sweetener">Sweetener (मीठा/चीनी)</option>
-                <option value="dry_fruit">Dry Fruit (मेवा)</option>
-                <option value="spice">Spice (मसाला)</option>
-                <option value="flavoring">Flavoring (फ्लेवर/रंग)</option>
-                <option value="packaging">Packaging (पैकिंग/तीली)</option>
-                <option value="other">Other (अन्य)</option>
+                <option value="dairy">डेयरी उत्पाद (Dairy)</option>
+                <option value="dry_fruit">मेवा / ड्राई फ्रूट (Dry Fruit)</option>
+                <option value="sweetener">मीठा / चीनी (Sweetener)</option>
+                <option value="flavoring">फ्लेवर / एसेंस (Flavoring)</option>
+                <option value="spice">मसाला / इलायची (Spice)</option>
+                <option value="packaging">पैकेजिंग सामग्री (Packaging)</option>
+                <option value="other">अन्य (Other)</option>
               </select>
             </div>
+
             <div>
-              <label className="text-xs font-bold text-gray-700 block mb-1">{t.unit}</label>
+              <label className="text-xs font-bold text-gray-700 block mb-1">
+                {t.unit}
+              </label>
               <select
                 value={customIngUnit}
                 onChange={(e) => setCustomIngUnit(e.target.value as UnitType)}
-                className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-800"
+                className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-xs font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
               >
                 {UNIT_OPTIONS.map((u) => (
                   <option key={u.value} value={u.value}>
@@ -1344,31 +1018,30 @@ export const ProductionCostCalculatorPage: React.FC = () => {
               </select>
             </div>
           </div>
+
           <Input
             label={t.purchaseRate}
             type="number"
             inputMode="decimal"
             step="any"
+            prefixSymbol="₹"
+            placeholder="0.00"
             value={customIngRate}
             onChange={(e) => setCustomIngRate(e.target.value)}
-            placeholder="0.00"
-            min={0}
             required
+            min={0}
           />
-          <div className="flex justify-end gap-2 pt-2">
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
             <Button
-              variant="outline"
               type="button"
+              variant="outline"
               onClick={() => setIsAddIngredientModalOpen(false)}
             >
-              रद्द करें
+              {t.cancel}
             </Button>
-            <Button
-              variant="primary"
-              type="submit"
-              isLoading={addIngredientMutation.isPending}
-            >
-              सामग्री जोड़ें
+            <Button type="submit" variant="primary" isLoading={addIngredientMutation.isPending}>
+              {t.save}
             </Button>
           </div>
         </form>

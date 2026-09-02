@@ -440,6 +440,12 @@ export const ProductionPage: React.FC = () => {
                         ? t.superseded
                         : batch.status}
                     </Badge>
+                    {batch.status === 'completed' && (
+                      <span className="text-[10px] font-bold text-emerald-900 bg-emerald-100/80 border border-emerald-300 px-2 py-0.5 rounded-lg flex items-center gap-1">
+                        <CheckCircle className="w-3 h-3 text-emerald-700" />
+                        मुख्य फ्रीजर में दर्ज
+                      </span>
+                    )}
                     {closed && (
                       <Badge variant="danger">
                         <Lock className="w-3 h-3 mr-1 inline" />
@@ -460,9 +466,9 @@ export const ProductionPage: React.FC = () => {
                   {batch.items.map((it) => (
                     <div
                       key={it.id}
-                      className="p-2.5 rounded-xl bg-cream-50/70 border border-cream-200 text-xs"
+                      className="p-2.5 rounded-xl bg-cream-50/70 border border-cream-200 text-xs space-y-1"
                     >
-                      <span className="font-bold text-gray-900 block text-sm mb-1">
+                      <span className="font-bold text-gray-900 block text-sm mb-0.5">
                         {language === 'hi' ? it.product?.name_hi : it.product?.name_en}
                       </span>
                       <div className="flex justify-between text-gray-600">
@@ -477,10 +483,16 @@ export const ProductionPage: React.FC = () => {
                           {formatQuantity(it.damaged_quantity)}
                         </span>
                       </div>
-                      <div className="flex justify-between text-emerald-800 font-bold border-t border-cream-200 pt-1 mt-1">
+                      <div className="flex justify-between text-emerald-800 font-bold border-t border-cream-200 pt-1">
                         <span>{t.saleableQty}:</span>
                         <span className="font-mono">
                           {formatQuantity(it.saleable_quantity)} {t.pieces}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-gray-500 text-[10px] pt-0.5 font-mono">
+                        <span>आबंटित लागत:</span>
+                        <span>
+                          {formatCurrency(it.allocated_ingredient_cost || 0)} (₹{(it.unit_production_cost || 0).toFixed(2)}/pc)
                         </span>
                       </div>
                     </div>
@@ -489,12 +501,15 @@ export const ProductionPage: React.FC = () => {
 
                 {/* Summary & Action Bar */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-gray-100 bg-cream-50/30 -mx-4 -mb-4 px-4 py-3">
-                  <div className="flex items-center gap-4 text-xs">
+                  <div className="flex items-center gap-4 text-xs flex-wrap">
                     <span className="font-semibold text-gray-700">
                       कुल बिक्री योग्य:{' '}
                       <strong className="text-maroon-900 font-mono text-sm">
                         {formatQuantity(batchTotalSaleable)} {t.pieces}
                       </strong>
+                    </span>
+                    <span className="text-gray-500 font-mono text-xs">
+                      लागत: <strong>{formatCurrency(batch.total_ingredient_cost)}</strong> (₹{(batch.total_ingredient_cost / (batchTotalSaleable || 1)).toFixed(2)}/pc)
                     </span>
                     {totalDamaged > 0 && (
                       <span className="text-rose-700 font-medium">
@@ -589,14 +604,14 @@ export const ProductionPage: React.FC = () => {
           setIsNewModalOpen(false);
           setSearchParams({});
         }}
-        title={t.newBatch}
-        subtitle="कारखाने में तैयार कुल्फी पीस और कुल सामग्री लागत दर्ज करें"
+        title="नया दैनिक उत्पादन बैच (New Production Batch)"
+        subtitle="उत्पाद-वार तैयार पीस व कुल सामग्री लागत दर्ज करें — यह सीधे मुख्य फ्रीजर में दर्ज हो जाएगा।"
         maxWidth="lg"
       >
         <form onSubmit={handleCreateBatchSubmit} className="space-y-4">
           {formError && (
             <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-600" />
               <span>{formError}</span>
             </div>
           )}
@@ -612,13 +627,14 @@ export const ProductionPage: React.FC = () => {
 
             <Input
               type="number"
-              step="0.01"
+              step="any"
               label={t.totalIngredientCost}
               prefixSymbol="₹"
               value={totalIngredientCost}
               onChange={(e) => setTotalIngredientCost(e.target.value)}
-              helperText="दूध, मावा, चीनी, मेवे की कुल लागत"
+              helperText="दूध, मावा, चीनी, मेवे की कुल लागत (₹)"
               required
+              min={0}
             />
           </div>
 
@@ -631,6 +647,9 @@ export const ProductionPage: React.FC = () => {
               {products.map((prod) => {
                 const item = itemsState[prod.id] || { produced: 0, damaged: 0, notes: '' };
                 const saleable = Math.max(0, item.produced - item.damaged);
+                const costNum = parseFloat(totalIngredientCost) || 0;
+                const allocatedCost = totalSaleable > 0 ? (costNum * saleable) / totalSaleable : 0;
+                const unitCost = saleable > 0 ? allocatedCost / saleable : 0;
 
                 return (
                   <div
@@ -647,10 +666,14 @@ export const ProductionPage: React.FC = () => {
                         </span>
                       </div>
                       <div className="text-right">
-                        <span className="text-xs font-semibold text-emerald-800">
-                          बिक्री योग्य: <strong className="font-mono text-base">{saleable}</strong>{' '}
-                          {t.pieces}
+                        <span className="text-xs font-semibold text-emerald-800 block">
+                          बिक्री योग्य: <strong className="font-mono text-base">{saleable}</strong> {t.pieces}
                         </span>
+                        {saleable > 0 && costNum > 0 && (
+                          <span className="text-[10px] text-gray-500 font-mono block">
+                            लागत: {formatCurrency(allocatedCost)} (₹{unitCost.toFixed(2)}/pc)
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -682,17 +705,22 @@ export const ProductionPage: React.FC = () => {
 
           <Input
             label="अतिरिक्त टिप्पणी (Notes)"
-            placeholder="जैसे: सुबह की शिफ्ट, विशेष मावा बैच..."
+            placeholder="जैसे: सुबह की पहली शिफ्ट, विशेष मावा बैच..."
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
           />
 
-          <div className="flex items-center justify-between pt-3 border-t border-gray-100">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-gray-100 bg-cream-50 p-3 rounded-xl border border-cream-200">
             <div>
-              <span className="text-xs text-gray-500 block">कुल तैयार पीस</span>
+              <span className="text-xs text-gray-500 block">कुल तैयार पीस व लागत</span>
               <span className="text-lg font-black text-maroon-900 font-mono">
                 {formatQuantity(totalSaleable)} {t.pieces}
               </span>
+              {totalSaleable > 0 && parseFloat(totalIngredientCost) > 0 && (
+                <span className="text-xs text-emerald-800 font-mono block">
+                  कुल लागत: {formatCurrency(parseFloat(totalIngredientCost) || 0)} (₹{((parseFloat(totalIngredientCost) || 0) / totalSaleable).toFixed(2)}/pc)
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
@@ -706,8 +734,14 @@ export const ProductionPage: React.FC = () => {
               >
                 {t.cancel}
               </Button>
-              <Button type="submit" variant="primary" isLoading={createBatch.isPending}>
-                {t.save}
+              <Button
+                type="submit"
+                variant="primary"
+                size="md"
+                isLoading={createBatch.isPending}
+                className="font-bold shadow-md shadow-maroon-900/20"
+              >
+                उत्पादन सुरक्षित करें एवं फ्रीजर में जोड़ें
               </Button>
             </div>
           </div>

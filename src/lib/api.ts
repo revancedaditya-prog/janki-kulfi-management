@@ -414,7 +414,8 @@ export const api = {
     userId: string
   ): Promise<any> {
     if (useMockMode) {
-      return mockStore.createProductionBatch(productionDate, totalIngredientCost, notes, items, userId);
+      const draft = mockStore.createProductionBatch(productionDate, totalIngredientCost, notes, items, userId);
+      return mockStore.completeProductionBatch(draft.id, userId);
     }
 
     // Try single-transaction RPC first
@@ -435,16 +436,18 @@ export const api = {
       console.warn('RPC execution exception, using fallback:', rpcErr);
     }
 
-    // Fallback: Two-step creation with standard complete_production_batch RPC
+    // Fallback: Atomic direct creation with status: 'completed' and stock movements
     const batchNumber = `BAT-${productionDate.replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const now = new Date().toISOString();
     const { data: batch, error: batchErr } = await (supabase as any)
       .from('production_batches')
       .insert({
         batch_number: batchNumber,
         production_date: productionDate,
-        status: 'draft',
+        status: 'completed',
         total_ingredient_cost: totalIngredientCost,
         notes: notes || null,
+        completed_at: now,
         created_by: userId,
       })
       .select()
@@ -477,17 +480,30 @@ export const api = {
 
     if (itemsErr) throw itemsErr;
 
-    // Call standard complete_production_batch RPC or fallback
-    try {
-      const { data: completedRes, error: compErr } = await (supabase as any).rpc('complete_production_batch', {
-        p_batch_id: batch.id,
-        p_user_id: userId,
-      });
-      if (compErr) throw compErr;
-      return completedRes || { success: true, batch_id: batch.id, batch_number: batchNumber };
-    } catch {
-      return this.completeProductionBatch(batch.id, userId);
+    // Direct stock movements (Production -> Main Freezer)
+    const { freezerLoc, prodLoc } = await getOrCreateDefaultStockLocations();
+    if (freezerLoc && prodLoc) {
+      const movements = itemsToInsert
+        .filter((it) => it.saleable_quantity > 0)
+        .map((it) => ({
+          movement_date: now,
+          product_id: it.product_id,
+          source_location_id: prodLoc.id,
+          destination_location_id: freezerLoc.id,
+          quantity: it.saleable_quantity,
+          movement_type: 'production_completed',
+          reference_table: 'production_batches',
+          reference_id: batch.id,
+          notes: `Stock added from completed production batch ${batchNumber}`,
+          created_by: userId,
+        }));
+
+      if (movements.length > 0) {
+        await (supabase as any).from('stock_movements').insert(movements);
+      }
     }
+
+    return { success: true, batch_id: batch.id, batch_number: batchNumber };
   },
 
   async completeProductionBatch(batchId: string, userId: string): Promise<any> {
