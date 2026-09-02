@@ -447,15 +447,59 @@ export const api = {
         p_reason: reason,
         p_user_id: userId,
       });
-      if (error) {
-        console.warn('RPC delete_production_batch_transaction failed, using fallback:', error);
-        return mockStore.deleteProductionBatch(batchId, reason, userId);
+      if (!error && data) {
+        return data;
       }
-      return data || { success: true, message: 'Production batch deleted successfully' };
+      console.warn('RPC delete_production_batch_transaction failed or not installed, executing direct Supabase deletion:', error);
     } catch (err) {
-      console.warn('deleteProductionBatch error, using fallback:', err);
+      console.warn('deleteProductionBatch RPC error, executing direct Supabase deletion:', err);
+    }
+
+    // Direct Supabase deletion fallback
+    const { data: batch } = await (supabase as any)
+      .from('production_batches')
+      .select('*, items:production_items(*)')
+      .eq('id', batchId)
+      .maybeSingle();
+
+    if (!batch) {
+      // If not found in Supabase, try mockStore
       return mockStore.deleteProductionBatch(batchId, reason, userId);
     }
+
+    if (batch.status === 'completed' && batch.items && batch.items.length > 0) {
+      const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type');
+      const freezerLoc = locs?.find((l: any) => l.location_type === 'main_freezer');
+      const prodLoc = locs?.find((l: any) => l.location_type === 'production');
+
+      if (freezerLoc && prodLoc) {
+        const movementsToInsert = batch.items
+          .filter((it: any) => (it.saleable_quantity || 0) > 0)
+          .map((it: any) => ({
+            movement_date: new Date().toISOString(),
+            product_id: it.product_id,
+            source_location_id: freezerLoc.id,
+            destination_location_id: prodLoc.id,
+            quantity: it.saleable_quantity,
+            movement_type: 'production_reversal',
+            reference_table: 'production_batches',
+            reference_id: batch.id,
+            notes: `Stock reversal for deleted production batch ${batch.batch_number}: ${reason}`,
+            created_by: userId,
+          }));
+
+        if (movementsToInsert.length > 0) {
+          await (supabase as any).from('stock_movements').insert(movementsToInsert);
+        }
+      }
+    }
+
+    await (supabase as any).from('production_batch_ingredients').delete().eq('batch_id', batchId);
+    await (supabase as any).from('production_items').delete().eq('batch_id', batchId);
+    const { error: delErr } = await (supabase as any).from('production_batches').delete().eq('id', batchId);
+    if (delErr) throw delErr;
+
+    return { success: true, message: 'Production batch deleted successfully' };
   },
 
   async updateDraftProductionBatch(
@@ -527,15 +571,82 @@ export const api = {
         p_reason: reason,
         p_user_id: userId,
       });
-      if (error) {
-        console.warn('RPC correct_completed_production failed, using fallback:', error);
-        return mockStore.correctProductionBatch(batchId, productionDate, totalIngredientCost, notes, items, reason, userId);
+      if (!error && data) {
+        return data;
       }
-      return data;
+      console.warn('RPC correct_completed_production failed, attempting direct Supabase revision:', error);
     } catch (err) {
-      console.warn('RPC correct_completed_production error, using fallback:', err);
+      console.warn('RPC correct_completed_production error, attempting direct Supabase revision:', err);
+    }
+
+    // Direct Supabase revision fallback
+    const { data: oldBatch } = await (supabase as any)
+      .from('production_batches')
+      .select('*, items:production_items(*)')
+      .eq('id', batchId)
+      .maybeSingle();
+
+    if (!oldBatch) {
       return mockStore.correctProductionBatch(batchId, productionDate, totalIngredientCost, notes, items, reason, userId);
     }
+
+    const nextVersion = (oldBatch.version_number || 1) + 1;
+    const baseNumber = (oldBatch.batch_number || 'BATCH').replace(/-V\d+$/, '').replace(/-R\d+$/, '');
+    const newBatchNumber = `${baseNumber}-R${nextVersion}`;
+
+    const { data: newBatch, error: nErr } = await (supabase as any)
+      .from('production_batches')
+      .insert({
+        batch_number: newBatchNumber,
+        production_date: productionDate,
+        status: 'completed',
+        total_ingredient_cost: totalIngredientCost,
+        notes: notes || null,
+        version_number: nextVersion,
+        is_current_version: true,
+        correction_of_id: batchId,
+        correction_reason: reason,
+        corrected_by: userId,
+        corrected_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+        created_by: oldBatch.created_by,
+      })
+      .select()
+      .single();
+
+    if (nErr || !newBatch) throw nErr || new Error('Failed to create revised production batch');
+
+    const totalSaleable = items.reduce((sum, it) => sum + (it.produced_quantity - (it.damaged_quantity || 0)), 0);
+    const itemsToInsert = items.map((it) => {
+      const saleable = it.produced_quantity - (it.damaged_quantity || 0);
+      const allocatedCost = totalSaleable > 0 ? (totalIngredientCost * saleable) / totalSaleable : 0;
+      const unitCost = saleable > 0 ? allocatedCost / saleable : 0;
+      return {
+        batch_id: newBatch.id,
+        product_id: it.product_id,
+        produced_quantity: it.produced_quantity,
+        damaged_quantity: it.damaged_quantity || 0,
+        saleable_quantity: saleable,
+        allocated_ingredient_cost: Number(allocatedCost.toFixed(2)),
+        unit_production_cost: Number(unitCost.toFixed(2)),
+        notes: it.notes || null,
+      };
+    });
+
+    await (supabase as any).from('production_items').insert(itemsToInsert);
+
+    // Mark old batch superseded
+    await (supabase as any)
+      .from('production_batches')
+      .update({
+        status: 'superseded',
+        is_current_version: false,
+        superseded_by_id: newBatch.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', batchId);
+
+    return newBatch;
   },
 
   async getProductionRevisionHistory(batchId: string): Promise<RevisionRecord[]> {
@@ -1048,15 +1159,74 @@ export const api = {
         p_reason: reason,
         p_user_id: userId,
       });
-      if (error) {
-        console.warn('RPC correct_issued_stock failed, using fallback:', error);
-        return mockStore.correctSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, reason, userId);
+      if (!error && data) {
+        return data;
       }
-      return data;
+      console.warn('RPC correct_issued_stock failed, attempting direct Supabase revision:', error);
     } catch (err) {
-      console.warn('RPC correct_issued_stock error, using fallback:', err);
+      console.warn('RPC correct_issued_stock error, attempting direct Supabase revision:', err);
+    }
+
+    // Direct Supabase revision fallback
+    const { data: oldIssue } = await (supabase as any)
+      .from('seller_issues')
+      .select('*, items:seller_issue_items(*)')
+      .eq('id', issueId)
+      .maybeSingle();
+
+    if (!oldIssue) {
       return mockStore.correctSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, reason, userId);
     }
+
+    const nextVersion = (oldIssue.version_number || 1) + 1;
+    const baseNumber = (oldIssue.issue_number || 'ISSUE').replace(/-V\d+$/, '').replace(/-R\d+$/, '');
+    const newIssueNumber = `${baseNumber}-R${nextVersion}`;
+
+    const { data: newIssue, error: nErr } = await (supabase as any)
+      .from('seller_issues')
+      .insert({
+        issue_number: newIssueNumber,
+        issue_date: issueDate,
+        seller_id: sellerId,
+        cart_id: cartId || oldIssue.cart_id,
+        status: 'issued',
+        notes: notes || null,
+        version_number: nextVersion,
+        is_current_version: true,
+        correction_of_id: issueId,
+        correction_reason: reason,
+        corrected_by: userId,
+        corrected_at: new Date().toISOString(),
+        created_by: oldIssue.created_by,
+      })
+      .select()
+      .single();
+
+    if (nErr || !newIssue) throw nErr || new Error('Failed to create revised seller issue');
+
+    const itemsToInsert = items.map((it) => ({
+      seller_issue_id: newIssue.id,
+      product_id: it.product_id,
+      issued_quantity: it.issued_quantity,
+      unit_selling_price_snapshot: 0,
+      commission_type_snapshot: 'fixed',
+      commission_value_snapshot: 0,
+    }));
+
+    await (supabase as any).from('seller_issue_items').insert(itemsToInsert);
+
+    // Mark old issue superseded
+    await (supabase as any)
+      .from('seller_issues')
+      .update({
+        status: 'superseded',
+        is_current_version: false,
+        superseded_by_id: newIssue.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', issueId);
+
+    return newIssue;
   },
 
   async deleteSellerIssue(issueId: string, reason: string = 'Deleted by Owner', userId: string = 'usr-owner-001'): Promise<{ success: boolean; message: string }> {
@@ -1069,15 +1239,68 @@ export const api = {
         p_reason: reason,
         p_user_id: userId,
       });
-      if (error) {
-        console.warn('RPC delete_seller_issue_transaction failed, using fallback:', error);
-        return mockStore.deleteSellerIssue(issueId, reason, userId);
+      if (!error && data) {
+        return data;
       }
-      return data || { success: true, message: 'Stock issue deleted successfully' };
+      console.warn('RPC delete_seller_issue_transaction failed or not installed, executing direct Supabase deletion:', error);
     } catch (err) {
-      console.warn('deleteSellerIssue error, using fallback:', err);
+      console.warn('deleteSellerIssue RPC error, executing direct Supabase deletion:', err);
+    }
+
+    // Direct Supabase fallback
+    const { data: issue } = await (supabase as any)
+      .from('seller_issues')
+      .select('*, items:seller_issue_items(*)')
+      .eq('id', issueId)
+      .maybeSingle();
+
+    if (!issue) {
       return mockStore.deleteSellerIssue(issueId, reason, userId);
     }
+
+    // Check if settlements exist
+    const { data: settlements } = await (supabase as any)
+      .from('seller_settlements')
+      .select('id, status')
+      .or(`seller_issue_id.eq.${issueId},issue_id.eq.${issueId}`)
+      .not('status', 'in', '("cancelled","rejected","superseded")');
+
+    if (settlements && settlements.length > 0) {
+      throw new Error('इस स्टॉक निकासी को नहीं हटाया जा सकता क्योंकि इसके विरुद्ध हिसाब (Settlement) दर्ज है। पहले हिसाब को हटाएं।');
+    }
+
+    if (issue.status === 'issued' && issue.items && issue.items.length > 0) {
+      const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type, seller_id');
+      const freezerLoc = locs?.find((l: any) => l.location_type === 'main_freezer');
+      const sellerLoc = locs?.find((l: any) => l.location_type === 'seller' && l.seller_id === issue.seller_id);
+
+      if (freezerLoc && sellerLoc) {
+        const movementsToInsert = issue.items
+          .filter((it: any) => (it.issued_quantity || 0) > 0)
+          .map((it: any) => ({
+            movement_date: new Date().toISOString(),
+            product_id: it.product_id,
+            source_location_id: sellerLoc.id,
+            destination_location_id: freezerLoc.id,
+            quantity: it.issued_quantity,
+            movement_type: 'issue_reversal',
+            reference_table: 'seller_issues',
+            reference_id: issue.id,
+            notes: `Stock reversal for deleted stock issue ${issue.issue_number}: ${reason}`,
+            created_by: userId,
+          }));
+
+        if (movementsToInsert.length > 0) {
+          await (supabase as any).from('stock_movements').insert(movementsToInsert);
+        }
+      }
+    }
+
+    await (supabase as any).from('seller_issue_items').delete().eq('seller_issue_id', issueId);
+    const { error: delErr } = await (supabase as any).from('seller_issues').delete().eq('id', issueId);
+    if (delErr) throw delErr;
+
+    return { success: true, message: 'Stock issue deleted successfully' };
   },
 
   async getIssueRevisionHistory(issueId: string): Promise<RevisionRecord[]> {
@@ -1262,15 +1485,67 @@ export const api = {
         p_reason: reason,
         p_user_id: userId,
       });
-      if (error) {
-        console.warn('RPC correct_approved_settlement failed, using fallback:', error);
-        return mockStore.correctApprovedSettlement(settlementId, settlementDate, cashReceived, upiReceived, creditAmount, items, notes, reason, userId);
+      if (!error && data) {
+        return data;
       }
-      return data;
+      console.warn('RPC correct_approved_settlement failed, attempting direct Supabase revision:', error);
     } catch (err) {
-      console.warn('RPC correct_approved_settlement error, using fallback:', err);
+      console.warn('RPC correct_approved_settlement error, attempting direct Supabase revision:', err);
+    }
+
+    // Direct Supabase revision fallback
+    const { data: oldSettlement } = await (supabase as any)
+      .from('seller_settlements')
+      .select('*, items:settlement_items(*)')
+      .eq('id', settlementId)
+      .maybeSingle();
+
+    if (!oldSettlement) {
       return mockStore.correctApprovedSettlement(settlementId, settlementDate, cashReceived, upiReceived, creditAmount, items, notes, reason, userId);
     }
+
+    const nextVersion = (oldSettlement.version_number || 1) + 1;
+    const baseNumber = (oldSettlement.settlement_number || 'SETTLEMENT').replace(/-V\d+$/, '').replace(/-R\d+$/, '');
+    const newSettlementNumber = `${baseNumber}-R${nextVersion}`;
+
+    const { data: newSettlement, error: nErr } = await (supabase as any)
+      .from('seller_settlements')
+      .insert({
+        settlement_number: newSettlementNumber,
+        settlement_date: settlementDate,
+        seller_id: oldSettlement.seller_id,
+        seller_issue_id: oldSettlement.seller_issue_id,
+        status: 'approved',
+        cash_received: cashReceived,
+        upi_received: upiReceived,
+        credit_amount: creditAmount,
+        notes: notes || null,
+        version_number: nextVersion,
+        is_current_version: true,
+        correction_of_id: settlementId,
+        correction_reason: reason,
+        corrected_by: userId,
+        corrected_at: new Date().toISOString(),
+        approved_by: userId,
+        approved_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (nErr || !newSettlement) throw nErr || new Error('Failed to create revised settlement');
+
+    // Mark old settlement superseded
+    await (supabase as any)
+      .from('seller_settlements')
+      .update({
+        status: 'superseded',
+        is_current_version: false,
+        superseded_by_id: newSettlement.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', settlementId);
+
+    return newSettlement;
   },
 
   async deleteSellerSettlement(settlementId: string, reason: string = 'Deleted by Owner', userId: string = 'usr-owner-001'): Promise<{ success: boolean; message: string }> {
@@ -1283,15 +1558,98 @@ export const api = {
         p_reason: reason,
         p_user_id: userId,
       });
-      if (error) {
-        console.warn('RPC delete_seller_settlement_transaction failed, using fallback:', error);
-        return mockStore.deleteSellerSettlement(settlementId, reason, userId);
+      if (!error && data) {
+        return data;
       }
-      return data || { success: true, message: 'Settlement deleted successfully' };
+      console.warn('RPC delete_seller_settlement_transaction failed or not installed, executing direct Supabase deletion:', error);
     } catch (err) {
-      console.warn('deleteSellerSettlement error, using fallback:', err);
+      console.warn('deleteSellerSettlement RPC error, executing direct Supabase deletion:', err);
+    }
+
+    // Direct Supabase fallback
+    const { data: settlement } = await (supabase as any)
+      .from('seller_settlements')
+      .select('*, items:settlement_items(*)')
+      .eq('id', settlementId)
+      .maybeSingle();
+
+    if (!settlement) {
       return mockStore.deleteSellerSettlement(settlementId, reason, userId);
     }
+
+    if (settlement.status === 'approved' && settlement.items && settlement.items.length > 0) {
+      const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type, seller_id');
+      const freezerLoc = locs?.find((l: any) => l.location_type === 'main_freezer');
+      const sellerLoc = locs?.find((l: any) => l.location_type === 'seller' && l.seller_id === settlement.seller_id);
+      const damagedLoc = locs?.find((l: any) => l.location_type === 'damaged');
+      const compLoc = locs?.find((l: any) => l.location_type === 'complimentary');
+
+      if (freezerLoc && sellerLoc) {
+        const movementsToInsert: any[] = [];
+        const now = new Date().toISOString();
+
+        for (const it of settlement.items) {
+          if ((it.returned_quantity || 0) > 0) {
+            movementsToInsert.push({
+              movement_date: now,
+              product_id: it.product_id,
+              source_location_id: freezerLoc.id,
+              destination_location_id: sellerLoc.id,
+              quantity: it.returned_quantity,
+              movement_type: 'settlement_reversal',
+              reference_table: 'seller_settlements',
+              reference_id: settlement.id,
+              notes: `Stock reversal for deleted settlement ${settlement.settlement_number}: returned pieces moved back to seller cart`,
+              created_by: userId,
+            });
+          }
+          if ((it.damaged_quantity || 0) > 0 && damagedLoc) {
+            movementsToInsert.push({
+              movement_date: now,
+              product_id: it.product_id,
+              source_location_id: damagedLoc.id,
+              destination_location_id: sellerLoc.id,
+              quantity: it.damaged_quantity,
+              movement_type: 'settlement_reversal',
+              reference_table: 'seller_settlements',
+              reference_id: settlement.id,
+              notes: `Stock reversal for deleted settlement ${settlement.settlement_number}: damaged pieces reversed`,
+              created_by: userId,
+            });
+          }
+          if ((it.complimentary_quantity || 0) > 0 && compLoc) {
+            movementsToInsert.push({
+              movement_date: now,
+              product_id: it.product_id,
+              source_location_id: compLoc.id,
+              destination_location_id: sellerLoc.id,
+              quantity: it.complimentary_quantity,
+              movement_type: 'settlement_reversal',
+              reference_table: 'seller_settlements',
+              reference_id: settlement.id,
+              notes: `Stock reversal for deleted settlement ${settlement.settlement_number}: complimentary pieces reversed`,
+              created_by: userId,
+            });
+          }
+        }
+
+        if (movementsToInsert.length > 0) {
+          await (supabase as any).from('stock_movements').insert(movementsToInsert);
+        }
+      }
+
+      // Reopen linked issue
+      const issueId = settlement.seller_issue_id || settlement.issue_id;
+      if (issueId) {
+        await (supabase as any).from('seller_issues').update({ status: 'issued', updated_at: new Date().toISOString() }).eq('id', issueId);
+      }
+    }
+
+    await (supabase as any).from('settlement_items').delete().eq('settlement_id', settlementId);
+    const { error: delErr } = await (supabase as any).from('seller_settlements').delete().eq('id', settlementId);
+    if (delErr) throw delErr;
+
+    return { success: true, message: 'Settlement deleted successfully' };
   },
 
   async getSettlementRevisionHistory(settlementId: string): Promise<RevisionRecord[]> {
