@@ -1,9 +1,11 @@
 -- Janki Kulfi Management Schema Migration 008
 -- Production Cost Calculator: Ingredient Master, Recipe Master, Overheads & Atomic Costing Transactions
 
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
 -- 1. Ingredients Master Table
 CREATE TABLE IF NOT EXISTS ingredients (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   code TEXT UNIQUE NOT NULL,
   name_en TEXT NOT NULL,
   name_hi TEXT NOT NULL,
@@ -18,7 +20,7 @@ CREATE TABLE IF NOT EXISTS ingredients (
 
 -- 2. Ingredient Price History Table
 CREATE TABLE IF NOT EXISTS ingredient_prices (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   ingredient_id UUID NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
   rate NUMERIC(12,2) NOT NULL CHECK (rate >= 0),
   unit TEXT NOT NULL,
@@ -30,7 +32,7 @@ CREATE TABLE IF NOT EXISTS ingredient_prices (
 
 -- 3. Recipes Table
 CREATE TABLE IF NOT EXISTS recipes (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   version_number INTEGER NOT NULL DEFAULT 1,
   name TEXT NOT NULL DEFAULT 'Standard Recipe',
@@ -47,7 +49,7 @@ CREATE TABLE IF NOT EXISTS recipes (
 
 -- 4. Recipe Items Table
 CREATE TABLE IF NOT EXISTS recipe_items (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   recipe_id UUID NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
   ingredient_id UUID NOT NULL REFERENCES ingredients(id) ON DELETE RESTRICT,
   quantity NUMERIC(12,3) NOT NULL CHECK (quantity >= 0),
@@ -59,7 +61,7 @@ CREATE TABLE IF NOT EXISTS recipe_items (
 
 -- 5. Production Batch Ingredients (Permanent Snapshots for Historical Audit)
 CREATE TABLE IF NOT EXISTS production_batch_ingredients (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   batch_id UUID NOT NULL REFERENCES production_batches(id) ON DELETE CASCADE,
   ingredient_id UUID REFERENCES ingredients(id) ON DELETE SET NULL,
   ingredient_name TEXT NOT NULL,
@@ -103,83 +105,97 @@ ALTER TABLE recipes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE recipe_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE production_batch_ingredients ENABLE ROW LEVEL SECURITY;
 
--- Ingredients Policies
-CREATE POLICY "Production workers and owners can view ingredients"
-  ON ingredients FOR SELECT
-  TO authenticated
-  USING (is_production_or_owner());
+-- Helper policies creation (Drop old if exist to avoid conflicts on re-run)
+DO $$
+BEGIN
+  -- Ingredients Policies
+  DROP POLICY IF EXISTS "Production workers and owners can view ingredients" ON ingredients;
+  CREATE POLICY "Production workers and owners can view ingredients"
+    ON ingredients FOR SELECT
+    TO authenticated
+    USING (is_production_or_owner());
 
-CREATE POLICY "Owners can manage ingredients"
-  ON ingredients FOR ALL
-  TO authenticated
-  USING (is_owner())
-  WITH CHECK (is_owner());
+  DROP POLICY IF EXISTS "Owners can manage ingredients" ON ingredients;
+  CREATE POLICY "Owners can manage ingredients"
+    ON ingredients FOR ALL
+    TO authenticated
+    USING (is_owner())
+    WITH CHECK (is_owner());
 
--- Ingredient Prices Policies
-CREATE POLICY "Production workers and owners can view ingredient prices"
-  ON ingredient_prices FOR SELECT
-  TO authenticated
-  USING (is_production_or_owner());
+  -- Ingredient Prices Policies
+  DROP POLICY IF EXISTS "Production workers and owners can view ingredient prices" ON ingredient_prices;
+  CREATE POLICY "Production workers and owners can view ingredient prices"
+    ON ingredient_prices FOR SELECT
+    TO authenticated
+    USING (is_production_or_owner());
 
-CREATE POLICY "Owners can manage ingredient prices"
-  ON ingredient_prices FOR ALL
-  TO authenticated
-  USING (is_owner())
-  WITH CHECK (is_owner());
+  DROP POLICY IF EXISTS "Owners can manage ingredient prices" ON ingredient_prices;
+  CREATE POLICY "Owners can manage ingredient prices"
+    ON ingredient_prices FOR ALL
+    TO authenticated
+    USING (is_owner())
+    WITH CHECK (is_owner());
 
--- Recipes Policies
-CREATE POLICY "Production workers and owners can view recipes"
-  ON recipes FOR SELECT
-  TO authenticated
-  USING (is_production_or_owner());
+  -- Recipes Policies
+  DROP POLICY IF EXISTS "Production workers and owners can view recipes" ON recipes;
+  CREATE POLICY "Production workers and owners can view recipes"
+    ON recipes FOR SELECT
+    TO authenticated
+    USING (is_production_or_owner());
 
-CREATE POLICY "Owners can manage recipes"
-  ON recipes FOR ALL
-  TO authenticated
-  USING (is_owner())
-  WITH CHECK (is_owner());
+  DROP POLICY IF EXISTS "Owners can manage recipes" ON recipes;
+  CREATE POLICY "Owners can manage recipes"
+    ON recipes FOR ALL
+    TO authenticated
+    USING (is_owner())
+    WITH CHECK (is_owner());
 
--- Recipe Items Policies
-CREATE POLICY "Production workers and owners can view recipe items"
-  ON recipe_items FOR SELECT
-  TO authenticated
-  USING (is_production_or_owner());
+  -- Recipe Items Policies
+  DROP POLICY IF EXISTS "Production workers and owners can view recipe items" ON recipe_items;
+  CREATE POLICY "Production workers and owners can view recipe items"
+    ON recipe_items FOR SELECT
+    TO authenticated
+    USING (is_production_or_owner());
 
-CREATE POLICY "Owners can manage recipe items"
-  ON recipe_items FOR ALL
-  TO authenticated
-  USING (is_owner())
-  WITH CHECK (is_owner());
+  DROP POLICY IF EXISTS "Owners can manage recipe items" ON recipe_items;
+  CREATE POLICY "Owners can manage recipe items"
+    ON recipe_items FOR ALL
+    TO authenticated
+    USING (is_owner())
+    WITH CHECK (is_owner());
 
--- Production Batch Ingredients Policies
-CREATE POLICY "Production workers and owners can view batch ingredients"
-  ON production_batch_ingredients FOR SELECT
-  TO authenticated
-  USING (is_production_or_owner());
+  -- Production Batch Ingredients Policies
+  DROP POLICY IF EXISTS "Production workers and owners can view batch ingredients" ON production_batch_ingredients;
+  CREATE POLICY "Production workers and owners can view batch ingredients"
+    ON production_batch_ingredients FOR SELECT
+    TO authenticated
+    USING (is_production_or_owner());
 
-CREATE POLICY "Production workers and owners can insert batch ingredients"
-  ON production_batch_ingredients FOR ALL
-  TO authenticated
-  USING (is_production_or_owner())
-  WITH CHECK (is_production_or_owner());
+  DROP POLICY IF EXISTS "Production workers and owners can insert batch ingredients" ON production_batch_ingredients;
+  CREATE POLICY "Production workers and owners can insert batch ingredients"
+    ON production_batch_ingredients FOR ALL
+    TO authenticated
+    USING (is_production_or_owner())
+    WITH CHECK (is_production_or_owner());
+END $$;
 
--- 9. Seed 14 Standard Ingredients
-INSERT INTO ingredients (id, code, name_en, name_hi, category, base_unit, current_rate, rate_unit, is_active)
+-- 9. Seed 14 Standard Ingredients (Using auto-generated UUIDs)
+INSERT INTO ingredients (code, name_en, name_hi, category, base_unit, current_rate, rate_unit, is_active)
 VALUES
-  ('ing-milk-01', 'ING-MILK', 'Milk', 'दूध', 'dairy', 'litre', 60.00, 'litre', true),
-  ('ing-sug-02', 'ING-SUGAR', 'Sugar', 'चीनी', 'sweetener', 'kg', 48.00, 'kg', true),
-  ('ing-khoy-03', 'ING-KHOYA', 'Khoya', 'खोया / मावा', 'dairy', 'kg', 320.00, 'kg', true),
-  ('ing-cash-04', 'ING-CASHEW', 'Cashew', 'काजू', 'dry_fruit', 'kg', 800.00, 'kg', true),
-  ('ing-pist-05', 'ING-PISTA', 'Pistachio', 'पिस्ता', 'dry_fruit', 'kg', 1200.00, 'kg', true),
-  ('ing-almd-06', 'ING-ALMOND', 'Almond', 'बादाम', 'dry_fruit', 'kg', 750.00, 'kg', true),
-  ('ing-cust-07', 'ING-CUSTARD', 'Custard powder', 'कस्टर्ड पाउडर', 'flavoring', 'kg', 160.00, 'kg', true),
-  ('ing-card-08', 'ING-CARDAMOM', 'Cardamom', 'इलायची', 'spice', 'kg', 2400.00, 'kg', true),
-  ('ing-saff-09', 'ING-SAFFRON', 'Saffron', 'केसर', 'spice', 'gram', 250.00, 'gram', true),
-  ('ing-flav-10', 'ING-FLAVOUR', 'Flavour', 'फ्लेवर', 'flavoring', 'ml', 1.50, 'ml', true),
-  ('ing-stk-11', 'ING-STICK', 'Kulfi stick', 'कुल्फी स्टिक', 'packaging', 'piece', 0.30, 'piece', true),
-  ('ing-wrp-12', 'ING-WRAPPER', 'Wrapper', 'रैपर', 'packaging', 'piece', 0.40, 'piece', true),
-  ('ing-pck-13', 'ING-POUCH', 'Pouch/packing', 'पैकिंग', 'packaging', 'piece', 0.50, 'piece', true),
-  ('ing-oth-14', 'ING-OTHER', 'Other ingredient', 'अन्य सामग्री', 'other', 'kg', 100.00, 'kg', true)
+  ('ING-MILK', 'Milk', 'दूध', 'dairy', 'litre', 60.00, 'litre', true),
+  ('ING-SUGAR', 'Sugar', 'चीनी', 'sweetener', 'kg', 48.00, 'kg', true),
+  ('ING-KHOYA', 'Khoya', 'खोया / मावा', 'dairy', 'kg', 320.00, 'kg', true),
+  ('ING-CASHEW', 'Cashew', 'काजू', 'dry_fruit', 'kg', 800.00, 'kg', true),
+  ('ING-PISTA', 'Pistachio', 'पिस्ता', 'dry_fruit', 'kg', 1200.00, 'kg', true),
+  ('ING-ALMOND', 'Almond', 'बादाम', 'dry_fruit', 'kg', 750.00, 'kg', true),
+  ('ING-CUSTARD', 'Custard powder', 'कस्टर्ड पाउडर', 'flavoring', 'kg', 160.00, 'kg', true),
+  ('ING-CARDAMOM', 'Cardamom', 'इलायची', 'spice', 'kg', 2400.00, 'kg', true),
+  ('ING-SAFFRON', 'Saffron', 'केसर', 'spice', 'g', 250.00, 'g', true),
+  ('ING-FLAVOUR', 'Flavour', 'फ्लेवर', 'flavoring', 'ml', 1.50, 'ml', true),
+  ('ING-STICK', 'Kulfi stick', 'कुल्फी स्टिक', 'packaging', 'piece', 0.30, 'piece', true),
+  ('ING-WRAPPER', 'Wrapper', 'रैपर', 'packaging', 'piece', 0.40, 'piece', true),
+  ('ING-POUCH', 'Pouch/packing', 'पैकिंग', 'packaging', 'piece', 0.50, 'piece', true),
+  ('ING-OTHER', 'Other ingredient', 'अन्य सामग्री', 'other', 'kg', 100.00, 'kg', true)
 ON CONFLICT (code) DO UPDATE SET
   name_en = EXCLUDED.name_en,
   name_hi = EXCLUDED.name_hi,
@@ -188,29 +204,119 @@ ON CONFLICT (code) DO UPDATE SET
   current_rate = EXCLUDED.current_rate,
   rate_unit = EXCLUDED.rate_unit;
 
--- 10. Atomic Costing Production Batch RPC
+-- 10. Dynamically Link and Seed Default Recipes for Existing Kulfi Products
+DO $$
+DECLARE
+  v_sada_id UUID;
+  v_rabri_id UUID;
+  v_prem_id UUID;
+  v_rec_id UUID;
+  v_ing_milk UUID;
+  v_ing_sugar UUID;
+  v_ing_khoya UUID;
+  v_ing_cashew UUID;
+  v_ing_pista UUID;
+  v_ing_almond UUID;
+  v_ing_saffron UUID;
+  v_ing_cardamom UUID;
+  v_ing_stick UUID;
+  v_ing_wrapper UUID;
+  v_ing_pouch UUID;
+BEGIN
+  -- Get product IDs from products table
+  SELECT id INTO v_sada_id FROM products WHERE name_en ILIKE '%Sada%' OR name_hi LIKE '%सादा%' LIMIT 1;
+  SELECT id INTO v_rabri_id FROM products WHERE name_en ILIKE '%Rabri%' OR name_hi LIKE '%रबड़ी%' OR name_hi LIKE '%रबड़ी%' LIMIT 1;
+  SELECT id INTO v_prem_id FROM products WHERE name_en ILIKE '%Premium%' OR name_hi LIKE '%प्रीमियम%' LIMIT 1;
+
+  -- Get ingredient IDs
+  SELECT id INTO v_ing_milk FROM ingredients WHERE code = 'ING-MILK';
+  SELECT id INTO v_ing_sugar FROM ingredients WHERE code = 'ING-SUGAR';
+  SELECT id INTO v_ing_khoya FROM ingredients WHERE code = 'ING-KHOYA';
+  SELECT id INTO v_ing_cashew FROM ingredients WHERE code = 'ING-CASHEW';
+  SELECT id INTO v_ing_pista FROM ingredients WHERE code = 'ING-PISTA';
+  SELECT id INTO v_ing_almond FROM ingredients WHERE code = 'ING-ALMOND';
+  SELECT id INTO v_ing_saffron FROM ingredients WHERE code = 'ING-SAFFRON';
+  SELECT id INTO v_ing_cardamom FROM ingredients WHERE code = 'ING-CARDAMOM';
+  SELECT id INTO v_ing_stick FROM ingredients WHERE code = 'ING-STICK';
+  SELECT id INTO v_ing_wrapper FROM ingredients WHERE code = 'ING-WRAPPER';
+  SELECT id INTO v_ing_pouch FROM ingredients WHERE code = 'ING-POUCH';
+
+  -- 1. Default Recipe for ₹10 Sada Kulfi
+  IF v_sada_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM recipes WHERE product_id = v_sada_id) THEN
+    INSERT INTO recipes (product_id, version_number, name, standard_output_pieces, default_overheads, is_default)
+    VALUES (v_sada_id, 1, 'Standard Sada 100 pcs', 100, '{"gas":50,"direct_labour":60,"electricity":20,"transport":10,"other":10}'::jsonb, true)
+    RETURNING id INTO v_rec_id;
+
+    IF v_ing_milk IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_milk, 10, 'litre', 1); END IF;
+    IF v_ing_sugar IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_sugar, 1.2, 'kg', 2); END IF;
+    IF v_ing_khoya IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_khoya, 0.5, 'kg', 3); END IF;
+    IF v_ing_cardamom IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_cardamom, 15, 'g', 4); END IF;
+    IF v_ing_stick IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_stick, 100, 'piece', 5); END IF;
+    IF v_ing_wrapper IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_wrapper, 100, 'piece', 6); END IF;
+    IF v_ing_pouch IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_pouch, 100, 'piece', 7); END IF;
+  END IF;
+
+  -- 2. Default Recipe for ₹20 Rabri Kulfi
+  IF v_rabri_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM recipes WHERE product_id = v_rabri_id) THEN
+    INSERT INTO recipes (product_id, version_number, name, standard_output_pieces, default_overheads, is_default)
+    VALUES (v_rabri_id, 1, 'Standard Rabri 100 pcs', 100, '{"gas":70,"direct_labour":80,"electricity":30,"transport":10,"other":10}'::jsonb, true)
+    RETURNING id INTO v_rec_id;
+
+    IF v_ing_milk IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_milk, 15, 'litre', 1); END IF;
+    IF v_ing_sugar IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_sugar, 1.8, 'kg', 2); END IF;
+    IF v_ing_khoya IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_khoya, 1.5, 'kg', 3); END IF;
+    IF v_ing_cashew IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_cashew, 150, 'g', 4); END IF;
+    IF v_ing_pista IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_pista, 100, 'g', 5); END IF;
+    IF v_ing_cardamom IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_cardamom, 25, 'g', 6); END IF;
+    IF v_ing_stick IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_stick, 100, 'piece', 7); END IF;
+    IF v_ing_wrapper IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_wrapper, 100, 'piece', 8); END IF;
+    IF v_ing_pouch IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_pouch, 100, 'piece', 9); END IF;
+  END IF;
+
+  -- 3. Default Recipe for ₹40 Premium Kulfi
+  IF v_prem_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM recipes WHERE product_id = v_prem_id) THEN
+    INSERT INTO recipes (product_id, version_number, name, standard_output_pieces, default_overheads, is_default)
+    VALUES (v_prem_id, 1, 'Standard Premium 100 pcs', 100, '{"gas":90,"direct_labour":100,"electricity":40,"transport":15,"other":15}'::jsonb, true)
+    RETURNING id INTO v_rec_id;
+
+    IF v_ing_milk IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_milk, 20, 'litre', 1); END IF;
+    IF v_ing_sugar IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_sugar, 2.5, 'kg', 2); END IF;
+    IF v_ing_khoya IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_khoya, 3.0, 'kg', 3); END IF;
+    IF v_ing_cashew IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_cashew, 300, 'g', 4); END IF;
+    IF v_ing_pista IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_pista, 250, 'g', 5); END IF;
+    IF v_ing_almond IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_almond, 300, 'g', 6); END IF;
+    IF v_ing_saffron IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_saffron, 2, 'g', 7); END IF;
+    IF v_ing_cardamom IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_cardamom, 40, 'g', 8); END IF;
+    IF v_ing_stick IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_stick, 100, 'piece', 9); END IF;
+    IF v_ing_wrapper IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_wrapper, 100, 'piece', 10); END IF;
+    IF v_ing_pouch IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rec_id, v_ing_pouch, 100, 'piece', 11); END IF;
+  END IF;
+END $$;
+
+-- 11. Atomic Costing Production Batch RPC
 CREATE OR REPLACE FUNCTION create_production_costing_batch_transaction(
   p_date DATE,
   p_product_id UUID,
-  p_recipe_id UUID,
-  p_produced_qty INTEGER,
-  p_damaged_qty INTEGER,
-  p_total_ingredient_cost NUMERIC(12,2),
-  p_overhead_costs JSONB,
-  p_total_batch_cost NUMERIC(12,2),
-  p_cost_per_piece NUMERIC(12,2),
-  p_expected_sales NUMERIC(12,2),
-  p_gross_profit NUMERIC(12,2),
-  p_gross_margin NUMERIC(6,2),
-  p_ingredients JSONB,
-  p_notes TEXT,
-  p_user_id UUID
+  p_recipe_id UUID DEFAULT NULL,
+  p_produced_qty INTEGER DEFAULT 0,
+  p_damaged_qty INTEGER DEFAULT 0,
+  p_total_ingredient_cost NUMERIC(12,2) DEFAULT 0.00,
+  p_overhead_costs JSONB DEFAULT '{}'::jsonb,
+  p_total_batch_cost NUMERIC(12,2) DEFAULT 0.00,
+  p_cost_per_piece NUMERIC(12,2) DEFAULT 0.00,
+  p_expected_sales NUMERIC(12,2) DEFAULT 0.00,
+  p_gross_profit NUMERIC(12,2) DEFAULT 0.00,
+  p_gross_margin NUMERIC(6,2) DEFAULT 0.00,
+  p_ingredients JSONB DEFAULT '[]'::jsonb,
+  p_notes TEXT DEFAULT '',
+  p_user_id UUID DEFAULT NULL
 ) RETURNS JSONB AS $$
 DECLARE
   v_batch_id UUID;
   v_batch_number TEXT;
   v_saleable_qty INTEGER;
   v_ing JSONB;
+  v_ing_id UUID;
   v_prod_loc_id UUID;
   v_freezer_loc_id UUID;
 BEGIN
@@ -288,6 +394,12 @@ BEGIN
   -- Store ingredient snapshots
   IF p_ingredients IS NOT NULL AND jsonb_array_length(p_ingredients) > 0 THEN
     FOR v_ing IN SELECT * FROM jsonb_array_elements(p_ingredients) LOOP
+      -- Safely parse UUID
+      v_ing_id := NULL;
+      IF (v_ing->>'ingredient_id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+        v_ing_id := (v_ing->>'ingredient_id')::UUID;
+      END IF;
+
       INSERT INTO production_batch_ingredients (
         batch_id,
         ingredient_id,
@@ -301,13 +413,13 @@ BEGIN
         is_packaging
       ) VALUES (
         v_batch_id,
-        (v_ing->>'ingredient_id')::UUID,
-        v_ing->>'ingredient_name',
+        v_ing_id,
+        COALESCE(v_ing->>'ingredient_name', 'Ingredient'),
         COALESCE((v_ing->>'quantity_used')::NUMERIC, 0),
-        v_ing->>'unit',
+        COALESCE(v_ing->>'unit', 'kg'),
         COALESCE((v_ing->>'converted_base_quantity')::NUMERIC, 0),
         COALESCE((v_ing->>'rate_snapshot')::NUMERIC, 0),
-        v_ing->>'rate_unit',
+        COALESCE(v_ing->>'rate_unit', 'kg'),
         COALESCE((v_ing->>'calculated_cost')::NUMERIC, 0),
         COALESCE((v_ing->>'is_packaging')::BOOLEAN, false)
       );
