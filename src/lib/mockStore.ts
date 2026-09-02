@@ -1176,6 +1176,66 @@ class MockStore {
     });
   }
 
+  public deleteProductionBatch(
+    batchId: string,
+    reason: string = 'Deleted by Owner',
+    userId: string = 'usr-owner-001'
+  ): { success: boolean; message: string } {
+    const user = this.state.profiles.find((p) => p.id === userId);
+    if (user && user.role !== 'owner') {
+      throw new Error('Access Denied: Only Owners are authorized to delete production batches.');
+    }
+
+    const batch = this.state.production_batches.find((b) => b.id === batchId);
+    if (!batch) throw new Error('Production batch not found');
+
+    if (batch.status === 'completed') {
+      const closing = this.state.daily_closings.find((c) => c.business_date === batch.production_date);
+      if (closing && closing.status === 'closed') {
+        throw new Error(`Business day (${batch.production_date}) is closed. Reopen the business day before deleting this record.`);
+      }
+
+      const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer')!;
+      const prodLoc = this.state.stock_locations.find((l) => l.location_type === 'production')!;
+      const now = new Date().toISOString();
+
+      for (const it of batch.items) {
+        const saleable = it.saleable_quantity;
+        if (saleable > 0) {
+          const availableStock = this.getAvailableFreezerStock(it.product_id);
+          if (availableStock < saleable) {
+            throw new Error(`Cannot delete batch because ${saleable} pcs of ${it.product?.name_hi || it.product?.name_en || 'product'} were produced, but only ${availableStock} pcs remain in the main freezer (stock has already been issued or sold).`);
+          }
+
+          this.state.stock_movements.push({
+            id: `mv-${generateId().slice(0, 8)}`,
+            movement_date: now,
+            product_id: it.product_id,
+            source_location_id: freezerLoc.id,
+            destination_location_id: prodLoc.id,
+            quantity: saleable,
+            movement_type: 'production_reversal',
+            reference_table: 'production_batches',
+            reference_id: batch.id,
+            notes: `Stock reversal for deleted production batch ${batch.batch_number}: ${reason}`,
+            created_by: userId,
+            created_at: now,
+          });
+        }
+      }
+    }
+
+    const old = { ...batch };
+    this.state.production_batches = this.state.production_batches.filter((b) => b.id !== batchId);
+    if (this.state.production_batch_ingredients) {
+      this.state.production_batch_ingredients = this.state.production_batch_ingredients.filter((pbi) => pbi.batch_id !== batchId);
+    }
+
+    this.logAudit('production_batches', batchId, 'DELETE_BATCH', old, null, reason, userId);
+    this.saveState();
+    return { success: true, message: 'Production batch deleted successfully' };
+  }
+
   // --- Recipe & Ingredient Master Workflow ---
   public getIngredients(): Ingredient[] {
     return (this.state.ingredients || []).filter((i) => i.is_active !== false);
@@ -1960,6 +2020,78 @@ class MockStore {
     });
   }
 
+  public deleteSellerIssue(
+    issueId: string,
+    reason: string = 'Deleted by Owner',
+    userId: string = 'usr-owner-001'
+  ): { success: boolean; message: string } {
+    const user = this.state.profiles.find((p) => p.id === userId);
+    if (user && user.role !== 'owner') {
+      throw new Error('Access Denied: Only Owners are authorized to delete stock issues.');
+    }
+
+    const issue = this.state.seller_issues.find((i) => i.id === issueId);
+    if (!issue) throw new Error('Stock issue not found');
+
+    // Check if settlement exists for this issue
+    const linkedSettlement = this.state.seller_settlements.find(
+      (s) => s.seller_issue_id === issueId && s.status !== 'superseded' && s.status !== 'rejected'
+    );
+    if (linkedSettlement) {
+      throw new Error('इस स्टॉक निकासी को नहीं हटाया जा सकता क्योंकि इसके विरुद्ध हिसाब (Settlement) दर्ज है। पहले संबंधित हिसाब को हटाएं।');
+    }
+
+    if (issue.status === 'issued') {
+      const closing = this.state.daily_closings.find((c) => c.business_date === issue.issue_date);
+      if (closing && closing.status === 'closed') {
+        throw new Error(`Business day (${issue.issue_date}) is closed. Reopen the business day before deleting this record.`);
+      }
+
+      const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer')!;
+      let sellerLoc = this.state.stock_locations.find(
+        (l) => l.location_type === 'seller' && l.seller_id === issue.seller_id
+      );
+      if (!sellerLoc) {
+        sellerLoc = {
+          id: `loc-seller-${issue.seller_id}`,
+          location_type: 'seller',
+          name: 'Seller Cart Stock',
+          seller_id: issue.seller_id,
+          cart_id: issue.cart_id || null,
+          is_active: true,
+        };
+        this.state.stock_locations.push(sellerLoc);
+      }
+
+      const now = new Date().toISOString();
+
+      for (const it of issue.items) {
+        if (it.issued_quantity > 0) {
+          this.state.stock_movements.push({
+            id: `mv-${generateId().slice(0, 8)}`,
+            movement_date: now,
+            product_id: it.product_id,
+            source_location_id: sellerLoc.id,
+            destination_location_id: freezerLoc.id,
+            quantity: it.issued_quantity,
+            movement_type: 'issue_reversal',
+            reference_table: 'seller_issues',
+            reference_id: issue.id,
+            notes: `Stock reversal for deleted issue ${issue.issue_number}: ${reason}`,
+            created_by: userId,
+            created_at: now,
+          });
+        }
+      }
+    }
+
+    const old = { ...issue };
+    this.state.seller_issues = this.state.seller_issues.filter((i) => i.id !== issueId);
+    this.logAudit('seller_issues', issueId, 'DELETE_ISSUE', old, null, reason, userId);
+    this.saveState();
+    return { success: true, message: 'Stock issue deleted successfully' };
+  }
+
   // --- Seller Settlement Workflow ---
   public getSettlements(): SellerSettlementWithDetails[] {
     return [...this.state.seller_settlements]
@@ -2619,6 +2751,111 @@ class MockStore {
         },
       };
     });
+  }
+
+  public deleteSellerSettlement(
+    settlementId: string,
+    reason: string = 'Deleted by Owner',
+    userId: string = 'usr-owner-001'
+  ): { success: boolean; message: string } {
+    const user = this.state.profiles.find((p) => p.id === userId);
+    if (user && user.role !== 'owner') {
+      throw new Error('Access Denied: Only Owners are authorized to delete settlements.');
+    }
+
+    const settlement = this.state.seller_settlements.find((s) => s.id === settlementId);
+    if (!settlement) throw new Error('Settlement not found');
+
+    if (settlement.status === 'approved') {
+      const closing = this.state.daily_closings.find((c) => c.business_date === settlement.settlement_date);
+      if (closing && closing.status === 'closed') {
+        throw new Error(`Business day (${settlement.settlement_date}) is closed. Reopen the business day before deleting this record.`);
+      }
+
+      const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer')!;
+      let sellerLoc = this.state.stock_locations.find(
+        (l) => l.location_type === 'seller' && l.seller_id === settlement.seller_id
+      );
+      if (!sellerLoc) {
+        sellerLoc = {
+          id: `loc-seller-${settlement.seller_id}`,
+          location_type: 'seller',
+          name: 'Seller Cart Stock',
+          seller_id: settlement.seller_id,
+          cart_id: (settlement as any).cart_id || null,
+          is_active: true,
+        };
+        this.state.stock_locations.push(sellerLoc);
+      }
+
+      const damagedLoc = this.state.stock_locations.find((l) => l.location_type === 'damaged')!;
+      const compLoc = this.state.stock_locations.find((l) => l.location_type === 'complimentary')!;
+      const now = new Date().toISOString();
+
+      for (const it of settlement.items) {
+        if (it.returned_quantity > 0) {
+          this.state.stock_movements.push({
+            id: `mv-${generateId().slice(0, 8)}`,
+            movement_date: now,
+            product_id: it.product_id,
+            source_location_id: freezerLoc.id,
+            destination_location_id: sellerLoc.id,
+            quantity: it.returned_quantity,
+            movement_type: 'settlement_reversal',
+            reference_table: 'seller_settlements',
+            reference_id: settlement.id,
+            notes: `Stock reversal for deleted settlement ${settlement.settlement_number}: returned pieces moved back to seller cart`,
+            created_by: userId,
+            created_at: now,
+          });
+        }
+        if (it.damaged_quantity > 0) {
+          this.state.stock_movements.push({
+            id: `mv-${generateId().slice(0, 8)}`,
+            movement_date: now,
+            product_id: it.product_id,
+            source_location_id: damagedLoc.id,
+            destination_location_id: sellerLoc.id,
+            quantity: it.damaged_quantity,
+            movement_type: 'settlement_reversal',
+            reference_table: 'seller_settlements',
+            reference_id: settlement.id,
+            notes: `Stock reversal for deleted settlement ${settlement.settlement_number}: damaged pieces reversed`,
+            created_by: userId,
+            created_at: now,
+          });
+        }
+        if (it.complimentary_quantity > 0) {
+          this.state.stock_movements.push({
+            id: `mv-${generateId().slice(0, 8)}`,
+            movement_date: now,
+            product_id: it.product_id,
+            source_location_id: compLoc.id,
+            destination_location_id: sellerLoc.id,
+            quantity: it.complimentary_quantity,
+            movement_type: 'settlement_reversal',
+            reference_table: 'seller_settlements',
+            reference_id: settlement.id,
+            notes: `Stock reversal for deleted settlement ${settlement.settlement_number}: complimentary pieces reversed`,
+            created_by: userId,
+            created_at: now,
+          });
+        }
+      }
+
+      // Reopen linked seller issue status back to 'issued'
+      const linkedIssue = this.state.seller_issues.find((i) => i.id === settlement.seller_issue_id);
+      if (linkedIssue) {
+        linkedIssue.status = 'issued';
+        linkedIssue.updated_at = now;
+      }
+    }
+
+    const old = { ...settlement };
+    this.state.seller_settlements = this.state.seller_settlements.filter((s) => s.id !== settlementId);
+    this.logAudit('seller_settlements', settlementId, 'DELETE_SETTLEMENT', old, null, reason, userId);
+    this.saveState();
+    return { success: true, message: 'Settlement deleted successfully' };
   }
 
   // --- Expenses Workflow ---

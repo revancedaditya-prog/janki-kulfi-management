@@ -153,3 +153,20 @@ export function useProductionRevisionHistory(batchId?: string) {
     enabled: !!batchId,
   });
 }
+
+export function useDeleteProductionBatch() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({ batchId, reason }: { batchId: string; reason?: string }) => {
+      return api.deleteProductionBatch(batchId, reason || 'Deleted by Owner', user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}

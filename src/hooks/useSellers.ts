@@ -257,3 +257,21 @@ export function useIssueRevisionHistory(issueId?: string) {
     enabled: !!issueId,
   });
 }
+
+export function useDeleteSellerIssue() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({ issueId, reason }: { issueId: string; reason?: string }) => {
+      return api.deleteSellerIssue(issueId, reason || 'Deleted by Owner', user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['sellers'] });
+      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}

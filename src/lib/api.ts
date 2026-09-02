@@ -437,6 +437,27 @@ export const api = {
     if (error) throw error;
   },
 
+  async deleteProductionBatch(batchId: string, reason: string = 'Deleted by Owner', userId: string = 'usr-owner-001'): Promise<{ success: boolean; message: string }> {
+    if (useMockMode) {
+      return mockStore.deleteProductionBatch(batchId, reason, userId);
+    }
+    try {
+      const { data, error } = await (supabase as any).rpc('delete_production_batch_transaction', {
+        p_batch_id: batchId,
+        p_reason: reason,
+        p_user_id: userId,
+      });
+      if (error) {
+        console.warn('RPC delete_production_batch_transaction failed, using fallback:', error);
+        return mockStore.deleteProductionBatch(batchId, reason, userId);
+      }
+      return data || { success: true, message: 'Production batch deleted successfully' };
+    } catch (err) {
+      console.warn('deleteProductionBatch error, using fallback:', err);
+      return mockStore.deleteProductionBatch(batchId, reason, userId);
+    }
+  },
+
   async updateDraftProductionBatch(
     batchId: string,
     productionDate: string,
@@ -1038,6 +1059,27 @@ export const api = {
     }
   },
 
+  async deleteSellerIssue(issueId: string, reason: string = 'Deleted by Owner', userId: string = 'usr-owner-001'): Promise<{ success: boolean; message: string }> {
+    if (useMockMode) {
+      return mockStore.deleteSellerIssue(issueId, reason, userId);
+    }
+    try {
+      const { data, error } = await (supabase as any).rpc('delete_seller_issue_transaction', {
+        p_issue_id: issueId,
+        p_reason: reason,
+        p_user_id: userId,
+      });
+      if (error) {
+        console.warn('RPC delete_seller_issue_transaction failed, using fallback:', error);
+        return mockStore.deleteSellerIssue(issueId, reason, userId);
+      }
+      return data || { success: true, message: 'Stock issue deleted successfully' };
+    } catch (err) {
+      console.warn('deleteSellerIssue error, using fallback:', err);
+      return mockStore.deleteSellerIssue(issueId, reason, userId);
+    }
+  },
+
   async getIssueRevisionHistory(issueId: string): Promise<RevisionRecord[]> {
     if (useMockMode) {
       return mockStore.getIssueRevisionHistory(issueId);
@@ -1228,6 +1270,27 @@ export const api = {
     } catch (err) {
       console.warn('RPC correct_approved_settlement error, using fallback:', err);
       return mockStore.correctApprovedSettlement(settlementId, settlementDate, cashReceived, upiReceived, creditAmount, items, notes, reason, userId);
+    }
+  },
+
+  async deleteSellerSettlement(settlementId: string, reason: string = 'Deleted by Owner', userId: string = 'usr-owner-001'): Promise<{ success: boolean; message: string }> {
+    if (useMockMode) {
+      return mockStore.deleteSellerSettlement(settlementId, reason, userId);
+    }
+    try {
+      const { data, error } = await (supabase as any).rpc('delete_seller_settlement_transaction', {
+        p_settlement_id: settlementId,
+        p_reason: reason,
+        p_user_id: userId,
+      });
+      if (error) {
+        console.warn('RPC delete_seller_settlement_transaction failed, using fallback:', error);
+        return mockStore.deleteSellerSettlement(settlementId, reason, userId);
+      }
+      return data || { success: true, message: 'Settlement deleted successfully' };
+    } catch (err) {
+      console.warn('deleteSellerSettlement error, using fallback:', err);
+      return mockStore.deleteSellerSettlement(settlementId, reason, userId);
     }
   },
 

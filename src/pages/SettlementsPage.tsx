@@ -6,6 +6,7 @@ import {
   useApproveSettlement,
   useUpdatePendingSettlement,
   useCorrectApprovedSettlement,
+  useDeleteSellerSettlement,
   useSettlementRevisionHistory,
 } from '@/hooks/useSettlements';
 import { useSellerIssues } from '@/hooks/useSellers';
@@ -41,6 +42,7 @@ import {
   Lock,
   ArrowRight,
   ShieldAlert,
+  Trash2,
 } from 'lucide-react';
 import { SellerSettlementWithDetails } from '@/types';
 
@@ -57,6 +59,7 @@ export const SettlementsPage: React.FC = () => {
   const approveSettlement = useApproveSettlement();
   const updatePendingSettlement = useUpdatePendingSettlement();
   const correctApprovedSettlement = useCorrectApprovedSettlement();
+  const deleteSettlement = useDeleteSellerSettlement();
 
   const [isNewModalOpen, setIsNewModalOpen] = useState(searchParams.get('new') === 'true');
   const [selectedIssueId, setSelectedIssueId] = useState<string>('');
@@ -66,6 +69,10 @@ export const SettlementsPage: React.FC = () => {
   const [creditAmount, setCreditAmount] = useState<string>('0');
   const [notes, setNotes] = useState<string>('');
   const [formError, setFormError] = useState<string | null>(null);
+
+  const [settlementToDelete, setSettlementToDelete] = useState<SellerSettlementWithDetails | null>(null);
+  const [deleteReason, setDeleteReason] = useState<string>('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Edit Pending / Correct Approved / Revision History State
   const [editingPendingSettlement, setEditingPendingSettlement] = useState<SellerSettlementWithDetails | null>(null);
@@ -406,6 +413,21 @@ export const SettlementsPage: React.FC = () => {
     }
   };
 
+  const handleConfirmDelete = async () => {
+    if (!settlementToDelete) return;
+    setDeleteError(null);
+    try {
+      await deleteSettlement.mutateAsync({
+        settlementId: settlementToDelete.id,
+        reason: deleteReason.trim() || 'Deleted by Owner',
+      });
+      setSettlementToDelete(null);
+      setDeleteReason('');
+    } catch (err: any) {
+      setDeleteError(err.message || 'हिसाब हटाने में त्रुटि हुई');
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -544,6 +566,23 @@ export const SettlementsPage: React.FC = () => {
                     >
                       {t.revisionHistory}
                     </Button>
+
+                    {/* Owner Delete Button */}
+                    {isOwner && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                        leftIcon={<Trash2 className="w-3.5 h-3.5" />}
+                        onClick={() => {
+                          setSettlementToDelete(st);
+                          setDeleteReason('');
+                          setDeleteError(null);
+                        }}
+                      >
+                        {t.deleteSettlement || 'हटाएं'}
+                      </Button>
+                    )}
                   </div>
                 </div>
 
@@ -1290,6 +1329,76 @@ export const SettlementsPage: React.FC = () => {
         variant="primary"
         isLoading={approveSettlement.isPending}
       />
+
+      {/* Delete Settlement Modal */}
+      <Modal
+        isOpen={Boolean(settlementToDelete)}
+        onClose={() => {
+          setSettlementToDelete(null);
+          setDeleteReason('');
+          setDeleteError(null);
+        }}
+        title={`${t.deleteSettlement || 'हिसाब हटाएं'}: ${settlementToDelete?.settlement_number || ''}`}
+        maxWidth="md"
+      >
+        <div className="space-y-4">
+          <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-3">
+            <ShieldAlert className="w-5 h-5 text-rose-700 shrink-0 mt-0.5" />
+            <div className="text-xs text-rose-800 space-y-1">
+              <p className="font-semibold text-rose-900">
+                {t.deleteSettlementConfirm || 'क्या आप वाकई इस हिसाब को हटाना चाहते हैं?'}
+              </p>
+              <p>
+                {settlementToDelete?.status === 'approved'
+                  ? 'यह क्रिया हिसाब के दौरान वापस/खराब की गई कुल्फी के स्टॉक मूवमेंट्स को रिवर्स कर देगी एवं संबंधित स्टॉक निकासी को पुनः खोल देगी।'
+                  : 'यह पेंडिंग हिसाब स्थायी रूप से हटा दिया जाएगा।'}
+              </p>
+            </div>
+          </div>
+
+          {deleteError && (
+            <div className="p-3 bg-rose-100 border border-rose-300 text-rose-800 rounded-lg text-xs font-medium flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-700" />
+              {deleteError}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">
+              {t.deleteReason || 'हटाने का कारण'} (वैकल्पिक)
+            </label>
+            <input
+              type="text"
+              value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)}
+              placeholder="जैसे: गलत गणना, दोबारा हिसाब दर्ज करना है"
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-rose-500 focus:border-rose-500"
+            />
+          </div>
+
+          <div className="flex justify-end gap-3 pt-3 border-t border-gray-100">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setSettlementToDelete(null);
+                setDeleteReason('');
+                setDeleteError(null);
+              }}
+              disabled={deleteSettlement.isPending}
+            >
+              {t.cancel}
+            </Button>
+            <Button
+              variant="danger"
+              onClick={handleConfirmDelete}
+              isLoading={deleteSettlement.isPending}
+              leftIcon={<Trash2 className="w-4 h-4" />}
+            >
+              {t.deleteSettlement || 'हाँ, हिसाब हटाएं'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

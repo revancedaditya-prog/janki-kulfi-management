@@ -186,3 +186,22 @@ export function useSettlementRevisionHistory(settlementId?: string) {
     enabled: !!settlementId,
   });
 }
+
+export function useDeleteSellerSettlement() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({ settlementId, reason }: { settlementId: string; reason?: string }) => {
+      return api.deleteSellerSettlement(settlementId, reason || 'Deleted by Owner', user?.id || 'usr-owner-001');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['seller_settlements'] });
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['sellers'] });
+      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}

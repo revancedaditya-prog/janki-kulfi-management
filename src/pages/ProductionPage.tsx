@@ -7,6 +7,7 @@ import {
   useCancelProductionBatch,
   useUpdateDraftProductionBatch,
   useCorrectProductionBatch,
+  useDeleteProductionBatch,
   useProductionRevisionHistory,
 } from '@/hooks/useProduction';
 import { useProducts } from '@/hooks/useProducts';
@@ -38,6 +39,7 @@ import {
   Lock,
   ArrowRight,
   ShieldAlert,
+  Trash2,
 } from 'lucide-react';
 import { ProductionBatchWithItems } from '@/types';
 
@@ -55,10 +57,14 @@ export const ProductionPage: React.FC = () => {
   const cancelBatch = useCancelProductionBatch();
   const updateDraftBatch = useUpdateDraftProductionBatch();
   const correctBatch = useCorrectProductionBatch();
+  const deleteBatch = useDeleteProductionBatch();
 
   const [isNewModalOpen, setIsNewModalOpen] = useState(searchParams.get('new') === 'true');
   const [batchToComplete, setBatchToComplete] = useState<string | null>(null);
   const [batchToCancel, setBatchToCancel] = useState<string | null>(null);
+  const [batchToDelete, setBatchToDelete] = useState<ProductionBatchWithItems | null>(null);
+  const [deleteReason, setDeleteReason] = useState<string>('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Edit Draft Modal State
   const [editingDraftBatch, setEditingDraftBatch] = useState<ProductionBatchWithItems | null>(null);
@@ -339,6 +345,21 @@ export const ProductionPage: React.FC = () => {
     }
   };
 
+  const handleConfirmDelete = async () => {
+    if (!batchToDelete) return;
+    setDeleteError(null);
+    try {
+      await deleteBatch.mutateAsync({
+        batchId: batchToDelete.id,
+        reason: deleteReason.trim() || 'Deleted by Owner',
+      });
+      setBatchToDelete(null);
+      setDeleteReason('');
+    } catch (err: any) {
+      setDeleteError(err.message || 'बैच हटाने में त्रुटि हुई');
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -535,6 +556,23 @@ export const ProductionPage: React.FC = () => {
                           {t.revisionHistory}
                         </Button>
                       </>
+                    )}
+
+                    {/* Owner Delete Button */}
+                    {isOwner && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                        leftIcon={<Trash2 className="w-3.5 h-3.5" />}
+                        onClick={() => {
+                          setBatchToDelete(batch);
+                          setDeleteReason('');
+                          setDeleteError(null);
+                        }}
+                      >
+                        {t.deleteBatch || 'हटाएं'}
+                      </Button>
                     )}
                   </div>
                 </div>
@@ -997,6 +1035,76 @@ export const ProductionPage: React.FC = () => {
         variant="danger"
         isLoading={cancelBatch.isPending}
       />
+
+      {/* Delete Batch Modal */}
+      <Modal
+        isOpen={Boolean(batchToDelete)}
+        onClose={() => {
+          setBatchToDelete(null);
+          setDeleteReason('');
+          setDeleteError(null);
+        }}
+        title={`${t.deleteBatch || 'बैच हटाएं'}: ${batchToDelete?.batch_number || ''}`}
+        maxWidth="md"
+      >
+        <div className="space-y-4">
+          <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-3">
+            <ShieldAlert className="w-5 h-5 text-rose-700 shrink-0 mt-0.5" />
+            <div className="text-xs text-rose-800 space-y-1">
+              <p className="font-semibold text-rose-900">
+                {t.deleteBatchConfirm || 'क्या आप वाकई इस उत्पादन बैच को स्थायी रूप से हटाना चाहते हैं?'}
+              </p>
+              <p>
+                {batchToDelete?.status === 'completed'
+                  ? 'यह क्रिया मुख्य फ्रीजर में से इस बैच द्वारा जोड़ी गई कुल्फी मात्रा को स्वतः घटा देगी।'
+                  : 'यह ड्राफ्ट बैच स्थायी रूप से हटा दिया जाएगा।'}
+              </p>
+            </div>
+          </div>
+
+          {deleteError && (
+            <div className="p-3 bg-rose-100 border border-rose-300 text-rose-800 rounded-lg text-xs font-medium flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-700" />
+              {deleteError}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1">
+              {t.deleteReason || 'हटाने का कारण'} (वैकल्पिक)
+            </label>
+            <input
+              type="text"
+              value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)}
+              placeholder="जैसे: गलत प्रविष्टि, दोबारा बनाया गया"
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-rose-500 focus:border-rose-500"
+            />
+          </div>
+
+          <div className="flex justify-end gap-3 pt-3 border-t border-gray-100">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setBatchToDelete(null);
+                setDeleteReason('');
+                setDeleteError(null);
+              }}
+              disabled={deleteBatch.isPending}
+            >
+              {t.cancel}
+            </Button>
+            <Button
+              variant="danger"
+              onClick={handleConfirmDelete}
+              isLoading={deleteBatch.isPending}
+              leftIcon={<Trash2 className="w-4 h-4" />}
+            >
+              {t.deleteBatch || 'हाँ, बैच हटाएं'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };
