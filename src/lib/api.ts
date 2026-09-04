@@ -21,6 +21,16 @@ import {
   RecipeWithItems,
   UnitType,
   AdditionalOverheads,
+  Supplier,
+  MaterialPurchaseWithItems,
+  RawMaterialMovement,
+  PhysicalStockCountWithItems,
+  LpgCylinder,
+  LpgCylinderReading,
+  InventoryWastage,
+  SupplierReturn,
+  ReorderItem,
+  RawMaterialDashboardKPIs,
 } from '@/types';
 
 // Detect if running in mock/local mode
@@ -900,69 +910,6 @@ export const api = {
   },
 
   // --- Recipe & Production Costing Methods ---
-  async getIngredients(): Promise<Ingredient[]> {
-    if (useMockMode) {
-      return mockStore.getIngredients();
-    }
-    try {
-      const { data, error } = await (supabase as any)
-        .from('ingredients')
-        .select('*')
-        .eq('is_active', true)
-        .order('code', { ascending: true });
-      if (error || !data || data.length === 0) {
-        console.warn('Ingredients table not found or empty in Supabase, using mock fallback:', error);
-        return mockStore.getIngredients();
-      }
-      return data.map((ing: Ingredient) => {
-        // Auto-heal legacy corrupted rate_unit for standard kg/litre ingredients
-        if (
-          (ing.base_unit === 'kg' || ing.base_unit === 'litre') &&
-          (ing.rate_unit === 'g' || ing.rate_unit === 'ml') &&
-          ing.code !== 'ING-SAFFRON'
-        ) {
-          return { ...ing, rate_unit: ing.base_unit };
-        }
-        return ing;
-      });
-    } catch (err) {
-      console.warn('Failed to fetch ingredients, fallback to mock:', err);
-      return mockStore.getIngredients();
-    }
-  },
-
-  async createIngredient(
-    ingredient: Omit<Ingredient, 'id' | 'created_at' | 'updated_at'>,
-    userId: string
-  ): Promise<Ingredient> {
-    if (useMockMode) {
-      return mockStore.addIngredient(ingredient, userId);
-    }
-    try {
-      const { data, error } = await (supabase as any)
-        .from('ingredients')
-        .insert(ingredient)
-        .select()
-        .single();
-      if (error) {
-        console.warn('Failed to insert ingredient in Supabase, fallback to mock:', error);
-        return mockStore.addIngredient(ingredient, userId);
-      }
-
-      // Log initial price
-      await (supabase as any).from('ingredient_prices').insert({
-        ingredient_id: data.id,
-        rate: ingredient.current_rate,
-        unit: ingredient.rate_unit,
-        effective_from: new Date().toISOString(),
-        created_by: userId,
-      });
-
-      return data;
-    } catch (err) {
-      return mockStore.addIngredient(ingredient, userId);
-    }
-  },
 
   async updateIngredientRate(
     ingredientId: string,
@@ -2766,5 +2713,512 @@ export const api = {
     });
 
     mockStore.restoreBackupData(data, reason, userId);
+  },
+
+  // ==========================================
+  // --- RAW MATERIAL INVENTORY API METHODS ---
+  // ==========================================
+
+  // --- Suppliers Master ---
+  async getSuppliers(includeInactive: boolean = false): Promise<Supplier[]> {
+    if (useMockMode) {
+      return mockStore.getSuppliers(includeInactive);
+    }
+    let query = (supabase as any).from('suppliers').select('*').order('name');
+    if (!includeInactive) {
+      query = query.eq('is_active', true);
+    }
+    const { data, error } = await query;
+    if (error) return mockStore.getSuppliers(includeInactive);
+    return data || [];
+  },
+
+  async getSupplierById(id: string): Promise<Supplier | undefined> {
+    if (useMockMode) {
+      return mockStore.getSupplierById(id);
+    }
+    const { data, error } = await (supabase as any).from('suppliers').select('*').eq('id', id).maybeSingle();
+    if (error || !data) return mockStore.getSupplierById(id);
+    return data;
+  },
+
+  async createSupplier(data: Omit<Supplier, 'id' | 'created_at' | 'updated_at'>, userId: string): Promise<Supplier> {
+    if (useMockMode) {
+      return mockStore.addSupplier(data, userId);
+    }
+    const { data: created, error } = await (supabase as any).from('suppliers').insert(data).select().single();
+    if (error) return mockStore.addSupplier(data, userId);
+    return created;
+  },
+
+  async updateSupplier(id: string, updates: Partial<Supplier>, userId: string): Promise<Supplier> {
+    if (useMockMode) {
+      return mockStore.updateSupplier(id, updates, userId);
+    }
+    const { data: updated, error } = await (supabase as any)
+      .from('suppliers')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) return mockStore.updateSupplier(id, updates, userId);
+    return updated;
+  },
+
+  async deleteSupplier(id: string, userId: string): Promise<boolean> {
+    if (useMockMode) {
+      return mockStore.deleteSupplier(id, userId);
+    }
+    const { error } = await (supabase as any).from('suppliers').delete().eq('id', id);
+    if (error) return mockStore.deleteSupplier(id, userId);
+    return true;
+  },
+
+  // --- Ingredients & Raw Material Master ---
+  async getIngredients(includeInactive: boolean = false): Promise<Ingredient[]> {
+    if (useMockMode) {
+      return mockStore.getIngredients(includeInactive);
+    }
+    // Attempt live view or table
+    try {
+      let query = (supabase as any).from('v_raw_material_stock').select('*').order('name_hi');
+      if (!includeInactive) {
+        query = query.eq('is_active', true);
+      }
+      const { data, error } = await query;
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.getIngredients(includeInactive);
+  },
+
+  async getIngredientById(id: string): Promise<Ingredient | undefined> {
+    if (useMockMode) {
+      return mockStore.getIngredientById(id);
+    }
+    try {
+      const { data, error } = await (supabase as any).from('v_raw_material_stock').select('*').eq('id', id).maybeSingle();
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.getIngredientById(id);
+  },
+
+  async createIngredient(ingredient: Omit<Ingredient, 'id' | 'created_at' | 'updated_at'>, userId: string): Promise<Ingredient> {
+    if (useMockMode) {
+      return mockStore.addIngredient(ingredient, userId);
+    }
+    try {
+      const { data, error } = await (supabase as any).from('ingredients').insert(ingredient).select().single();
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.addIngredient(ingredient, userId);
+  },
+
+  async updateIngredient(id: string, updates: Partial<Ingredient>, reason: string, userId: string): Promise<Ingredient> {
+    if (useMockMode) {
+      return mockStore.updateIngredient(id, updates, reason, userId);
+    }
+    try {
+      const { data, error } = await (supabase as any).from('ingredients').update(updates).eq('id', id).select().single();
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.updateIngredient(id, updates, reason, userId);
+  },
+
+  async deactivateIngredient(id: string, reason: string, userId: string): Promise<boolean> {
+    if (useMockMode) {
+      return mockStore.deactivateIngredient(id, reason, userId);
+    }
+    try {
+      const { error } = await (supabase as any).from('ingredients').update({ is_active: false }).eq('id', id);
+      if (!error) return true;
+    } catch {}
+    return mockStore.deactivateIngredient(id, reason, userId);
+  },
+
+  async reactivateIngredient(id: string, userId: string): Promise<boolean> {
+    if (useMockMode) {
+      return mockStore.reactivateIngredient(id, userId);
+    }
+    try {
+      const { error } = await (supabase as any).from('ingredients').update({ is_active: true }).eq('id', id);
+      if (!error) return true;
+    } catch {}
+    return mockStore.reactivateIngredient(id, userId);
+  },
+
+  async deleteIngredient(id: string, reason: string, userId: string): Promise<boolean> {
+    if (useMockMode) {
+      return mockStore.deleteIngredient(id, reason, userId);
+    }
+    try {
+      const { error } = await (supabase as any).from('ingredients').delete().eq('id', id);
+      if (!error) return true;
+    } catch {}
+    return mockStore.deleteIngredient(id, reason, userId);
+  },
+
+  // --- Authoritative Raw Material Ledger Balances & KPIs ---
+  async getAvailableRawMaterialStock(ingredientId: string): Promise<number> {
+    if (useMockMode) {
+      return mockStore.getAvailableRawMaterialStock(ingredientId);
+    }
+    try {
+      const { data, error } = await (supabase as any).rpc('get_available_raw_material_stock', { p_ingredient_id: ingredientId });
+      if (!error && data !== null) return Number(data);
+    } catch {}
+    return mockStore.getAvailableRawMaterialStock(ingredientId);
+  },
+
+  async getRawMaterialBalances(): Promise<Record<string, number>> {
+    if (useMockMode) {
+      return mockStore.getRawMaterialBalances();
+    }
+    return mockStore.getRawMaterialBalances();
+  },
+
+  async getRawMaterialMovements(ingredientId?: string): Promise<RawMaterialMovement[]> {
+    if (useMockMode) {
+      return mockStore.getRawMaterialMovements(ingredientId);
+    }
+    try {
+      let query = (supabase as any).from('raw_material_movements').select('*, ingredient:ingredients(*)').order('movement_date', { ascending: false });
+      if (ingredientId) {
+        query = query.eq('ingredient_id', ingredientId);
+      }
+      const { data, error } = await query;
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.getRawMaterialMovements(ingredientId);
+  },
+
+  async getRawMaterialDashboardKPIs(): Promise<RawMaterialDashboardKPIs> {
+    if (useMockMode) {
+      return mockStore.getRawMaterialDashboardKPIs();
+    }
+    return mockStore.getRawMaterialDashboardKPIs();
+  },
+
+  // --- Material Purchases ---
+  async getMaterialPurchases(): Promise<MaterialPurchaseWithItems[]> {
+    if (useMockMode) {
+      return mockStore.getMaterialPurchases();
+    }
+    try {
+      const { data, error } = await (supabase as any)
+        .from('material_purchases')
+        .select('*, supplier:suppliers(*), items:material_purchase_items(*, ingredient:ingredients(*))')
+        .order('purchase_date', { ascending: false });
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.getMaterialPurchases();
+  },
+
+  async getMaterialPurchaseById(id: string): Promise<MaterialPurchaseWithItems | undefined> {
+    if (useMockMode) {
+      return mockStore.getMaterialPurchaseById(id);
+    }
+    try {
+      const { data, error } = await (supabase as any)
+        .from('material_purchases')
+        .select('*, supplier:suppliers(*), items:material_purchase_items(*, ingredient:ingredients(*))')
+        .eq('id', id)
+        .maybeSingle();
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.getMaterialPurchaseById(id);
+  },
+
+  async createMaterialPurchase(
+    data: {
+      purchase_date: string;
+      supplier_id?: string | null;
+      invoice_number?: string | null;
+      payment_method: 'cash' | 'upi' | 'bank_transfer' | 'credit';
+      paid_amount: number;
+      credit_amount?: number;
+      bill_image_url?: string | null;
+      notes?: string | null;
+      items: {
+        ingredient_id: string;
+        purchased_quantity: number;
+        purchase_unit: UnitType;
+        free_quantity?: number;
+        unit_price: number;
+        discount?: number;
+        tax?: number;
+        allocated_charge?: number;
+        lot_number?: string | null;
+        manufacturing_date?: string | null;
+        expiry_date?: string | null;
+      }[];
+    },
+    userId: string
+  ): Promise<MaterialPurchaseWithItems> {
+    if (useMockMode) {
+      return mockStore.createMaterialPurchase(data, userId);
+    }
+    try {
+      const { data: result, error } = await (supabase as any).rpc('confirm_material_purchase_transaction', {
+        p_purchase_date: data.purchase_date,
+        p_supplier_id: data.supplier_id || null,
+        p_invoice_number: data.invoice_number || null,
+        p_payment_method: data.payment_method,
+        p_paid_amount: data.paid_amount,
+        p_credit_amount: data.credit_amount || 0,
+        p_bill_image_url: data.bill_image_url || null,
+        p_notes: data.notes || null,
+        p_items: data.items,
+        p_user_id: userId,
+      });
+      if (!error && result?.purchase_id) {
+        return (await this.getMaterialPurchaseById(result.purchase_id)) || mockStore.createMaterialPurchase(data, userId);
+      }
+    } catch {}
+    return mockStore.createMaterialPurchase(data, userId);
+  },
+
+  async reverseMaterialPurchase(purchaseId: string, reason: string, userId: string): Promise<boolean> {
+    if (useMockMode) {
+      return mockStore.reverseMaterialPurchase(purchaseId, reason, userId);
+    }
+    return mockStore.reverseMaterialPurchase(purchaseId, reason, userId);
+  },
+
+  // --- Physical Stock Counts ---
+  async getPhysicalStockCounts(): Promise<PhysicalStockCountWithItems[]> {
+    if (useMockMode) {
+      return mockStore.getPhysicalStockCounts();
+    }
+    try {
+      const { data, error } = await (supabase as any)
+        .from('physical_stock_counts')
+        .select('*, items:physical_stock_count_items(*, ingredient:ingredients(*))')
+        .order('count_date', { ascending: false });
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.getPhysicalStockCounts();
+  },
+
+  async createPhysicalStockCount(
+    data: {
+      count_date: string;
+      notes?: string;
+      items: {
+        ingredient_id: string;
+        physical_stock: number;
+        reason?: string;
+      }[];
+      status?: 'draft' | 'approved';
+    },
+    userId: string
+  ): Promise<PhysicalStockCountWithItems> {
+    if (useMockMode) {
+      return mockStore.createPhysicalStockCount(data, userId);
+    }
+    return mockStore.createPhysicalStockCount(data, userId);
+  },
+
+  async approvePhysicalStockCount(countId: string, approvedBy: string): Promise<boolean> {
+    if (useMockMode) {
+      return mockStore.approvePhysicalStockCount(countId, approvedBy);
+    }
+    return mockStore.approvePhysicalStockCount(countId, approvedBy);
+  },
+
+  // --- LPG Cylinders ---
+  async getLpgCylinders(): Promise<LpgCylinder[]> {
+    if (useMockMode) {
+      return mockStore.getLpgCylinders();
+    }
+    try {
+      const { data, error } = await (supabase as any).from('lpg_cylinders').select('*').order('cylinder_code');
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.getLpgCylinders();
+  },
+
+  async getLpgCylinderById(id: string): Promise<LpgCylinder | undefined> {
+    if (useMockMode) {
+      return mockStore.getLpgCylinderById(id);
+    }
+    try {
+      const { data, error } = await (supabase as any).from('lpg_cylinders').select('*').eq('id', id).maybeSingle();
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.getLpgCylinderById(id);
+  },
+
+  async createLpgCylinder(
+    data: Omit<LpgCylinder, 'id' | 'calculated_remaining_gas' | 'remaining_percentage' | 'created_at' | 'updated_at'>,
+    userId: string
+  ): Promise<LpgCylinder> {
+    if (useMockMode) {
+      return mockStore.addLpgCylinder(data, userId);
+    }
+    try {
+      const { data: created, error } = await (supabase as any).from('lpg_cylinders').insert(data).select().single();
+      if (!error && created) return created;
+    } catch {}
+    return mockStore.addLpgCylinder(data, userId);
+  },
+
+  async recordLpgReading(
+    cylinderId: string,
+    grossWeight: number,
+    readingType: 'weighed' | 'estimated_batch_use' | 'refill_in' | 'empty_out' = 'weighed',
+    batchId?: string,
+    notes?: string,
+    userId?: string
+  ): Promise<LpgCylinder> {
+    if (useMockMode) {
+      return mockStore.recordLpgReading(cylinderId, grossWeight, readingType, batchId, notes, userId);
+    }
+    return mockStore.recordLpgReading(cylinderId, grossWeight, readingType, batchId, notes, userId);
+  },
+
+  async recordLpgRefill(
+    cylinderId: string,
+    refillCost: number,
+    fullGrossWeight?: number,
+    userId?: string
+  ): Promise<LpgCylinder> {
+    if (useMockMode) {
+      return mockStore.recordLpgRefill(cylinderId, refillCost, fullGrossWeight, userId);
+    }
+    return mockStore.recordLpgRefill(cylinderId, refillCost, fullGrossWeight, userId);
+  },
+
+  async connectLpgCylinder(cylinderId: string, userId: string): Promise<LpgCylinder> {
+    if (useMockMode) {
+      return mockStore.connectLpgCylinder(cylinderId, userId);
+    }
+    return mockStore.connectLpgCylinder(cylinderId, userId);
+  },
+
+  async getLpgReadings(cylinderId?: string): Promise<LpgCylinderReading[]> {
+    if (useMockMode) {
+      return mockStore.getLpgReadings(cylinderId);
+    }
+    try {
+      let query = (supabase as any).from('lpg_cylinder_readings').select('*').order('reading_date', { ascending: false });
+      if (cylinderId) query = query.eq('cylinder_id', cylinderId);
+      const { data, error } = await query;
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.getLpgReadings(cylinderId);
+  },
+
+  // --- Inventory Wastage & Damage ---
+  async getInventoryWastages(): Promise<InventoryWastage[]> {
+    if (useMockMode) {
+      return mockStore.getInventoryWastages();
+    }
+    try {
+      const { data, error } = await (supabase as any).from('inventory_wastage').select('*, ingredient:ingredients(*)').order('wastage_date', { ascending: false });
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.getInventoryWastages();
+  },
+
+  async recordInventoryWastage(
+    data: {
+      wastage_date: string;
+      ingredient_id: string;
+      lot_id?: string | null;
+      quantity: number;
+      unit: UnitType;
+      wastage_type: InventoryWastage['wastage_type'];
+      reason: string;
+      photo_url?: string | null;
+    },
+    userId: string
+  ): Promise<InventoryWastage> {
+    if (useMockMode) {
+      return mockStore.recordInventoryWastage(data, userId);
+    }
+    return mockStore.recordInventoryWastage(data, userId);
+  },
+
+  // --- Supplier Returns ---
+  async getSupplierReturns(): Promise<SupplierReturn[]> {
+    if (useMockMode) {
+      return mockStore.getSupplierReturns();
+    }
+    try {
+      const { data, error } = await (supabase as any).from('supplier_returns').select('*, ingredient:ingredients(*), supplier:suppliers(*)').order('return_date', { ascending: false });
+      if (!error && data) return data;
+    } catch {}
+    return mockStore.getSupplierReturns();
+  },
+
+  async createSupplierReturn(
+    data: {
+      return_date: string;
+      supplier_id?: string | null;
+      purchase_id?: string | null;
+      ingredient_id: string;
+      lot_id?: string | null;
+      returned_quantity: number;
+      unit: UnitType;
+      reason: string;
+      total_refund_amount: number;
+    },
+    userId: string
+  ): Promise<SupplierReturn> {
+    if (useMockMode) {
+      return mockStore.createSupplierReturn(data, userId);
+    }
+    return mockStore.createSupplierReturn(data, userId);
+  },
+
+  // --- Reorder Shopping List ---
+  async getReorderList(): Promise<ReorderItem[]> {
+    if (useMockMode) {
+      return mockStore.getReorderList();
+    }
+    return mockStore.getReorderList();
+  },
+
+  async updateReorderItemStatus(
+    ingredientId: string,
+    status: 'needed' | 'ordered' | 'received',
+    notes?: string
+  ): Promise<boolean> {
+    if (useMockMode) {
+      return mockStore.updateReorderItemStatus(ingredientId, status, notes);
+    }
+    return mockStore.updateReorderItemStatus(ingredientId, status, notes);
+  },
+
+  // --- Atomic Production Completion with Raw Materials ---
+  async completeProductionWithRawMaterials(
+    batchId: string,
+    rawMaterials: {
+      ingredient_id: string;
+      quantity_used: number;
+      unit: UnitType;
+      lot_id?: string | null;
+    }[],
+    allowEmergencyOverride: boolean = false,
+    overrideReason?: string,
+    userId: string = 'usr-owner-001'
+  ): Promise<ProductionBatchWithItems> {
+    if (useMockMode) {
+      return mockStore.completeProductionWithRawMaterials(batchId, rawMaterials, allowEmergencyOverride, overrideReason, userId);
+    }
+    try {
+      const { data, error } = await (supabase as any).rpc('complete_production_with_raw_materials_transaction', {
+        p_batch_id: batchId,
+        p_raw_materials: rawMaterials,
+        p_allow_emergency_override: allowEmergencyOverride,
+        p_override_reason: overrideReason || null,
+        p_user_id: userId,
+      });
+      if (!error && data) {
+        const batches = await this.getProductionBatches();
+        return batches.find((b) => b.id === batchId) || mockStore.completeProductionWithRawMaterials(batchId, rawMaterials, allowEmergencyOverride, overrideReason, userId);
+      }
+    } catch {}
+    return mockStore.completeProductionWithRawMaterials(batchId, rawMaterials, allowEmergencyOverride, overrideReason, userId);
   },
 };

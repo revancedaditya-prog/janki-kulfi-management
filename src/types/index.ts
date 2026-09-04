@@ -179,7 +179,18 @@ export interface RevisionRecord {
 }
 
 // --- Recipe & Costing Calculator Types ---
-export type UnitType = 'kg' | 'g' | 'litre' | 'ml' | 'piece' | 'pack';
+export type UnitType =
+  | 'kg'
+  | 'g'
+  | 'litre'
+  | 'ml'
+  | 'piece'
+  | 'pack'
+  | 'packet'
+  | 'box'
+  | 'bottle'
+  | 'cylinder';
+
 export type IngredientCategory =
   | 'dairy'
   | 'sweetener'
@@ -187,7 +198,56 @@ export type IngredientCategory =
   | 'spice'
   | 'flavoring'
   | 'packaging'
+  | 'fuel'
+  | 'consumable'
   | 'other';
+
+export type RawMaterialMovementType =
+  | 'opening_stock'
+  | 'purchase_received'
+  | 'production_consumption'
+  | 'wastage'
+  | 'damage_spillage'
+  | 'supplier_return'
+  | 'internal_use'
+  | 'free_sample'
+  | 'stock_transfer'
+  | 'physical_count_correction'
+  | 'purchase_reversal'
+  | 'production_reversal'
+  | 'adjustment_reversal';
+
+export type LpgCylinderType = 'commercial_19kg' | 'domestic_14kg' | 'other';
+export type LpgCylinderStatus =
+  | 'full'
+  | 'in_use'
+  | 'partially_used'
+  | 'empty'
+  | 'sent_for_refill'
+  | 'damaged_inactive';
+
+export type InventoryWastageType =
+  | 'spillage'
+  | 'expired'
+  | 'damaged_packaging'
+  | 'cleaning_test'
+  | 'personal_internal'
+  | 'sample_production'
+  | 'other';
+
+export interface Supplier {
+  id: string;
+  name: string;
+  contact_person?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  gst_number?: string | null;
+  is_active: boolean;
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
 
 export interface Ingredient {
   id: string;
@@ -196,11 +256,253 @@ export interface Ingredient {
   name_hi: string;
   category: IngredientCategory;
   base_unit: UnitType;
+  purchase_unit?: UnitType;
+  conversion_factor?: number;
   current_rate: number;
   rate_unit: UnitType;
+  min_stock_level?: number;
+  reorder_quantity?: number;
+  track_expiry?: boolean;
+  track_lots?: boolean;
+  preferred_supplier_id?: string | null;
+  preferred_supplier_name?: string;
+  storage_location?: string;
+  is_active: boolean;
+  available_base_quantity?: number;
+  weighted_average_rate?: number;
+  total_stock_value?: number;
+  stock_status?: 'in_stock' | 'low_stock' | 'out_of_stock' | 'expiring_soon' | 'expired';
+  last_movement_date?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface MaterialPurchaseItem {
+  id: string;
+  purchase_id: string;
+  ingredient_id: string;
+  ingredient?: Ingredient;
+  purchased_quantity: number;
+  purchase_unit: UnitType;
+  free_quantity: number;
+  total_received_quantity: number;
+  base_quantity: number;
+  base_unit: UnitType;
+  unit_price: number;
+  item_price: number;
+  discount: number;
+  tax: number;
+  allocated_charge: number;
+  net_item_cost: number;
+  unit_acquisition_cost: number;
+  lot_number?: string | null;
+  manufacturing_date?: string | null;
+  expiry_date?: string | null;
+  created_at?: string;
+}
+
+export interface MaterialPurchase {
+  id: string;
+  purchase_number: string;
+  purchase_date: string;
+  supplier_id?: string | null;
+  supplier?: Supplier;
+  invoice_number?: string | null;
+  payment_method: 'cash' | 'upi' | 'bank_transfer' | 'credit';
+  paid_amount: number;
+  credit_amount: number;
+  total_amount: number;
+  bill_image_url?: string | null;
+  notes?: string | null;
+  status: 'draft' | 'received' | 'cancelled' | 'reversed';
+  expense_id?: string | null;
+  reversal_reason?: string | null;
+  reversed_at?: string | null;
+  reversed_by?: string | null;
+  created_by?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface MaterialPurchaseWithItems extends MaterialPurchase {
+  items: MaterialPurchaseItem[];
+}
+
+export interface InventoryLot {
+  id: string;
+  ingredient_id: string;
+  ingredient?: Ingredient;
+  lot_number: string;
+  purchase_item_id?: string | null;
+  supplier_id?: string | null;
+  initial_quantity: number;
+  remaining_quantity: number;
+  base_unit: UnitType;
+  unit_cost: number;
+  manufacturing_date?: string | null;
+  expiry_date?: string | null;
+  status: 'active' | 'exhausted' | 'expired';
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface RawMaterialMovement {
+  id: string;
+  ingredient_id: string;
+  ingredient?: Ingredient;
+  movement_date: string;
+  source_location: string;
+  destination_location: string;
+  quantity: number; // Signed: positive incoming, negative outgoing
+  base_unit: UnitType;
+  movement_type: RawMaterialMovementType;
+  reference_table?: string | null;
+  reference_id?: string | null;
+  lot_id?: string | null;
+  unit_cost_snapshot: number;
+  total_value_snapshot: number;
+  reason?: string | null;
+  reversal_of_movement_id?: string | null;
+  created_by?: string | null;
+  created_at?: string;
+}
+
+export interface PhysicalStockCountItem {
+  id?: string;
+  count_id?: string;
+  ingredient_id: string;
+  ingredient?: Ingredient;
+  app_stock: number;
+  physical_stock: number;
+  difference_quantity: number;
+  base_unit: UnitType;
+  unit_cost_snapshot: number;
+  difference_value: number;
+  reason?: string | null;
+}
+
+export interface PhysicalStockCount {
+  id: string;
+  count_number: string;
+  count_date: string;
+  status: 'draft' | 'approved' | 'rejected';
+  counted_by?: string | null;
+  approved_by?: string | null;
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface PhysicalStockCountWithItems extends PhysicalStockCount {
+  items: PhysicalStockCountItem[];
+}
+
+export interface LpgCylinder {
+  id: string;
+  cylinder_code: string;
+  supplier_id?: string | null;
+  supplier_name?: string | null;
+  cylinder_type: LpgCylinderType;
+  rated_gas_capacity: number; // e.g. 19.00 kg
+  tare_weight: number; // TW printed on cylinder e.g. 15.20 kg
+  full_gross_weight: number; // e.g. 34.20 kg
+  current_gross_weight: number; // e.g. 28.50 kg
+  calculated_remaining_gas: number; // e.g. 13.30 kg
+  remaining_percentage: number; // e.g. 70%
+  status: LpgCylinderStatus;
+  refill_date?: string | null;
+  refill_cost: number;
+  connected_date?: string | null;
+  empty_date?: string | null;
+  storage_location?: string | null;
+  notes?: string | null;
   is_active: boolean;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface LpgCylinderReading {
+  id: string;
+  cylinder_id: string;
+  reading_date: string;
+  reading_type: 'weighed' | 'estimated_batch_use' | 'refill_in' | 'empty_out';
+  gross_weight: number;
+  tare_weight: number;
+  remaining_gas_kg: number;
+  gas_consumed_kg: number;
+  batch_id?: string | null;
+  notes?: string | null;
+  recorded_by?: string | null;
+  created_at?: string;
+}
+
+export interface InventoryWastage {
+  id: string;
+  wastage_number: string;
+  wastage_date: string;
+  ingredient_id: string;
+  ingredient?: Ingredient;
+  lot_id?: string | null;
+  quantity: number;
+  base_unit: UnitType;
+  unit_cost: number;
+  total_loss_value: number;
+  wastage_type: InventoryWastageType;
+  reason: string;
+  photo_url?: string | null;
+  recorded_by?: string | null;
+  approved_by?: string | null;
+  created_at?: string;
+}
+
+export interface SupplierReturn {
+  id: string;
+  return_number: string;
+  return_date: string;
+  supplier_id?: string | null;
+  supplier?: Supplier;
+  purchase_id?: string | null;
+  ingredient_id: string;
+  ingredient?: Ingredient;
+  lot_id?: string | null;
+  returned_quantity: number;
+  base_unit: UnitType;
+  unit_cost: number;
+  total_refund_amount: number;
+  actual_refund_received: number;
+  reason: string;
+  status: 'pending' | 'completed' | 'cancelled';
+  created_by?: string | null;
+  created_at?: string;
+}
+
+export interface ReorderItem {
+  id: string;
+  ingredient_id: string;
+  ingredient?: Ingredient;
+  suggested_quantity: number;
+  base_unit: UnitType;
+  supplier_id?: string | null;
+  supplier?: Supplier;
+  status: 'needed' | 'ordered' | 'received';
+  ordered_at?: string | null;
+  notes?: string | null;
+  updated_at?: string;
+}
+
+export interface RawMaterialDashboardKPIs {
+  total_stock_value: number;
+  low_stock_count: number;
+  out_of_stock_count: number;
+  expiring_soon_count: number;
+  lpg_full_count: number;
+  lpg_in_use_count: number;
+  lpg_empty_count: number;
+  total_lpg_remaining_kg: number;
+  purchases_this_month: number;
+  consumption_this_month: number;
+  wastage_this_month: number;
+  pending_physical_count: boolean;
 }
 
 export interface IngredientPrice {

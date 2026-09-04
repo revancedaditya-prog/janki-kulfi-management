@@ -58,6 +58,43 @@ export function useCompleteProductionBatch() {
   });
 }
 
+export function useCompleteProductionWithRawMaterials() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({
+      batchId,
+      rawMaterials,
+      allowEmergencyOverride,
+      overrideReason,
+    }: {
+      batchId: string;
+      rawMaterials: { ingredient_id: string; quantity_used: number; unit: any; lot_id?: string | null }[];
+      allowEmergencyOverride?: boolean;
+      overrideReason?: string;
+    }) => {
+      return api.completeProductionWithRawMaterials(
+        batchId,
+        rawMaterials,
+        allowEmergencyOverride,
+        overrideReason,
+        user?.id || 'usr-owner-001'
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
+      queryClient.invalidateQueries({ queryKey: ['ingredients'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-movements'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] });
+      queryClient.invalidateQueries({ queryKey: ['reorder-list'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}
+
 export function useCancelProductionBatch() {
   const queryClient = useQueryClient();
   const { user } = useAuth();

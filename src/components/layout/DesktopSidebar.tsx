@@ -17,6 +17,9 @@ import {
   Settings,
   Boxes,
   ShieldCheck,
+  Flame,
+  ShoppingCart,
+  Layers,
 } from 'lucide-react';
 
 export const DesktopSidebar: React.FC = () => {
@@ -41,6 +44,15 @@ export const DesktopSidebar: React.FC = () => {
       ],
     },
     {
+      title: 'Raw Materials / कच्चा माल',
+      items: [
+        { to: '/inventory', label: 'कच्ची सामग्री स्टॉक', icon: Layers, show: isProduction || isOwner },
+        { to: '/inventory/purchases', label: 'सामग्री खरीद (Stock-In)', icon: Truck, show: isOwner },
+        { to: '/inventory/lpg', label: 'LPG गैस सिलेंडर', icon: Flame, show: isProduction || isOwner },
+        { to: '/inventory/shopping-list', label: 'खरीद सूची (Shopping)', icon: ShoppingCart, show: isOwner },
+      ],
+    },
+    {
       title: 'Financials & Control / हिसाब व नियंत्रण',
       items: [
         { to: '/expenses', label: t.navExpenses, icon: Wallet, show: isOwner },
@@ -51,6 +63,7 @@ export const DesktopSidebar: React.FC = () => {
     {
       title: 'Master Data / मास्टर डेटा',
       items: [
+        { to: '/inventory/items', label: 'सामग्री मास्टर (Ingredients)', icon: Package, show: isOwner },
         { to: '/products', label: t.navProducts, icon: Package, show: isOwner },
         { to: '/sellers', label: t.navSellers, icon: Users, show: isOwner },
         { to: '/audit', label: t.navAudit, icon: History, show: isOwner },

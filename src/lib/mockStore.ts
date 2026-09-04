@@ -25,12 +25,33 @@ import {
   ProductionBatchIngredient,
   AdditionalOverheads,
   UnitType,
+  Supplier,
+  MaterialPurchase,
+  MaterialPurchaseItem,
+  MaterialPurchaseWithItems,
+  InventoryLot,
+  RawMaterialMovement,
+  PhysicalStockCount,
+  PhysicalStockCountItem,
+  PhysicalStockCountWithItems,
+  LpgCylinder,
+  LpgCylinderReading,
+  InventoryWastage,
+  SupplierReturn,
+  ReorderItem,
+  RawMaterialDashboardKPIs,
 } from '@/types';
 import {
   calculateSaleableProduction,
   calculateSettlementSummary,
   calculateEstimatedDailyProfit,
 } from './calculations';
+import {
+  convertQuantity,
+  calculateWeightedAverageRate,
+  calculateLpgRemaining,
+  getExpiryStatus,
+} from './inventoryService';
 import { generateId } from './utils';
 import { getTodayDateString } from './formatters';
 
@@ -56,6 +77,18 @@ interface LocalStoreState {
   recipes?: Recipe[];
   recipe_items?: RecipeItem[];
   production_batch_ingredients?: ProductionBatchIngredient[];
+  suppliers?: Supplier[];
+  material_purchases?: MaterialPurchase[];
+  material_purchase_items?: MaterialPurchaseItem[];
+  inventory_lots?: InventoryLot[];
+  raw_material_movements?: RawMaterialMovement[];
+  physical_stock_counts?: PhysicalStockCount[];
+  physical_stock_count_items?: PhysicalStockCountItem[];
+  lpg_cylinders?: LpgCylinder[];
+  lpg_cylinder_readings?: LpgCylinderReading[];
+  inventory_wastage?: InventoryWastage[];
+  supplier_returns?: SupplierReturn[];
+  reorder_list?: ReorderItem[];
 }
 
 const DEFAULT_STATE: LocalStoreState = {
@@ -287,22 +320,155 @@ const DEFAULT_STATE: LocalStoreState = {
   stock_movements: [],
   daily_closings: [],
   audit_logs: [],
-  ingredients: [
-    { id: 'ing-milk-01', code: 'ING-MILK', name_en: 'Milk', name_hi: 'दूध', category: 'dairy', base_unit: 'litre', current_rate: 60.0, rate_unit: 'litre', is_active: true },
-    { id: 'ing-sug-02', code: 'ING-SUGAR', name_en: 'Sugar', name_hi: 'चीनी', category: 'sweetener', base_unit: 'kg', current_rate: 48.0, rate_unit: 'kg', is_active: true },
-    { id: 'ing-khoy-03', code: 'ING-KHOYA', name_en: 'Khoya', name_hi: 'खोया / मावा', category: 'dairy', base_unit: 'kg', current_rate: 320.0, rate_unit: 'kg', is_active: true },
-    { id: 'ing-cash-04', code: 'ING-CASHEW', name_en: 'Cashew', name_hi: 'काजू', category: 'dry_fruit', base_unit: 'kg', current_rate: 800.0, rate_unit: 'kg', is_active: true },
-    { id: 'ing-pist-05', code: 'ING-PISTA', name_en: 'Pistachio', name_hi: 'पिस्ता', category: 'dry_fruit', base_unit: 'kg', current_rate: 1200.0, rate_unit: 'kg', is_active: true },
-    { id: 'ing-almd-06', code: 'ING-ALMOND', name_en: 'Almond', name_hi: 'बादाम', category: 'dry_fruit', base_unit: 'kg', current_rate: 750.0, rate_unit: 'kg', is_active: true },
-    { id: 'ing-cust-07', code: 'ING-CUSTARD', name_en: 'Custard powder', name_hi: 'कस्टर्ड पाउडर', category: 'flavoring', base_unit: 'kg', current_rate: 160.0, rate_unit: 'kg', is_active: true },
-    { id: 'ing-card-08', code: 'ING-CARDAMOM', name_en: 'Cardamom', name_hi: 'इलायची', category: 'spice', base_unit: 'kg', current_rate: 2400.0, rate_unit: 'kg', is_active: true },
-    { id: 'ing-saff-09', code: 'ING-SAFFRON', name_en: 'Saffron', name_hi: 'केसर', category: 'spice', base_unit: 'g', current_rate: 250.0, rate_unit: 'g', is_active: true },
-    { id: 'ing-flav-10', code: 'ING-FLAVOUR', name_en: 'Flavour', name_hi: 'फ्लेवर', category: 'flavoring', base_unit: 'ml', current_rate: 1.5, rate_unit: 'ml', is_active: true },
-    { id: 'ing-stk-11', code: 'ING-STICK', name_en: 'Kulfi stick', name_hi: 'कुल्फी स्टिक', category: 'packaging', base_unit: 'piece', current_rate: 0.3, rate_unit: 'piece', is_active: true },
-    { id: 'ing-wrp-12', code: 'ING-WRAPPER', name_en: 'Wrapper', name_hi: 'रैपर', category: 'packaging', base_unit: 'piece', current_rate: 0.4, rate_unit: 'piece', is_active: true },
-    { id: 'ing-pck-13', code: 'ING-POUCH', name_en: 'Pouch/packing', name_hi: 'पैकिंग', category: 'packaging', base_unit: 'piece', current_rate: 0.5, rate_unit: 'piece', is_active: true },
-    { id: 'ing-oth-14', code: 'ING-OTHER', name_en: 'Other ingredient', name_hi: 'अन्य सामग्री', category: 'other', base_unit: 'kg', current_rate: 100.0, rate_unit: 'kg', is_active: true },
+  suppliers: [
+    {
+      id: 'sup-dairy-01',
+      name: 'Shri Shyam Dairy & Khoya Bhandar',
+      contact_person: 'Rakesh Yadav',
+      phone: '9876543210',
+      email: 'shyamdairy.etah@gmail.com',
+      address: 'Main Market, Mirehchi, Etah',
+      gst_number: '09AAAFJ1234K1Z5',
+      is_active: true,
+      notes: 'Fresh Buffalo Milk & Pure Khoya Supplier',
+      created_at: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'sup-sugar-02',
+      name: 'Garg Sugar & Dry Fruits Agency',
+      contact_person: 'Manoj Garg',
+      phone: '9876501234',
+      email: 'gargagency@gmail.com',
+      address: 'Galla Mandi, Etah',
+      gst_number: '09AAACG5678L1Z2',
+      is_active: true,
+      notes: 'Wholesale Sugar, Almonds, Cashew, Pista, Cardamom, Saffron',
+      created_at: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'sup-gas-03',
+      name: 'Bharat Gas Agency Mirehchi',
+      contact_person: 'Sanjay Sharma',
+      phone: '9876512345',
+      email: 'bharatgas.mirehchi@gmail.com',
+      address: 'Station Road, Mirehchi',
+      is_active: true,
+      notes: '19kg Commercial LPG Cylinder Supplier',
+      created_at: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'sup-pack-04',
+      name: 'Agra Packaging & Plastics',
+      contact_person: 'Deepak Agrawal',
+      phone: '9876598765',
+      email: 'agrapackaging@gmail.com',
+      address: 'Transport Nagar, Agra',
+      is_active: true,
+      notes: 'Kulfi Sticks, Food-grade Wrappers, Cartons & Pouches',
+      created_at: '2026-01-01T00:00:00.000Z',
+    },
   ],
+  ingredients: [
+    { id: 'ing-milk-01', code: 'ING-MILK', name_en: 'Milk', name_hi: 'दूध', category: 'dairy', base_unit: 'litre', purchase_unit: 'litre', conversion_factor: 1, min_stock_level: 20, reorder_quantity: 50, current_rate: 60.0, rate_unit: 'litre', preferred_supplier_id: 'sup-dairy-01', preferred_supplier_name: 'Shri Shyam Dairy & Khoya Bhandar', storage_location: 'Cold Storage Room', track_expiry: true, track_lots: true, is_active: true },
+    { id: 'ing-sug-02', code: 'ING-SUGAR', name_en: 'Sugar', name_hi: 'चीनी', category: 'sweetener', base_unit: 'kg', purchase_unit: 'kg', conversion_factor: 1, min_stock_level: 10, reorder_quantity: 50, current_rate: 48.0, rate_unit: 'kg', preferred_supplier_id: 'sup-sugar-02', preferred_supplier_name: 'Garg Sugar & Dry Fruits Agency', storage_location: 'Dry Goods Store', track_expiry: false, track_lots: true, is_active: true },
+    { id: 'ing-khoy-03', code: 'ING-KHOYA', name_en: 'Khoya', name_hi: 'खोया / मावा', category: 'dairy', base_unit: 'kg', purchase_unit: 'kg', conversion_factor: 1, min_stock_level: 5, reorder_quantity: 20, current_rate: 320.0, rate_unit: 'kg', preferred_supplier_id: 'sup-dairy-01', preferred_supplier_name: 'Shri Shyam Dairy & Khoya Bhandar', storage_location: 'Cold Storage Room', track_expiry: true, track_lots: true, is_active: true },
+    { id: 'ing-cash-04', code: 'ING-CASHEW', name_en: 'Cashew', name_hi: 'काजू', category: 'dry_fruit', base_unit: 'kg', purchase_unit: 'kg', conversion_factor: 1, min_stock_level: 2, reorder_quantity: 5, current_rate: 800.0, rate_unit: 'kg', preferred_supplier_id: 'sup-sugar-02', preferred_supplier_name: 'Garg Sugar & Dry Fruits Agency', storage_location: 'Dry Goods Store', track_expiry: true, track_lots: true, is_active: true },
+    { id: 'ing-pist-05', code: 'ING-PISTA', name_en: 'Pistachio', name_hi: 'पिस्ता', category: 'dry_fruit', base_unit: 'kg', purchase_unit: 'kg', conversion_factor: 1, min_stock_level: 1, reorder_quantity: 3, current_rate: 1200.0, rate_unit: 'kg', preferred_supplier_id: 'sup-sugar-02', preferred_supplier_name: 'Garg Sugar & Dry Fruits Agency', storage_location: 'Dry Goods Store', track_expiry: true, track_lots: true, is_active: true },
+    { id: 'ing-almd-06', code: 'ING-ALMOND', name_en: 'Almond', name_hi: 'बादाम', category: 'dry_fruit', base_unit: 'kg', purchase_unit: 'kg', conversion_factor: 1, min_stock_level: 2, reorder_quantity: 5, current_rate: 750.0, rate_unit: 'kg', preferred_supplier_id: 'sup-sugar-02', preferred_supplier_name: 'Garg Sugar & Dry Fruits Agency', storage_location: 'Dry Goods Store', track_expiry: true, track_lots: true, is_active: true },
+    { id: 'ing-cust-07', code: 'ING-CUSTARD', name_en: 'Custard powder', name_hi: 'कस्टर्ड पाउडर', category: 'flavoring', base_unit: 'kg', purchase_unit: 'kg', conversion_factor: 1, min_stock_level: 2, reorder_quantity: 5, current_rate: 160.0, rate_unit: 'kg', preferred_supplier_id: 'sup-sugar-02', preferred_supplier_name: 'Garg Sugar & Dry Fruits Agency', storage_location: 'Dry Goods Store', track_expiry: true, track_lots: true, is_active: true },
+    { id: 'ing-card-08', code: 'ING-CARDAMOM', name_en: 'Cardamom', name_hi: 'इलायची', category: 'spice', base_unit: 'kg', purchase_unit: 'kg', conversion_factor: 1, min_stock_level: 0.5, reorder_quantity: 1, current_rate: 2400.0, rate_unit: 'kg', preferred_supplier_id: 'sup-sugar-02', preferred_supplier_name: 'Garg Sugar & Dry Fruits Agency', storage_location: 'Spices Safe', track_expiry: true, track_lots: true, is_active: true },
+    { id: 'ing-saff-09', code: 'ING-SAFFRON', name_en: 'Saffron', name_hi: 'केसर', category: 'spice', base_unit: 'g', purchase_unit: 'g', conversion_factor: 1, min_stock_level: 10, reorder_quantity: 25, current_rate: 250.0, rate_unit: 'g', preferred_supplier_id: 'sup-sugar-02', preferred_supplier_name: 'Garg Sugar & Dry Fruits Agency', storage_location: 'Spices Safe', track_expiry: true, track_lots: true, is_active: true },
+    { id: 'ing-flav-10', code: 'ING-FLAVOUR', name_en: 'Flavour', name_hi: 'फ्लेवर', category: 'flavoring', base_unit: 'ml', purchase_unit: 'bottle', conversion_factor: 500, min_stock_level: 200, reorder_quantity: 1000, current_rate: 1.5, rate_unit: 'ml', preferred_supplier_id: 'sup-sugar-02', preferred_supplier_name: 'Garg Sugar & Dry Fruits Agency', storage_location: 'Dry Goods Store', track_expiry: true, track_lots: true, is_active: true },
+    { id: 'ing-stk-11', code: 'ING-STICK', name_en: 'Kulfi stick', name_hi: 'कुल्फी स्टिक', category: 'packaging', base_unit: 'piece', purchase_unit: 'box', conversion_factor: 1000, min_stock_level: 1000, reorder_quantity: 5000, current_rate: 0.3, rate_unit: 'piece', preferred_supplier_id: 'sup-pack-04', preferred_supplier_name: 'Agra Packaging & Plastics', storage_location: 'Packaging Area', track_expiry: false, track_lots: false, is_active: true },
+    { id: 'ing-wrp-12', code: 'ING-WRAPPER', name_en: 'Wrapper', name_hi: 'रैपर', category: 'packaging', base_unit: 'piece', purchase_unit: 'packet', conversion_factor: 500, min_stock_level: 1000, reorder_quantity: 5000, current_rate: 0.4, rate_unit: 'piece', preferred_supplier_id: 'sup-pack-04', preferred_supplier_name: 'Agra Packaging & Plastics', storage_location: 'Packaging Area', track_expiry: false, track_lots: false, is_active: true },
+    { id: 'ing-pck-13', code: 'ING-POUCH', name_en: 'Pouch/packing', name_hi: 'पैकिंग', category: 'packaging', base_unit: 'piece', purchase_unit: 'packet', conversion_factor: 500, min_stock_level: 1000, reorder_quantity: 5000, current_rate: 0.5, rate_unit: 'piece', preferred_supplier_id: 'sup-pack-04', preferred_supplier_name: 'Agra Packaging & Plastics', storage_location: 'Packaging Area', track_expiry: false, track_lots: false, is_active: true },
+    { id: 'ing-lpg-15', code: 'ING-LPG', name_en: 'LPG Gas', name_hi: 'एलपीजी गैस', category: 'fuel', base_unit: 'kg', purchase_unit: 'cylinder', conversion_factor: 19, min_stock_level: 19, reorder_quantity: 38, current_rate: 94.74, rate_unit: 'kg', preferred_supplier_id: 'sup-gas-03', preferred_supplier_name: 'Bharat Gas Agency Mirehchi', storage_location: 'Kitchen Burner Area', track_expiry: false, track_lots: false, is_active: true },
+    { id: 'ing-oth-14', code: 'ING-OTHER', name_en: 'Other ingredient', name_hi: 'अन्य सामग्री', category: 'other', base_unit: 'kg', purchase_unit: 'kg', conversion_factor: 1, min_stock_level: 5, reorder_quantity: 10, current_rate: 100.0, rate_unit: 'kg', storage_location: 'General Store', track_expiry: false, track_lots: false, is_active: true },
+  ],
+  lpg_cylinders: [
+    {
+      id: 'cyl-01',
+      cylinder_code: 'LPG-01',
+      supplier_id: 'sup-gas-03',
+      supplier_name: 'Bharat Gas Agency Mirehchi',
+      cylinder_type: 'commercial_19kg',
+      rated_gas_capacity: 19.0,
+      tare_weight: 15.2,
+      full_gross_weight: 34.2,
+      current_gross_weight: 29.5,
+      calculated_remaining_gas: 14.3,
+      remaining_percentage: 75.3,
+      status: 'in_use',
+      refill_date: '2026-08-28',
+      refill_cost: 1800.0,
+      connected_date: '2026-08-29',
+      storage_location: 'Main Production Kitchen',
+      is_active: true,
+      created_at: '2026-08-28T00:00:00.000Z',
+    },
+    {
+      id: 'cyl-02',
+      cylinder_code: 'LPG-02',
+      supplier_id: 'sup-gas-03',
+      supplier_name: 'Bharat Gas Agency Mirehchi',
+      cylinder_type: 'commercial_19kg',
+      rated_gas_capacity: 19.0,
+      tare_weight: 15.4,
+      full_gross_weight: 34.4,
+      current_gross_weight: 34.4,
+      calculated_remaining_gas: 19.0,
+      remaining_percentage: 100.0,
+      status: 'full',
+      refill_date: '2026-09-01',
+      refill_cost: 1800.0,
+      storage_location: 'Cylinder Storage Yard',
+      is_active: true,
+      created_at: '2026-09-01T00:00:00.000Z',
+    },
+    {
+      id: 'cyl-03',
+      cylinder_code: 'LPG-03',
+      supplier_id: 'sup-gas-03',
+      supplier_name: 'Bharat Gas Agency Mirehchi',
+      cylinder_type: 'commercial_19kg',
+      rated_gas_capacity: 19.0,
+      tare_weight: 15.1,
+      full_gross_weight: 34.1,
+      current_gross_weight: 15.1,
+      calculated_remaining_gas: 0.0,
+      remaining_percentage: 0.0,
+      status: 'empty',
+      refill_cost: 1800.0,
+      storage_location: 'Empty Cylinder Bay',
+      is_active: true,
+      created_at: '2026-08-20T00:00:00.000Z',
+    },
+  ],
+  raw_material_movements: [
+    { id: 'rmm-01', ingredient_id: 'ing-milk-01', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Cold Storage Room', quantity: 50, base_unit: 'litre', movement_type: 'opening_stock', unit_cost_snapshot: 60.0, total_value_snapshot: 3000.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-02', ingredient_id: 'ing-sug-02', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Dry Goods Store', quantity: 40, base_unit: 'kg', movement_type: 'opening_stock', unit_cost_snapshot: 48.0, total_value_snapshot: 1920.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-03', ingredient_id: 'ing-khoy-03', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Cold Storage Room', quantity: 15, base_unit: 'kg', movement_type: 'opening_stock', unit_cost_snapshot: 320.0, total_value_snapshot: 4800.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-04', ingredient_id: 'ing-cash-04', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Dry Goods Store', quantity: 5, base_unit: 'kg', movement_type: 'opening_stock', unit_cost_snapshot: 800.0, total_value_snapshot: 4000.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-05', ingredient_id: 'ing-pist-05', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Dry Goods Store', quantity: 3, base_unit: 'kg', movement_type: 'opening_stock', unit_cost_snapshot: 1200.0, total_value_snapshot: 3600.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-06', ingredient_id: 'ing-almd-06', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Dry Goods Store', quantity: 5, base_unit: 'kg', movement_type: 'opening_stock', unit_cost_snapshot: 750.0, total_value_snapshot: 3750.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-07', ingredient_id: 'ing-cust-07', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Dry Goods Store', quantity: 5, base_unit: 'kg', movement_type: 'opening_stock', unit_cost_snapshot: 160.0, total_value_snapshot: 800.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-08', ingredient_id: 'ing-card-08', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Spices Safe', quantity: 1, base_unit: 'kg', movement_type: 'opening_stock', unit_cost_snapshot: 2400.0, total_value_snapshot: 2400.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-09', ingredient_id: 'ing-saff-09', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Spices Safe', quantity: 50, base_unit: 'g', movement_type: 'opening_stock', unit_cost_snapshot: 250.0, total_value_snapshot: 12500.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-10', ingredient_id: 'ing-flav-10', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Dry Goods Store', quantity: 1000, base_unit: 'ml', movement_type: 'opening_stock', unit_cost_snapshot: 1.5, total_value_snapshot: 1500.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-11', ingredient_id: 'ing-stk-11', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Packaging Area', quantity: 5000, base_unit: 'piece', movement_type: 'opening_stock', unit_cost_snapshot: 0.3, total_value_snapshot: 1500.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-12', ingredient_id: 'ing-wrp-12', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Packaging Area', quantity: 5000, base_unit: 'piece', movement_type: 'opening_stock', unit_cost_snapshot: 0.4, total_value_snapshot: 2000.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-13', ingredient_id: 'ing-pck-13', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Packaging Area', quantity: 5000, base_unit: 'piece', movement_type: 'opening_stock', unit_cost_snapshot: 0.5, total_value_snapshot: 2500.0, reason: 'Initial Opening Stock' },
+    { id: 'rmm-14', ingredient_id: 'ing-lpg-15', movement_date: '2026-01-01T00:00:00.000Z', source_location: 'Opening Balance', destination_location: 'Kitchen Burner Area', quantity: 33.3, base_unit: 'kg', movement_type: 'opening_stock', unit_cost_snapshot: 94.74, total_value_snapshot: 3154.84, reason: 'Initial Opening Stock' },
+  ],
+  material_purchases: [],
+  material_purchase_items: [],
+  inventory_lots: [],
+  physical_stock_counts: [],
+  physical_stock_count_items: [],
+  lpg_cylinder_readings: [],
+  inventory_wastage: [],
+  supplier_returns: [],
+  reorder_list: [],
   ingredient_prices: [
     { id: 'ip-01', ingredient_id: 'ing-milk-01', rate: 60.0, unit: 'litre', effective_from: '2026-01-01T00:00:00.000Z' },
     { id: 'ip-02', ingredient_id: 'ing-sug-02', rate: 48.0, unit: 'kg', effective_from: '2026-01-01T00:00:00.000Z' },
@@ -468,6 +634,24 @@ class MockStore {
         if (!parsed.production_batch_ingredients) {
           parsed.production_batch_ingredients = [];
         }
+        if (!parsed.suppliers || parsed.suppliers.length === 0) {
+          parsed.suppliers = JSON.parse(JSON.stringify(DEFAULT_STATE.suppliers || []));
+        }
+        if (!parsed.lpg_cylinders || parsed.lpg_cylinders.length === 0) {
+          parsed.lpg_cylinders = JSON.parse(JSON.stringify(DEFAULT_STATE.lpg_cylinders || []));
+        }
+        if (!parsed.raw_material_movements || parsed.raw_material_movements.length === 0) {
+          parsed.raw_material_movements = JSON.parse(JSON.stringify(DEFAULT_STATE.raw_material_movements || []));
+        }
+        if (!parsed.material_purchases) parsed.material_purchases = [];
+        if (!parsed.material_purchase_items) parsed.material_purchase_items = [];
+        if (!parsed.inventory_lots) parsed.inventory_lots = [];
+        if (!parsed.physical_stock_counts) parsed.physical_stock_counts = [];
+        if (!parsed.physical_stock_count_items) parsed.physical_stock_count_items = [];
+        if (!parsed.lpg_cylinder_readings) parsed.lpg_cylinder_readings = [];
+        if (!parsed.inventory_wastage) parsed.inventory_wastage = [];
+        if (!parsed.supplier_returns) parsed.supplier_returns = [];
+        if (!parsed.reorder_list) parsed.reorder_list = [];
         return parsed;
       }
     } catch {
@@ -1286,6 +1470,30 @@ class MockStore {
           });
         }
       }
+
+      // Reverse raw material consumption movements
+      const rawMovements = (this.state.raw_material_movements || []).filter(
+        (m) => m.reference_table === 'production_batches' && m.reference_id === batch.id && m.movement_type === 'production_consumption'
+      );
+      for (const rm of rawMovements) {
+        this.state.raw_material_movements?.push({
+          id: `rmm-${generateId().slice(0, 8)}`,
+          ingredient_id: rm.ingredient_id,
+          movement_date: now,
+          source_location: 'Production Floor',
+          destination_location: rm.source_location || 'Main Raw Material Store',
+          quantity: Math.abs(rm.quantity), // Positive to restore
+          base_unit: rm.base_unit,
+          movement_type: 'production_reversal',
+          reference_table: 'production_batches',
+          reference_id: batch.id,
+          unit_cost_snapshot: rm.unit_cost_snapshot,
+          total_value_snapshot: rm.total_value_snapshot,
+          reason: `Raw material reversal for deleted production batch ${batch.batch_number}: ${reason}`,
+          created_by: userId,
+          created_at: now,
+        });
+      }
     }
 
     const old = { ...batch };
@@ -1407,13 +1615,105 @@ class MockStore {
     };
   }
 
-  // --- Recipe & Ingredient Master Workflow ---
-  public getIngredients(): Ingredient[] {
-    return (this.state.ingredients || []).filter((i) => i.is_active !== false);
+  // --- Suppliers Master ---
+  public getSuppliers(includeInactive: boolean = false): Supplier[] {
+    const list = this.state.suppliers || [];
+    return includeInactive ? list : list.filter((s) => s.is_active !== false);
+  }
+
+  public getSupplierById(id: string): Supplier | undefined {
+    return (this.state.suppliers || []).find((s) => s.id === id);
+  }
+
+  public addSupplier(
+    data: Omit<Supplier, 'id' | 'created_at' | 'updated_at'>,
+    userId: string = 'usr-owner-001'
+  ): Supplier {
+    const id = `sup-${generateId().slice(0, 8)}`;
+    const now = new Date().toISOString();
+    const newSupplier: Supplier = {
+      id,
+      ...data,
+      is_active: data.is_active !== undefined ? data.is_active : true,
+      created_at: now,
+      updated_at: now,
+    };
+    if (!this.state.suppliers) this.state.suppliers = [];
+    this.state.suppliers.push(newSupplier);
+    this.logAudit('suppliers', id, 'CREATE_SUPPLIER', null, newSupplier, `Added supplier ${newSupplier.name}`, userId);
+    this.saveState();
+    return newSupplier;
+  }
+
+  public updateSupplier(
+    id: string,
+    updates: Partial<Supplier>,
+    userId: string = 'usr-owner-001'
+  ): Supplier {
+    const idx = (this.state.suppliers || []).findIndex((s) => s.id === id);
+    if (idx === -1) throw new Error('Supplier not found');
+    const old = { ...this.state.suppliers![idx] };
+    this.state.suppliers![idx] = {
+      ...old,
+      ...updates,
+      updated_at: new Date().toISOString(),
+    };
+    this.logAudit('suppliers', id, 'UPDATE_SUPPLIER', old, this.state.suppliers![idx], `Updated supplier ${old.name}`, userId);
+    this.saveState();
+    return this.state.suppliers![idx];
+  }
+
+  public deleteSupplier(id: string, userId: string = 'usr-owner-001'): boolean {
+    const hasPurchases = (this.state.material_purchases || []).some((p) => p.supplier_id === id);
+    if (hasPurchases) {
+      return Boolean(this.updateSupplier(id, { is_active: false }, userId));
+    }
+    this.state.suppliers = (this.state.suppliers || []).filter((s) => s.id !== id);
+    this.logAudit('suppliers', id, 'DELETE_SUPPLIER', null, null, `Deleted supplier ${id}`, userId);
+    this.saveState();
+    return true;
+  }
+
+  // --- Enhanced Ingredients & Raw Material Master ---
+  public getIngredients(includeInactive: boolean = false): Ingredient[] {
+    const ingredients = this.state.ingredients || [];
+    const list = includeInactive ? ingredients : ingredients.filter((i) => i.is_active !== false);
+
+    return list.map((ing) => {
+      const availableQty = this.getAvailableRawMaterialStock(ing.id);
+      const supplier = ing.preferred_supplier_id ? this.getSupplierById(ing.preferred_supplier_id) : undefined;
+      
+      const movements = (this.state.raw_material_movements || []).filter(
+        (m) => m.ingredient_id === ing.id && (m.movement_type === 'purchase_received' || m.movement_type === 'opening_stock')
+      );
+      const lastInward = movements[movements.length - 1];
+      const wac = lastInward ? lastInward.unit_cost_snapshot : ing.current_rate;
+      const totalVal = Number((availableQty * wac).toFixed(2));
+
+      let status: 'in_stock' | 'low_stock' | 'out_of_stock' = 'in_stock';
+      if (availableQty <= 0) {
+        status = 'out_of_stock';
+      } else if (ing.min_stock_level && availableQty <= ing.min_stock_level) {
+        status = 'low_stock';
+      }
+
+      const allMvs = (this.state.raw_material_movements || []).filter((m) => m.ingredient_id === ing.id);
+      const lastMv = allMvs[allMvs.length - 1];
+
+      return {
+        ...ing,
+        preferred_supplier_name: supplier?.name || ing.preferred_supplier_name,
+        available_base_quantity: availableQty,
+        weighted_average_rate: wac,
+        total_stock_value: totalVal,
+        stock_status: status,
+        last_movement_date: lastMv?.movement_date,
+      };
+    });
   }
 
   public getIngredientById(id: string): Ingredient | undefined {
-    return (this.state.ingredients || []).find((i) => i.id === id);
+    return this.getIngredients(true).find((i) => i.id === id);
   }
 
   public addIngredient(
@@ -1448,6 +1748,1139 @@ class MockStore {
     this.logAudit('ingredients', id, 'CREATE_INGREDIENT', null, newIng, `Added ingredient ${newIng.name_en}`, userId);
     this.saveState();
     return newIng;
+  }
+
+  public updateIngredient(
+    id: string,
+    updates: Partial<Ingredient>,
+    reason: string = 'Updated configuration',
+    userId: string = 'usr-owner-001'
+  ): Ingredient {
+    const idx = (this.state.ingredients || []).findIndex((i) => i.id === id);
+    if (idx === -1) throw new Error('Ingredient not found');
+    const old = { ...this.state.ingredients![idx] };
+    this.state.ingredients![idx] = {
+      ...old,
+      ...updates,
+      updated_at: new Date().toISOString(),
+    };
+    this.logAudit('ingredients', id, 'UPDATE_INGREDIENT', old, this.state.ingredients![idx], reason, userId);
+    this.saveState();
+    return this.getIngredientById(id)!;
+  }
+
+  public deactivateIngredient(id: string, reason: string = 'Deactivated by Owner', userId: string = 'usr-owner-001'): boolean {
+    this.updateIngredient(id, { is_active: false }, `Deactivated: ${reason}`, userId);
+    return true;
+  }
+
+  public reactivateIngredient(id: string, userId: string = 'usr-owner-001'): boolean {
+    this.updateIngredient(id, { is_active: true }, 'Reactivated by Owner', userId);
+    return true;
+  }
+
+  public deleteIngredient(id: string, reason: string = 'Deleted draft ingredient', userId: string = 'usr-owner-001'): boolean {
+    const hasMovements = (this.state.raw_material_movements || []).some((m) => m.ingredient_id === id);
+    const hasRecipes = (this.state.recipe_items || []).some((r) => r.ingredient_id === id);
+    const hasPurchases = (this.state.material_purchase_items || []).some((p) => p.ingredient_id === id);
+    const hasProduction = (this.state.production_batch_ingredients || []).some((p) => p.ingredient_id === id);
+
+    if (hasMovements || hasRecipes || hasPurchases || hasProduction) {
+      throw new Error('This ingredient has historical transaction records (purchases, recipes, or production usage) and cannot be permanently deleted. Please deactivate it instead.');
+    }
+
+    this.state.ingredients = (this.state.ingredients || []).filter((i) => i.id !== id);
+    this.logAudit('ingredients', id, 'DELETE_INGREDIENT', null, null, reason, userId);
+    this.saveState();
+    return true;
+  }
+
+  // --- Authoritative Raw Material Ledger Balances ---
+  public getAvailableRawMaterialStock(ingredientId: string): number {
+    let balance = 0;
+    for (const m of this.state.raw_material_movements || []) {
+      if (m.ingredient_id === ingredientId) {
+        balance += Number(m.quantity) || 0;
+      }
+    }
+    return Math.max(0, Number(balance.toFixed(3)));
+  }
+
+  public getRawMaterialBalances(): Record<string, number> {
+    const balances: Record<string, number> = {};
+    for (const ing of this.state.ingredients || []) {
+      balances[ing.id] = this.getAvailableRawMaterialStock(ing.id);
+    }
+    return balances;
+  }
+
+  public getRawMaterialMovements(ingredientId?: string): RawMaterialMovement[] {
+    const list = this.state.raw_material_movements || [];
+    const filtered = ingredientId ? list.filter((m) => m.ingredient_id === ingredientId) : list;
+    return filtered
+      .map((m) => ({
+        ...m,
+        ingredient: this.getIngredientById(m.ingredient_id),
+      }))
+      .sort((a, b) => new Date(b.movement_date).getTime() - new Date(a.movement_date).getTime());
+  }
+
+  public getRawMaterialDashboardKPIs(): RawMaterialDashboardKPIs {
+    const ingredients = this.getIngredients();
+    const total_stock_value = ingredients.reduce((sum, i) => sum + (i.total_stock_value || 0), 0);
+    const low_stock_count = ingredients.filter((i) => i.stock_status === 'low_stock').length;
+    const out_of_stock_count = ingredients.filter((i) => i.stock_status === 'out_of_stock').length;
+
+    const lots = this.state.inventory_lots || [];
+    const expiring_soon_count = lots.filter((l) => {
+      const exp = getExpiryStatus(l.expiry_date);
+      return l.status === 'active' && (exp.status === 'expiring_soon_7d' || exp.status === 'expiring_soon_30d');
+    }).length;
+
+    const cylinders = this.getLpgCylinders();
+    const lpg_full_count = cylinders.filter((c) => c.status === 'full').length;
+    const lpg_in_use_count = cylinders.filter((c) => c.status === 'in_use' || c.status === 'partially_used').length;
+    const lpg_empty_count = cylinders.filter((c) => c.status === 'empty' || c.status === 'sent_for_refill').length;
+    const total_lpg_remaining_kg = cylinders.reduce((sum, c) => sum + (c.calculated_remaining_gas || 0), 0);
+
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const movements = this.state.raw_material_movements || [];
+
+    const purchases_this_month = (this.state.material_purchases || [])
+      .filter((p) => p.status === 'received' && p.purchase_date >= startOfMonth.slice(0, 10))
+      .reduce((sum, p) => sum + p.total_amount, 0);
+
+    const consumption_this_month = movements
+      .filter((m) => m.movement_type === 'production_consumption' && m.movement_date >= startOfMonth)
+      .reduce((sum, m) => sum + m.total_value_snapshot, 0);
+
+    const wastage_this_month = (this.state.inventory_wastage || [])
+      .filter((w) => w.wastage_date >= startOfMonth.slice(0, 10))
+      .reduce((sum, w) => sum + w.total_loss_value, 0);
+
+    const pending_physical_count = (this.state.physical_stock_counts || []).some((c) => c.status === 'draft');
+
+    return {
+      total_stock_value: Number(total_stock_value.toFixed(2)),
+      low_stock_count,
+      out_of_stock_count,
+      expiring_soon_count,
+      lpg_full_count,
+      lpg_in_use_count,
+      lpg_empty_count,
+      total_lpg_remaining_kg: Number(total_lpg_remaining_kg.toFixed(2)),
+      purchases_this_month: Number(purchases_this_month.toFixed(2)),
+      consumption_this_month: Number(consumption_this_month.toFixed(2)),
+      wastage_this_month: Number(wastage_this_month.toFixed(2)),
+      pending_physical_count,
+    };
+  }
+
+  // --- Material Purchases & Stock-In ---
+  public getMaterialPurchases(): MaterialPurchaseWithItems[] {
+    const purchases = this.state.material_purchases || [];
+    const items = this.state.material_purchase_items || [];
+    return purchases
+      .map((p) => ({
+        ...p,
+        supplier: p.supplier_id ? this.getSupplierById(p.supplier_id) : undefined,
+        items: items
+          .filter((it) => it.purchase_id === p.id)
+          .map((it) => ({
+            ...it,
+            ingredient: this.getIngredientById(it.ingredient_id),
+          })),
+      }))
+      .sort((a, b) => new Date(b.purchase_date).getTime() - new Date(a.purchase_date).getTime());
+  }
+
+  public getMaterialPurchaseById(id: string): MaterialPurchaseWithItems | undefined {
+    return this.getMaterialPurchases().find((p) => p.id === id);
+  }
+
+  public createMaterialPurchase(
+    data: {
+      purchase_date: string;
+      supplier_id?: string | null;
+      invoice_number?: string | null;
+      payment_method: 'cash' | 'upi' | 'bank_transfer' | 'credit';
+      paid_amount: number;
+      credit_amount?: number;
+      bill_image_url?: string | null;
+      notes?: string | null;
+      items: {
+        ingredient_id: string;
+        purchased_quantity: number;
+        purchase_unit: UnitType;
+        free_quantity?: number;
+        unit_price: number;
+        discount?: number;
+        tax?: number;
+        allocated_charge?: number;
+        lot_number?: string | null;
+        manufacturing_date?: string | null;
+        expiry_date?: string | null;
+      }[];
+    },
+    userId: string = 'usr-owner-001'
+  ): MaterialPurchaseWithItems {
+    if (!data.items || data.items.length === 0) {
+      throw new Error('Purchase must contain at least one item');
+    }
+
+    const purchaseId = `pur-${generateId().slice(0, 8)}`;
+    const purchaseNumber = `PUR-${data.purchase_date.replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const now = new Date().toISOString();
+
+    let totalAmount = 0;
+    const purchaseItems: MaterialPurchaseItem[] = [];
+
+    if (!this.state.material_purchases) this.state.material_purchases = [];
+    if (!this.state.material_purchase_items) this.state.material_purchase_items = [];
+    if (!this.state.inventory_lots) this.state.inventory_lots = [];
+    if (!this.state.raw_material_movements) this.state.raw_material_movements = [];
+
+    // Process line items
+    for (const itemInput of data.items) {
+      const ing = this.state.ingredients?.find((i) => i.id === itemInput.ingredient_id);
+      if (!ing) throw new Error(`Ingredient ${itemInput.ingredient_id} not found`);
+
+      const purchasedQty = Number(itemInput.purchased_quantity) || 0;
+      const freeQty = Number(itemInput.free_quantity) || 0;
+      const totalRecQty = purchasedQty + freeQty;
+      const unitPrice = Number(itemInput.unit_price) || 0;
+      const itemPrice = Number((purchasedQty * unitPrice).toFixed(2));
+      const discount = Number(itemInput.discount) || 0;
+      const tax = Number(itemInput.tax) || 0;
+      const allocatedCharge = Number(itemInput.allocated_charge) || 0;
+      const netItemCost = Number((itemPrice - discount + tax + allocatedCharge).toFixed(2));
+      totalAmount += netItemCost;
+
+      // Unit conversion to base unit
+      const baseQty = convertQuantity(totalRecQty, itemInput.purchase_unit, ing.base_unit, ing.conversion_factor || 1);
+      const unitAcqCost = baseQty > 0 ? Number((netItemCost / baseQty).toFixed(4)) : 0;
+
+      const purchaseItemId = `pi-${generateId().slice(0, 8)}`;
+      const pItem: MaterialPurchaseItem = {
+        id: purchaseItemId,
+        purchase_id: purchaseId,
+        ingredient_id: ing.id,
+        purchased_quantity: purchasedQty,
+        purchase_unit: itemInput.purchase_unit,
+        free_quantity: freeQty,
+        total_received_quantity: totalRecQty,
+        base_quantity: baseQty,
+        base_unit: ing.base_unit,
+        unit_price: unitPrice,
+        item_price: itemPrice,
+        discount,
+        tax,
+        allocated_charge: allocatedCharge,
+        net_item_cost: netItemCost,
+        unit_acquisition_cost: unitAcqCost,
+        lot_number: itemInput.lot_number,
+        manufacturing_date: itemInput.manufacturing_date,
+        expiry_date: itemInput.expiry_date,
+        created_at: now,
+      };
+      purchaseItems.push(pItem);
+      this.state.material_purchase_items.push(pItem);
+
+      // Create Lot record if lot or expiry tracking is enabled
+      let lotId: string | null = null;
+      if (ing.track_lots || ing.track_expiry || itemInput.lot_number) {
+        lotId = `lot-${generateId().slice(0, 8)}`;
+        this.state.inventory_lots.push({
+          id: lotId,
+          ingredient_id: ing.id,
+          lot_number: itemInput.lot_number || `LOT-${data.purchase_date.replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`,
+          purchase_item_id: purchaseItemId,
+          supplier_id: data.supplier_id || null,
+          initial_quantity: baseQty,
+          remaining_quantity: baseQty,
+          base_unit: ing.base_unit,
+          unit_cost: unitAcqCost,
+          manufacturing_date: itemInput.manufacturing_date || null,
+          expiry_date: itemInput.expiry_date || null,
+          status: 'active',
+          created_at: now,
+          updated_at: now,
+        });
+      }
+
+      // Add Stock-In Movement to Raw Material Ledger
+      this.state.raw_material_movements.push({
+        id: `rmm-${generateId().slice(0, 8)}`,
+        ingredient_id: ing.id,
+        movement_date: now,
+        source_location: data.supplier_id ? (this.getSupplierById(data.supplier_id)?.name || 'Supplier') : 'Supplier',
+        destination_location: ing.storage_location || 'Main Raw Material Store',
+        quantity: baseQty, // Positive for stock-in
+        base_unit: ing.base_unit,
+        movement_type: 'purchase_received',
+        reference_table: 'material_purchases',
+        reference_id: purchaseId,
+        lot_id: lotId,
+        unit_cost_snapshot: unitAcqCost,
+        total_value_snapshot: netItemCost,
+        reason: `Purchase ${purchaseNumber}`,
+        created_by: userId,
+        created_at: now,
+      });
+
+      // Update Weighted Average Cost in Master & Price History
+      const currentStock = this.getAvailableRawMaterialStock(ing.id) - baseQty;
+      const newWac = calculateWeightedAverageRate(currentStock, ing.current_rate, baseQty, unitAcqCost);
+      ing.current_rate = newWac;
+      ing.rate_unit = ing.base_unit;
+      ing.updated_at = now;
+
+      if (!this.state.ingredient_prices) this.state.ingredient_prices = [];
+      this.state.ingredient_prices.push({
+        id: `ip-${generateId().slice(0, 8)}`,
+        ingredient_id: ing.id,
+        rate: newWac,
+        unit: ing.base_unit,
+        effective_from: now,
+        effective_to: null,
+        created_by: userId,
+        created_at: now,
+      });
+    }
+
+    // Create Linked Expense record in Expenses table to avoid double-counting
+    let expenseId: string | null = null;
+    const paidAmount = Number(data.paid_amount) || totalAmount;
+    if (paidAmount > 0) {
+      const expId = `exp-${generateId().slice(0, 8)}`;
+      const supplierName = data.supplier_id ? (this.getSupplierById(data.supplier_id)?.name || 'Raw Material Supplier') : 'Raw Material Supplier';
+      this.state.expenses.push({
+        id: expId,
+        expense_date: data.purchase_date,
+        category: 'raw_materials' as any,
+        amount: paidAmount,
+        payment_method: data.payment_method === 'bank_transfer' ? ('upi' as any) : data.payment_method === 'credit' ? ('cash' as any) : data.payment_method,
+        vendor_name: supplierName,
+        description: `Material Purchase ${purchaseNumber} (Invoice: ${data.invoice_number || 'N/A'})`,
+        bill_image_path: data.bill_image_url || null,
+        status: 'active' as any,
+        void_reason: null,
+        created_by: userId,
+        created_at: now,
+        updated_at: now,
+      });
+      expenseId = expId;
+    }
+
+    // Create Purchase Header
+    const purchaseRecord: MaterialPurchase = {
+      id: purchaseId,
+      purchase_number: purchaseNumber,
+      purchase_date: data.purchase_date,
+      supplier_id: data.supplier_id || null,
+      invoice_number: data.invoice_number || null,
+      payment_method: data.payment_method,
+      paid_amount: paidAmount,
+      credit_amount: Number(data.credit_amount) || 0,
+      total_amount: Number(totalAmount.toFixed(2)),
+      bill_image_url: data.bill_image_url || null,
+      notes: data.notes || null,
+      status: 'received',
+      expense_id: expenseId,
+      created_by: userId,
+      created_at: now,
+      updated_at: now,
+    };
+    this.state.material_purchases.push(purchaseRecord);
+
+    this.logAudit('material_purchases', purchaseId, 'CREATE_MATERIAL_PURCHASE', null, purchaseRecord, `Created purchase ${purchaseNumber}`, userId);
+    this.saveState();
+
+    return this.getMaterialPurchaseById(purchaseId)!;
+  }
+
+  public reverseMaterialPurchase(
+    purchaseId: string,
+    reason: string = 'Reversed by Owner',
+    userId: string = 'usr-owner-001'
+  ): boolean {
+    const purchase = (this.state.material_purchases || []).find((p) => p.id === purchaseId);
+    if (!purchase) throw new Error('Purchase not found');
+    if (purchase.status === 'reversed') throw new Error('Purchase is already reversed');
+
+    const items = (this.state.material_purchase_items || []).filter((it) => it.purchase_id === purchaseId);
+    const now = new Date().toISOString();
+
+    // Check stock safety: cannot reverse if stock has already been consumed below purchased quantity
+    for (const it of items) {
+      const currentStock = this.getAvailableRawMaterialStock(it.ingredient_id);
+      if (currentStock < it.base_quantity) {
+        const ing = this.getIngredientById(it.ingredient_id);
+        throw new Error(`Cannot reverse purchase because ${it.base_quantity} ${it.base_unit} of ${ing?.name_hi || 'ingredient'} were received, but only ${currentStock} ${it.base_unit} remain in stock (already consumed in production).`);
+      }
+    }
+
+    // Add Reversal Movements for each item
+    for (const it of items) {
+      this.state.raw_material_movements?.push({
+        id: `rmm-${generateId().slice(0, 8)}`,
+        ingredient_id: it.ingredient_id,
+        movement_date: now,
+        source_location: it.ingredient?.storage_location || 'Main Raw Material Store',
+        destination_location: 'Supplier Reversal',
+        quantity: -it.base_quantity, // Deduct
+        base_unit: it.base_unit,
+        movement_type: 'purchase_reversal',
+        reference_table: 'material_purchases',
+        reference_id: purchaseId,
+        unit_cost_snapshot: it.unit_acquisition_cost,
+        total_value_snapshot: it.net_item_cost,
+        reason: `Reversal for purchase ${purchase.purchase_number}: ${reason}`,
+        created_by: userId,
+        created_at: now,
+      });
+
+      // Mark lot exhausted/reversed
+      const lot = (this.state.inventory_lots || []).find((l) => l.purchase_item_id === it.id);
+      if (lot) {
+        lot.remaining_quantity = 0;
+        lot.status = 'exhausted';
+        lot.updated_at = now;
+      }
+    }
+
+    // Mark purchase reversed
+    purchase.status = 'reversed';
+    purchase.reversal_reason = reason;
+    purchase.reversed_at = now;
+    purchase.reversed_by = userId;
+    purchase.updated_at = now;
+
+    // Delete or reverse linked expense
+    if (purchase.expense_id) {
+      this.state.expenses = (this.state.expenses || []).filter((e) => e.id !== purchase.expense_id);
+    }
+
+    this.logAudit('material_purchases', purchaseId, 'REVERSE_MATERIAL_PURCHASE', null, { reason }, `Reversed purchase ${purchase.purchase_number}`, userId);
+    this.saveState();
+    return true;
+  }
+
+  // --- Physical Stock Counts ---
+  public getPhysicalStockCounts(): PhysicalStockCountWithItems[] {
+    const counts = this.state.physical_stock_counts || [];
+    const items = this.state.physical_stock_count_items || [];
+    return counts
+      .map((c) => ({
+        ...c,
+        items: items
+          .filter((it) => it.count_id === c.id)
+          .map((it) => ({
+            ...it,
+            ingredient: this.getIngredientById(it.ingredient_id),
+          })),
+      }))
+      .sort((a, b) => new Date(b.count_date).getTime() - new Date(a.count_date).getTime());
+  }
+
+  public createPhysicalStockCount(
+    data: {
+      count_date: string;
+      notes?: string;
+      items: {
+        ingredient_id: string;
+        physical_stock: number;
+        reason?: string;
+      }[];
+      status?: 'draft' | 'approved';
+    },
+    userId: string = 'usr-owner-001'
+  ): PhysicalStockCountWithItems {
+    const countId = `psc-${generateId().slice(0, 8)}`;
+    const countNumber = `PSC-${data.count_date.replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const now = new Date().toISOString();
+    const isApproved = data.status === 'approved';
+
+    if (!this.state.physical_stock_counts) this.state.physical_stock_counts = [];
+    if (!this.state.physical_stock_count_items) this.state.physical_stock_count_items = [];
+    if (!this.state.raw_material_movements) this.state.raw_material_movements = [];
+
+    const countItems: PhysicalStockCountItem[] = [];
+
+    for (const it of data.items) {
+      const ing = this.getIngredientById(it.ingredient_id);
+      if (!ing) continue;
+
+      const appStock = this.getAvailableRawMaterialStock(ing.id);
+      const physStock = Math.max(0, Number(it.physical_stock) || 0);
+      const diffQty = Number((physStock - appStock).toFixed(3));
+      const rate = ing.weighted_average_rate || ing.current_rate;
+      const diffVal = Number((diffQty * rate).toFixed(2));
+
+      const cItem: PhysicalStockCountItem = {
+        id: `psci-${generateId().slice(0, 8)}`,
+        count_id: countId,
+        ingredient_id: ing.id,
+        app_stock: appStock,
+        physical_stock: physStock,
+        difference_quantity: diffQty,
+        base_unit: ing.base_unit,
+        unit_cost_snapshot: rate,
+        difference_value: diffVal,
+        reason: it.reason || (diffQty !== 0 ? 'Physical inventory stocktake correction' : 'Match'),
+      };
+      countItems.push(cItem);
+      this.state.physical_stock_count_items.push(cItem);
+
+      // If approved, create physical_count_correction ledger movements
+      if (isApproved && diffQty !== 0) {
+        this.state.raw_material_movements.push({
+          id: `rmm-${generateId().slice(0, 8)}`,
+          ingredient_id: ing.id,
+          movement_date: now,
+          source_location: diffQty > 0 ? 'Physical Count Surplus' : (ing.storage_location || 'Main Raw Material Store'),
+          destination_location: diffQty > 0 ? (ing.storage_location || 'Main Raw Material Store') : 'Physical Count Shortage',
+          quantity: diffQty, // Signed
+          base_unit: ing.base_unit,
+          movement_type: 'physical_count_correction',
+          reference_table: 'physical_stock_counts',
+          reference_id: countId,
+          unit_cost_snapshot: rate,
+          total_value_snapshot: Math.abs(diffVal),
+          reason: `Physical count adjustment (${diffQty > 0 ? '+' : ''}${diffQty} ${ing.base_unit}): ${it.reason || 'Variance correction'}`,
+          created_by: userId,
+          created_at: now,
+        });
+      }
+    }
+
+    const countHeader: PhysicalStockCount = {
+      id: countId,
+      count_number: countNumber,
+      count_date: data.count_date,
+      status: isApproved ? 'approved' : 'draft',
+      counted_by: userId,
+      approved_by: isApproved ? userId : null,
+      notes: data.notes || null,
+      created_at: now,
+      updated_at: now,
+    };
+    this.state.physical_stock_counts.push(countHeader);
+
+    this.logAudit('physical_stock_counts', countId, 'CREATE_PHYSICAL_COUNT', null, countHeader, `Recorded physical count ${countNumber} (${countHeader.status})`, userId);
+    this.saveState();
+
+    return {
+      ...countHeader,
+      items: countItems.map((ci) => ({ ...ci, ingredient: this.getIngredientById(ci.ingredient_id) })),
+    };
+  }
+
+  public approvePhysicalStockCount(countId: string, approvedBy: string = 'usr-owner-001'): boolean {
+    const count = (this.state.physical_stock_counts || []).find((c) => c.id === countId);
+    if (!count) throw new Error('Physical stock count not found');
+    if (count.status === 'approved') return true;
+
+    const items = (this.state.physical_stock_count_items || []).filter((it) => it.count_id === countId);
+    const now = new Date().toISOString();
+
+    for (const it of items) {
+      if (it.difference_quantity !== 0) {
+        const ing = this.getIngredientById(it.ingredient_id);
+        this.state.raw_material_movements?.push({
+          id: `rmm-${generateId().slice(0, 8)}`,
+          ingredient_id: it.ingredient_id,
+          movement_date: now,
+          source_location: it.difference_quantity > 0 ? 'Physical Count Surplus' : (ing?.storage_location || 'Main Raw Material Store'),
+          destination_location: it.difference_quantity > 0 ? (ing?.storage_location || 'Main Raw Material Store') : 'Physical Count Shortage',
+          quantity: it.difference_quantity,
+          base_unit: it.base_unit,
+          movement_type: 'physical_count_correction',
+          reference_table: 'physical_stock_counts',
+          reference_id: countId,
+          unit_cost_snapshot: it.unit_cost_snapshot,
+          total_value_snapshot: Math.abs(it.difference_value),
+          reason: `Approved physical count adjustment: ${it.reason || 'Stocktake variance'}`,
+          created_by: approvedBy,
+          created_at: now,
+        });
+      }
+    }
+
+    count.status = 'approved';
+    count.approved_by = approvedBy;
+    count.updated_at = now;
+
+    this.logAudit('physical_stock_counts', countId, 'APPROVE_PHYSICAL_COUNT', null, count, `Approved physical count ${count.count_number}`, approvedBy);
+    this.saveState();
+    return true;
+  }
+
+  // --- Dedicated LPG Cylinder Management ---
+  public getLpgCylinders(): LpgCylinder[] {
+    return (this.state.lpg_cylinders || []).map((cyl) => {
+      const calc = calculateLpgRemaining(cyl.current_gross_weight, cyl.tare_weight, cyl.rated_gas_capacity);
+      let status = cyl.status;
+      if (status !== 'sent_for_refill' && status !== 'damaged_inactive') {
+        if (calc.isEmpty) {
+          status = 'empty';
+        } else if (cyl.status === 'in_use') {
+          status = 'in_use';
+        } else if (calc.percentage >= 99) {
+          status = 'full';
+        } else {
+          status = 'partially_used';
+        }
+      }
+      return {
+        ...cyl,
+        calculated_remaining_gas: calc.remainingKg,
+        remaining_percentage: calc.percentage,
+        status,
+      };
+    });
+  }
+
+  public getLpgCylinderById(id: string): LpgCylinder | undefined {
+    return this.getLpgCylinders().find((c) => c.id === id);
+  }
+
+  public addLpgCylinder(
+    data: Omit<LpgCylinder, 'id' | 'calculated_remaining_gas' | 'remaining_percentage' | 'created_at' | 'updated_at'>,
+    userId: string = 'usr-owner-001'
+  ): LpgCylinder {
+    const id = `cyl-${generateId().slice(0, 8)}`;
+    const now = new Date().toISOString();
+    const calc = calculateLpgRemaining(data.current_gross_weight, data.tare_weight, data.rated_gas_capacity);
+
+    const newCyl: LpgCylinder = {
+      id,
+      ...data,
+      calculated_remaining_gas: calc.remainingKg,
+      remaining_percentage: calc.percentage,
+      created_at: now,
+      updated_at: now,
+    };
+
+    if (!this.state.lpg_cylinders) this.state.lpg_cylinders = [];
+    this.state.lpg_cylinders.push(newCyl);
+    this.logAudit('lpg_cylinders', id, 'ADD_LPG_CYLINDER', null, newCyl, `Added LPG Cylinder ${newCyl.cylinder_code}`, userId);
+    this.saveState();
+    return newCyl;
+  }
+
+  public recordLpgReading(
+    cylinderId: string,
+    grossWeight: number,
+    readingType: 'weighed' | 'estimated_batch_use' | 'refill_in' | 'empty_out' = 'weighed',
+    batchId?: string,
+    notes?: string,
+    userId: string = 'usr-owner-001'
+  ): LpgCylinder {
+    const cyl = (this.state.lpg_cylinders || []).find((c) => c.id === cylinderId);
+    if (!cyl) throw new Error('Cylinder not found');
+
+    const prevGross = cyl.current_gross_weight;
+    const newGross = Math.max(cyl.tare_weight, Number(grossWeight) || 0);
+    const gasConsumed = Math.max(0, Number((prevGross - newGross).toFixed(2)));
+    const calc = calculateLpgRemaining(newGross, cyl.tare_weight, cyl.rated_gas_capacity);
+    const now = new Date().toISOString();
+
+    cyl.current_gross_weight = newGross;
+    cyl.calculated_remaining_gas = calc.remainingKg;
+    cyl.remaining_percentage = calc.percentage;
+    if (calc.isEmpty) {
+      cyl.status = 'empty';
+      cyl.empty_date = getTodayDateString();
+    } else if (cyl.status === 'full' && newGross < cyl.full_gross_weight) {
+      cyl.status = 'in_use';
+    }
+    cyl.updated_at = now;
+
+    if (!this.state.lpg_cylinder_readings) this.state.lpg_cylinder_readings = [];
+    this.state.lpg_cylinder_readings.push({
+      id: `lpgr-${generateId().slice(0, 8)}`,
+      cylinder_id: cylinderId,
+      reading_date: now,
+      reading_type: readingType,
+      gross_weight: newGross,
+      tare_weight: cyl.tare_weight,
+      remaining_gas_kg: calc.remainingKg,
+      gas_consumed_kg: gasConsumed,
+      batch_id: batchId || null,
+      notes: notes || null,
+      recorded_by: userId,
+      created_at: now,
+    });
+
+    this.logAudit('lpg_cylinders', cylinderId, 'RECORD_LPG_READING', { prevGross }, { newGross, calc }, `Recorded LPG reading: ${calc.remainingKg} kg remaining`, userId);
+    this.saveState();
+    return this.getLpgCylinderById(cylinderId)!;
+  }
+
+  public recordLpgRefill(
+    cylinderId: string,
+    refillCost: number,
+    fullGrossWeight?: number,
+    userId: string = 'usr-owner-001'
+  ): LpgCylinder {
+    const cyl = (this.state.lpg_cylinders || []).find((c) => c.id === cylinderId);
+    if (!cyl) throw new Error('Cylinder not found');
+
+    const fullGross = fullGrossWeight || (cyl.tare_weight + cyl.rated_gas_capacity);
+    const now = new Date().toISOString();
+
+    cyl.full_gross_weight = fullGross;
+    cyl.current_gross_weight = fullGross;
+    cyl.calculated_remaining_gas = cyl.rated_gas_capacity;
+    cyl.remaining_percentage = 100.0;
+    cyl.status = 'full';
+    cyl.refill_date = getTodayDateString();
+    cyl.refill_cost = Number(refillCost) || 1800.0;
+    cyl.empty_date = null;
+    cyl.updated_at = now;
+
+    // Record reading
+    if (!this.state.lpg_cylinder_readings) this.state.lpg_cylinder_readings = [];
+    this.state.lpg_cylinder_readings.push({
+      id: `lpgr-${generateId().slice(0, 8)}`,
+      cylinder_id: cylinderId,
+      reading_date: now,
+      reading_type: 'refill_in',
+      gross_weight: fullGross,
+      tare_weight: cyl.tare_weight,
+      remaining_gas_kg: cyl.rated_gas_capacity,
+      gas_consumed_kg: 0,
+      notes: `Refilled for ₹${refillCost}`,
+      recorded_by: userId,
+      created_at: now,
+    });
+
+    // Record expense
+    if (refillCost > 0) {
+      this.state.expenses.push({
+        id: `exp-${generateId().slice(0, 8)}`,
+        expense_date: getTodayDateString(),
+        category: 'electricity_fuel' as any,
+        amount: refillCost,
+        payment_method: 'cash',
+        vendor_name: cyl.supplier_name || 'Bharat Gas Agency',
+        description: `LPG Cylinder Refill (${cyl.cylinder_code}) - 19kg Gas`,
+        bill_image_path: null,
+        status: 'active' as any,
+        void_reason: null,
+        created_by: userId,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+
+    this.logAudit('lpg_cylinders', cylinderId, 'REFILL_LPG_CYLINDER', null, cyl, `Refilled cylinder ${cyl.cylinder_code}`, userId);
+    this.saveState();
+    return this.getLpgCylinderById(cylinderId)!;
+  }
+
+  public connectLpgCylinder(cylinderId: string, userId: string = 'usr-owner-001'): LpgCylinder {
+    const cyl = (this.state.lpg_cylinders || []).find((c) => c.id === cylinderId);
+    if (!cyl) throw new Error('Cylinder not found');
+
+    // Disconnect previously active cylinder
+    for (const c of this.state.lpg_cylinders || []) {
+      if (c.id !== cylinderId && c.status === 'in_use') {
+        c.status = 'partially_used';
+      }
+    }
+
+    cyl.status = 'in_use';
+    cyl.connected_date = getTodayDateString();
+    cyl.updated_at = new Date().toISOString();
+
+    this.logAudit('lpg_cylinders', cylinderId, 'CONNECT_LPG_CYLINDER', null, null, `Connected cylinder ${cyl.cylinder_code} to burner`, userId);
+    this.saveState();
+    return this.getLpgCylinderById(cylinderId)!;
+  }
+
+  public getLpgReadings(cylinderId?: string): LpgCylinderReading[] {
+    const list = this.state.lpg_cylinder_readings || [];
+    const filtered = cylinderId ? list.filter((r) => r.cylinder_id === cylinderId) : list;
+    return filtered.sort((a, b) => new Date(b.reading_date).getTime() - new Date(a.reading_date).getTime());
+  }
+
+  // --- Inventory Wastage & Damage ---
+  public getInventoryWastages(): InventoryWastage[] {
+    const list = this.state.inventory_wastage || [];
+    return list
+      .map((w) => ({
+        ...w,
+        ingredient: this.getIngredientById(w.ingredient_id),
+      }))
+      .sort((a, b) => new Date(b.wastage_date).getTime() - new Date(a.wastage_date).getTime());
+  }
+
+  public recordInventoryWastage(
+    data: {
+      wastage_date: string;
+      ingredient_id: string;
+      lot_id?: string | null;
+      quantity: number;
+      unit: UnitType;
+      wastage_type: InventoryWastage['wastage_type'];
+      reason: string;
+      photo_url?: string | null;
+    },
+    userId: string = 'usr-owner-001'
+  ): InventoryWastage {
+    const ing = this.getIngredientById(data.ingredient_id);
+    if (!ing) throw new Error('Ingredient not found');
+
+    const qty = Number(data.quantity) || 0;
+    if (qty <= 0) throw new Error('Wastage quantity must be greater than zero');
+
+    const baseQty = convertQuantity(qty, data.unit, ing.base_unit, ing.conversion_factor || 1);
+    const availableStock = this.getAvailableRawMaterialStock(ing.id);
+
+    if (availableStock < baseQty) {
+      throw new Error(`Cannot record wastage: available stock is only ${availableStock} ${ing.base_unit}, but ${baseQty} ${ing.base_unit} was reported`);
+    }
+
+    const rate = ing.weighted_average_rate || ing.current_rate;
+    const lossVal = Number((baseQty * rate).toFixed(2));
+    const wastageId = `wst-${generateId().slice(0, 8)}`;
+    const wastageNumber = `WST-${data.wastage_date.replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const now = new Date().toISOString();
+
+    if (!this.state.inventory_wastage) this.state.inventory_wastage = [];
+    if (!this.state.raw_material_movements) this.state.raw_material_movements = [];
+
+    const wastageRecord: InventoryWastage = {
+      id: wastageId,
+      wastage_number: wastageNumber,
+      wastage_date: data.wastage_date,
+      ingredient_id: ing.id,
+      lot_id: data.lot_id || null,
+      quantity: baseQty,
+      base_unit: ing.base_unit,
+      unit_cost: rate,
+      total_loss_value: lossVal,
+      wastage_type: data.wastage_type,
+      reason: data.reason,
+      photo_url: data.photo_url || null,
+      recorded_by: userId,
+      approved_by: userId,
+      created_at: now,
+    };
+    this.state.inventory_wastage.push(wastageRecord);
+
+    // Ledger deduction
+    this.state.raw_material_movements.push({
+      id: `rmm-${generateId().slice(0, 8)}`,
+      ingredient_id: ing.id,
+      movement_date: now,
+      source_location: ing.storage_location || 'Main Raw Material Store',
+      destination_location: `Wastage (${data.wastage_type})`,
+      quantity: -baseQty,
+      base_unit: ing.base_unit,
+      movement_type: data.wastage_type === 'spillage' ? 'damage_spillage' : 'wastage',
+      reference_table: 'inventory_wastage',
+      reference_id: wastageId,
+      lot_id: data.lot_id || null,
+      unit_cost_snapshot: rate,
+      total_value_snapshot: lossVal,
+      reason: `Wastage ${wastageNumber}: ${data.reason}`,
+      created_by: userId,
+      created_at: now,
+    });
+
+    this.logAudit('inventory_wastage', wastageId, 'RECORD_WASTAGE', null, wastageRecord, `Recorded wastage of ${baseQty} ${ing.base_unit} ${ing.name_en}`, userId);
+    this.saveState();
+
+    return { ...wastageRecord, ingredient: ing };
+  }
+
+  // --- Supplier Returns ---
+  public getSupplierReturns(): SupplierReturn[] {
+    const list = this.state.supplier_returns || [];
+    return list
+      .map((sr) => ({
+        ...sr,
+        ingredient: this.getIngredientById(sr.ingredient_id),
+        supplier: sr.supplier_id ? this.getSupplierById(sr.supplier_id) : undefined,
+      }))
+      .sort((a, b) => new Date(b.return_date).getTime() - new Date(a.return_date).getTime());
+  }
+
+  public createSupplierReturn(
+    data: {
+      return_date: string;
+      supplier_id?: string | null;
+      purchase_id?: string | null;
+      ingredient_id: string;
+      lot_id?: string | null;
+      returned_quantity: number;
+      unit: UnitType;
+      reason: string;
+      total_refund_amount: number;
+    },
+    userId: string = 'usr-owner-001'
+  ): SupplierReturn {
+    const ing = this.getIngredientById(data.ingredient_id);
+    if (!ing) throw new Error('Ingredient not found');
+
+    const baseQty = convertQuantity(data.returned_quantity, data.unit, ing.base_unit, ing.conversion_factor || 1);
+    const availableStock = this.getAvailableRawMaterialStock(ing.id);
+
+    if (availableStock < baseQty) {
+      throw new Error(`Cannot return to supplier: available stock is only ${availableStock} ${ing.base_unit}, but ${baseQty} was requested.`);
+    }
+
+    const returnId = `ret-${generateId().slice(0, 8)}`;
+    const returnNumber = `RET-${data.return_date.replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const now = new Date().toISOString();
+    const rate = ing.weighted_average_rate || ing.current_rate;
+
+    if (!this.state.supplier_returns) this.state.supplier_returns = [];
+    if (!this.state.raw_material_movements) this.state.raw_material_movements = [];
+
+    const returnRecord: SupplierReturn = {
+      id: returnId,
+      return_number: returnNumber,
+      return_date: data.return_date,
+      supplier_id: data.supplier_id || null,
+      purchase_id: data.purchase_id || null,
+      ingredient_id: ing.id,
+      lot_id: data.lot_id || null,
+      returned_quantity: baseQty,
+      base_unit: ing.base_unit,
+      unit_cost: rate,
+      total_refund_amount: Number(data.total_refund_amount) || 0,
+      actual_refund_received: Number(data.total_refund_amount) || 0,
+      reason: data.reason,
+      status: 'completed',
+      created_by: userId,
+      created_at: now,
+    };
+    this.state.supplier_returns.push(returnRecord);
+
+    // Ledger deduction
+    this.state.raw_material_movements.push({
+      id: `rmm-${generateId().slice(0, 8)}`,
+      ingredient_id: ing.id,
+      movement_date: now,
+      source_location: ing.storage_location || 'Main Raw Material Store',
+      destination_location: 'Supplier Return',
+      quantity: -baseQty,
+      base_unit: ing.base_unit,
+      movement_type: 'supplier_return',
+      reference_table: 'supplier_returns',
+      reference_id: returnId,
+      lot_id: data.lot_id || null,
+      unit_cost_snapshot: rate,
+      total_value_snapshot: Number(data.total_refund_amount) || 0,
+      reason: `Supplier Return ${returnNumber}: ${data.reason}`,
+      created_by: userId,
+      created_at: now,
+    });
+
+    this.logAudit('supplier_returns', returnId, 'CREATE_SUPPLIER_RETURN', null, returnRecord, `Returned ${baseQty} ${ing.base_unit} ${ing.name_en} to supplier`, userId);
+    this.saveState();
+
+    return { ...returnRecord, ingredient: ing, supplier: data.supplier_id ? this.getSupplierById(data.supplier_id) : undefined };
+  }
+
+  // --- Reorder Shopping List ---
+  public getReorderList(): ReorderItem[] {
+    const ingredients = this.getIngredients();
+    const existingList = this.state.reorder_list || [];
+    const neededItems: ReorderItem[] = [];
+
+    for (const ing of ingredients) {
+      if (ing.stock_status === 'low_stock' || ing.stock_status === 'out_of_stock') {
+        const existing = existingList.find((r) => r.ingredient_id === ing.id);
+        const suggested = ing.reorder_quantity && ing.reorder_quantity > 0 
+          ? ing.reorder_quantity 
+          : Math.max(1, (ing.min_stock_level || 10) * 2);
+
+        neededItems.push({
+          id: existing?.id || `reord-${generateId().slice(0, 8)}`,
+          ingredient_id: ing.id,
+          ingredient: ing,
+          suggested_quantity: existing?.suggested_quantity || suggested,
+          base_unit: ing.base_unit,
+          supplier_id: ing.preferred_supplier_id || null,
+          supplier: ing.preferred_supplier_id ? this.getSupplierById(ing.preferred_supplier_id) : undefined,
+          status: existing?.status || 'needed',
+          ordered_at: existing?.ordered_at || null,
+          notes: existing?.notes || null,
+          updated_at: existing?.updated_at || new Date().toISOString(),
+        });
+      }
+    }
+
+    return neededItems;
+  }
+
+  public updateReorderItemStatus(
+    ingredientId: string,
+    status: 'needed' | 'ordered' | 'received',
+    notes?: string
+  ): boolean {
+    if (!this.state.reorder_list) this.state.reorder_list = [];
+    const idx = this.state.reorder_list.findIndex((r) => r.ingredient_id === ingredientId);
+    const now = new Date().toISOString();
+
+    if (idx !== -1) {
+      this.state.reorder_list[idx].status = status;
+      if (status === 'ordered') this.state.reorder_list[idx].ordered_at = now;
+      if (notes !== undefined) this.state.reorder_list[idx].notes = notes;
+      this.state.reorder_list[idx].updated_at = now;
+    } else {
+      const ing = this.getIngredientById(ingredientId);
+      this.state.reorder_list.push({
+        id: `reord-${generateId().slice(0, 8)}`,
+        ingredient_id: ingredientId,
+        suggested_quantity: ing?.reorder_quantity || 10,
+        base_unit: ing?.base_unit || 'kg',
+        supplier_id: ing?.preferred_supplier_id || null,
+        status,
+        ordered_at: status === 'ordered' ? now : null,
+        notes: notes || null,
+        updated_at: now,
+      });
+    }
+
+    this.saveState();
+    return true;
+  }
+
+  // --- Atomic Production Completion with Raw Material Consumption ---
+  public completeProductionWithRawMaterials(
+    batchId: string,
+    rawMaterials: {
+      ingredient_id: string;
+      quantity_used: number;
+      unit: UnitType;
+      lot_id?: string | null;
+    }[],
+    allowEmergencyOverride: boolean = false,
+    overrideReason?: string,
+    userId: string = 'usr-owner-001'
+  ): ProductionBatchWithItems {
+    const batch = this.state.production_batches.find((b) => b.id === batchId);
+    if (!batch) throw new Error('Production batch not found');
+    if (batch.status === 'completed') throw new Error('Production batch is already completed');
+
+    if (!this.state.raw_material_movements) this.state.raw_material_movements = [];
+    if (!this.state.production_batch_ingredients) this.state.production_batch_ingredients = [];
+
+    // 1. Validate Stock Shortages
+    for (const rm of rawMaterials) {
+      const ing = this.getIngredientById(rm.ingredient_id);
+      if (!ing) throw new Error(`Ingredient ${rm.ingredient_id} not found`);
+
+      const baseQty = convertQuantity(rm.quantity_used, rm.unit, ing.base_unit, ing.conversion_factor || 1);
+      const available = this.getAvailableRawMaterialStock(ing.id);
+
+      if (available < baseQty) {
+        const shortage = Number((baseQty - available).toFixed(3));
+        if (!allowEmergencyOverride) {
+          throw new Error(`Insufficient stock for ${ing.name_hi} (${ing.name_en}). Available: ${available} ${ing.base_unit}, Required: ${baseQty} ${ing.base_unit}, Shortage: ${shortage} ${ing.base_unit}.`);
+        }
+      }
+    }
+
+    const now = new Date().toISOString();
+    let totalRawCost = 0;
+
+    // 2. Deduct Raw Materials from Ledger
+    for (const rm of rawMaterials) {
+      const ing = this.getIngredientById(rm.ingredient_id)!;
+      const baseQty = convertQuantity(rm.quantity_used, rm.unit, ing.base_unit, ing.conversion_factor || 1);
+      const rate = ing.weighted_average_rate || ing.current_rate;
+      const calculatedCost = Number((baseQty * rate).toFixed(2));
+      totalRawCost += calculatedCost;
+
+      // Create negative consumption movement
+      this.state.raw_material_movements.push({
+        id: `rmm-${generateId().slice(0, 8)}`,
+        ingredient_id: ing.id,
+        movement_date: now,
+        source_location: ing.storage_location || 'Main Raw Material Store',
+        destination_location: 'Production Floor',
+        quantity: -baseQty,
+        base_unit: ing.base_unit,
+        movement_type: 'production_consumption',
+        reference_table: 'production_batches',
+        reference_id: batchId,
+        lot_id: rm.lot_id || null,
+        unit_cost_snapshot: rate,
+        total_value_snapshot: calculatedCost,
+        reason: `Production Batch ${batch.batch_number}${allowEmergencyOverride ? ` (Emergency Override: ${overrideReason || 'None'})` : ''}`,
+        created_by: userId,
+        created_at: now,
+      });
+
+      // Save snapshot in production_batch_ingredients
+      this.state.production_batch_ingredients.push({
+        id: `pbi-${generateId().slice(0, 8)}`,
+        batch_id: batchId,
+        ingredient_id: ing.id,
+        ingredient_name: `${ing.name_hi} (${ing.name_en})`,
+        quantity_used: rm.quantity_used,
+        unit: rm.unit,
+        converted_base_quantity: baseQty,
+        rate_snapshot: rate,
+        rate_unit: ing.rate_unit,
+        calculated_cost: calculatedCost,
+        is_packaging: ing.category === 'packaging',
+        created_at: now,
+      });
+
+      // If lot was specified, deduct from lot
+      if (rm.lot_id) {
+        const lot = (this.state.inventory_lots || []).find((l) => l.id === rm.lot_id);
+        if (lot) {
+          lot.remaining_quantity = Math.max(0, lot.remaining_quantity - baseQty);
+          if (lot.remaining_quantity === 0) lot.status = 'exhausted';
+          lot.updated_at = now;
+        }
+      }
+    }
+
+    // 3. Add Finished Kulfi Stock Movements to Main Freezer
+    const prodLoc = this.state.stock_locations.find((l) => l.location_type === 'production')!;
+    const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer')!;
+
+    for (const item of batch.items) {
+      const saleable = item.saleable_quantity;
+      if (saleable > 0) {
+        this.state.stock_movements.push({
+          id: `mv-${generateId().slice(0, 8)}`,
+          movement_date: now,
+          product_id: item.product_id,
+          source_location_id: prodLoc.id,
+          destination_location_id: freezerLoc.id,
+          quantity: saleable,
+          movement_type: 'production_completed',
+          reference_table: 'production_batches',
+          reference_id: batch.id,
+          notes: `Daily Production: ${batch.batch_number}`,
+          created_by: userId,
+          created_at: now,
+        });
+      }
+    }
+
+    // 4. Update Batch status
+    batch.status = 'completed';
+    batch.total_ingredient_cost = Math.max(batch.total_ingredient_cost || 0, totalRawCost);
+    batch.completed_at = now;
+    batch.updated_at = now;
+
+    this.logAudit('production_batches', batch.id, 'COMPLETE_PRODUCTION_WITH_RAW_MATERIALS', null, batch, `Completed batch ${batch.batch_number} with raw materials`, userId);
+    this.saveState();
+
+    return batch;
   }
 
   public updateIngredientRate(

@@ -33,6 +33,9 @@ export const MobileBottomNav: React.FC = () => {
   ].filter((item) => item.show);
 
   const moreNavItems = [
+    { to: '/inventory', label: 'कच्चा माल स्टॉक', icon: Package, show: isProduction || isOwner },
+    { to: '/inventory/purchases', label: 'सामग्री खरीद', icon: Truck, show: isOwner },
+    { to: '/inventory/lpg', label: 'LPG सिलेंडर', icon: Boxes, show: isProduction || isOwner },
     { to: '/production/cost-calculator', label: t.productionCostCalculatorHi || 'लागत कैलकुलेटर', icon: Calculator, show: isProduction || isOwner },
     { to: '/expenses', label: t.navExpenses, icon: Wallet, show: isOwner },
     { to: '/closing', label: t.navClosing, icon: CalendarCheck, show: isOwner },

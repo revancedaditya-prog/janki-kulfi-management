@@ -3,7 +3,6 @@ import { useSearchParams, Link } from 'react-router-dom';
 import {
   useProductionBatches,
   useCreateProductionBatch,
-  useCompleteProductionBatch,
   useCancelProductionBatch,
   useUpdateDraftProductionBatch,
   useCorrectProductionBatch,
@@ -42,6 +41,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { ProductionBatchWithItems } from '@/types';
+import { CompleteBatchWithIngredientsModal } from '@/components/production/CompleteBatchWithIngredientsModal';
 
 export const ProductionPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -53,14 +53,13 @@ export const ProductionPage: React.FC = () => {
   const { isOnline, saveDraft } = useSync();
 
   const createBatch = useCreateProductionBatch();
-  const completeBatch = useCompleteProductionBatch();
   const cancelBatch = useCancelProductionBatch();
   const updateDraftBatch = useUpdateDraftProductionBatch();
   const correctBatch = useCorrectProductionBatch();
   const deleteBatch = useDeleteProductionBatch();
 
   const [isNewModalOpen, setIsNewModalOpen] = useState(searchParams.get('new') === 'true');
-  const [batchToComplete, setBatchToComplete] = useState<string | null>(null);
+  const [batchToComplete, setBatchToComplete] = useState<ProductionBatchWithItems | null>(null);
   const [batchToCancel, setBatchToCancel] = useState<string | null>(null);
   const [batchToDelete, setBatchToDelete] = useState<ProductionBatchWithItems | null>(null);
   const [deleteReason, setDeleteReason] = useState<string>('');
@@ -325,15 +324,7 @@ export const ProductionPage: React.FC = () => {
     }
   };
 
-  const handleConfirmComplete = async () => {
-    if (!batchToComplete) return;
-    try {
-      await completeBatch.mutateAsync(batchToComplete);
-      setBatchToComplete(null);
-    } catch (err: any) {
-      alert(err.message || 'बैच पूरा करने में त्रुटि हुई');
-    }
-  };
+
 
   const handleConfirmCancel = async () => {
     if (!batchToCancel) return;
@@ -542,7 +533,7 @@ export const ProductionPage: React.FC = () => {
                           variant="primary"
                           size="sm"
                           leftIcon={<CheckCircle className="w-4 h-4" />}
-                          onClick={() => setBatchToComplete(batch.id)}
+                          onClick={() => setBatchToComplete(batch)}
                         >
                           {t.completeBatch}
                         </Button>
@@ -1044,17 +1035,11 @@ export const ProductionPage: React.FC = () => {
         isLoading={isHistoryLoading}
       />
 
-      {/* Complete Batch Confirmation Dialog */}
-      <ConfirmDialog
+      {/* Complete Batch with Raw Material Deduction Modal */}
+      <CompleteBatchWithIngredientsModal
+        batch={batchToComplete}
         isOpen={Boolean(batchToComplete)}
         onClose={() => setBatchToComplete(null)}
-        onConfirm={handleConfirmComplete}
-        title={t.completeBatch}
-        description="इस बैच को पूरा करने पर तैयार कुल्फी स्वतः मुख्य कोल्ड स्टोरेज फ्रीजर में जुड़ जाएगी।"
-        confirmText="हाँ, बैच पूरा करें"
-        cancelText={t.cancel}
-        variant="primary"
-        isLoading={completeBatch.isPending}
       />
 
       {/* Cancel Draft Confirmation Dialog */}
