@@ -275,5 +275,148 @@ describe('Authoritative Freezer Balance & Reversal Isolation Suite', () => {
     expect(refreshedProducts.find((p) => p.id === rabri.id)?.available_quantity).toBe(245);
     expect(refreshedProducts.find((p) => p.id === prem.id)?.available_quantity).toBe(41);
   });
+
+  it('5. Database Evidence Scenario: BAT-20260904-9131 deleted + BAT-20260904-2891 completed with canonical current_location_stock', async () => {
+    const products = mockStore.getProducts();
+    const sada = products[0];
+    const rabri = products[1];
+    const prem = products[2];
+
+    // Initial state: Premium has 40 in freezer, Sada 0, Rabri 0
+    mockStore.getState().stock_movements.push({
+      id: 'mv-initial-prem',
+      movement_date: '2026-09-03T10:00:00Z',
+      product_id: prem.id,
+      source_location_id: 'loc-prod',
+      destination_location_id: 'a0000000-0000-0000-0000-000000000002',
+      quantity: 40,
+      movement_type: 'production_completed',
+      reference_table: 'production_batches',
+      reference_id: 'batch-prev-01',
+      notes: 'Initial stock',
+      created_by: 'usr-owner-001',
+      created_at: '2026-09-03T10:00:00Z',
+    });
+
+    // 1. Opening Freezer Stock shows database-calculated balances
+    const locStock = mockStore.getCurrentLocationStock('a0000000-0000-0000-0000-000000000002');
+    expect(locStock.find((s) => s.product_id === prem.id)?.quantity).toBe(40);
+    let balances = await api.getFreezerBalances();
+    expect(balances[sada.id] || 0).toBe(0);
+    expect(balances[rabri.id] || 0).toBe(0);
+    expect(balances[prem.id] || 0).toBe(40);
+
+    // 2. Create Batch BAT-20260904-9131 (Sada +655, Rabri +245, Premium +41)
+    const batch1 = await api.createProductionBatch(
+      '2026-09-04',
+      7888.76,
+      'Batch BAT-20260904-9131',
+      [
+        { product_id: sada.id, produced_quantity: 655, damaged_quantity: 0 },
+        { product_id: rabri.id, produced_quantity: 245, damaged_quantity: 0 },
+        { product_id: prem.id, produced_quantity: 41, damaged_quantity: 0 },
+      ],
+      'usr-owner-001'
+    );
+
+    // Cards immediately update
+    let products1 = await api.getProducts();
+    expect(products1.find((p) => p.id === sada.id)?.available_quantity).toBe(655);
+    expect(products1.find((p) => p.id === rabri.id)?.available_quantity).toBe(245);
+    expect(products1.find((p) => p.id === prem.id)?.available_quantity).toBe(81); // 40 + 41
+
+    // 3. Delete Batch BAT-20260904-9131 -> creates reversals (-655, -245, -41)
+    await api.deleteProductionBatch(batch1.batch_id || batch1.id, 'Accidental duplicate', 'usr-owner-001');
+
+    // Cards immediately reflect deletion without reload
+    let productsAfterDel = await api.getProducts();
+    expect(productsAfterDel.find((p) => p.id === sada.id)?.available_quantity).toBe(0);
+    expect(productsAfterDel.find((p) => p.id === rabri.id)?.available_quantity).toBe(0);
+    expect(productsAfterDel.find((p) => p.id === prem.id)?.available_quantity).toBe(40);
+
+    // 4. Create Batch BAT-20260904-2891 (Sada +655, Rabri +245, Premium +41)
+    await api.createProductionBatch(
+      '2026-09-04',
+      7888.76,
+      'Batch BAT-20260904-2891',
+      [
+        { product_id: sada.id, produced_quantity: 655, damaged_quantity: 0 },
+        { product_id: rabri.id, produced_quantity: 245, damaged_quantity: 0 },
+        { product_id: prem.id, produced_quantity: 41, damaged_quantity: 0 },
+      ],
+      'usr-owner-001'
+    );
+
+    // 5. Verify Canonical current_location_stock balances:
+    // Sada: 655, Rabri: 245, Premium: 81 (40 + 41)
+    const finalBalances = await api.getFreezerBalances();
+    expect(finalBalances[sada.id]).toBe(655);
+    expect(finalBalances[rabri.id]).toBe(245);
+    expect(finalBalances[prem.id]).toBe(81);
+
+    const finalProducts = await api.getProducts();
+    expect(finalProducts.find((p) => p.id === sada.id)?.available_quantity).toBe(655);
+    expect(finalProducts.find((p) => p.id === rabri.id)?.available_quantity).toBe(245);
+    expect(finalProducts.find((p) => p.id === prem.id)?.available_quantity).toBe(81);
+
+    // 6. Ledger and stock cards always reconcile 100%
+    const freezerLocIds = new Set(['a0000000-0000-0000-0000-000000000002', 'loc-freezer', 'loc-freezer-01']);
+    mockStore.getState().stock_locations.forEach((l) => {
+      if (l.location_type === 'main_freezer') freezerLocIds.add(l.id);
+    });
+
+    const movements = mockStore.getStockMovements();
+    const ledgerSadaDelta = movements
+      .filter((m) => m.product_id === sada.id)
+      .reduce((sum, m) => {
+        if (m.destination_location_id && freezerLocIds.has(m.destination_location_id)) return sum + m.quantity;
+        if (m.source_location_id && freezerLocIds.has(m.source_location_id)) return sum - m.quantity;
+        return sum;
+      }, 0);
+    expect(ledgerSadaDelta).toBe(655);
+    expect(finalProducts.find((p) => p.id === sada.id)?.available_quantity).toBe(ledgerSadaDelta);
+
+    // 7. Refreshing browser preserves exact same values
+    const reloadedBalances = await api.getFreezerBalances();
+    expect(reloadedBalances[sada.id]).toBe(655);
+    expect(reloadedBalances[rabri.id]).toBe(245);
+    expect(reloadedBalances[prem.id]).toBe(81);
+  });
+
+  it('6. Idempotency Test: Repeated Sync Stock does NOT duplicate movements', async () => {
+    const products = mockStore.getProducts();
+    const sada = products[0];
+
+    // 1. Initial batch creation
+    await api.createProductionBatch(
+      '2026-09-04',
+      1000,
+      'Batch 1',
+      [{ product_id: sada.id, produced_quantity: 100, damaged_quantity: 0 }],
+      'usr-owner-001'
+    );
+
+    const movementCountBeforeSync = mockStore.getStockMovements().length;
+    expect(mockStore.getAvailableFreezerStock(sada.id)).toBe(100);
+
+    // 2. Run Sync Stock 1st time -> 0 missing movements
+    const sync1 = await api.reconcileFreezerStock();
+    expect(sync1.synced_batch_items).toBe(0);
+    expect(mockStore.getStockMovements().length).toBe(movementCountBeforeSync);
+    expect(mockStore.getAvailableFreezerStock(sada.id)).toBe(100);
+
+    // 3. Run Sync Stock 2nd time -> 0 missing movements
+    const sync2 = await api.reconcileFreezerStock();
+    expect(sync2.synced_batch_items).toBe(0);
+    expect(mockStore.getStockMovements().length).toBe(movementCountBeforeSync);
+    expect(mockStore.getAvailableFreezerStock(sada.id)).toBe(100);
+
+    // 4. Run Sync Stock 3rd time -> 0 duplicate movements created
+    const sync3 = await api.reconcileFreezerStock();
+    expect(sync3.synced_batch_items).toBe(0);
+    expect(mockStore.getStockMovements().length).toBe(movementCountBeforeSync);
+    expect(mockStore.getAvailableFreezerStock(sada.id)).toBe(100);
+  });
 });
+
 

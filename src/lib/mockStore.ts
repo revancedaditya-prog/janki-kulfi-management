@@ -937,51 +937,74 @@ class MockStore {
     }
   }
 
-  // --- Authoritative Stock Ledger Balances ---
-  public getAvailableFreezerStock(productId: string): number {
-    const product = this.state.products.find(
-      (p) => p.id === productId || p.sku === productId || p.name_en === productId || p.name_hi === productId
-    );
-    const validProductIds = new Set<string>([productId]);
-    if (product) {
-      validProductIds.add(product.id);
-      validProductIds.add(product.sku);
-      validProductIds.add(product.name_en);
-      validProductIds.add(product.name_hi);
-    }
-
-    const freezerLocIds = new Set<string>(
-      this.state.stock_locations
-        .filter((l) => l.location_type === 'main_freezer')
-        .map((l) => l.id)
-    );
-    freezerLocIds.add('loc-freezer');
-    freezerLocIds.add('loc-freezer-01');
-
-    let incoming = 0;
-    let outgoing = 0;
+  // --- Authoritative Stock Ledger Balances (Canonical current_location_stock) ---
+  public getCurrentLocationStock(locationId?: string): { location_id: string; product_id: string; quantity: number }[] {
+    const deltas: Record<string, Record<string, number>> = {};
 
     for (const m of this.state.stock_movements) {
-      if (validProductIds.has(m.product_id)) {
-        const isDestFreezer = Boolean(m.destination_location_id && freezerLocIds.has(m.destination_location_id));
-        const isSrcFreezer = Boolean(m.source_location_id && freezerLocIds.has(m.source_location_id));
-        const qty = Number(m.quantity) || 0;
+      const qty = Number(m.quantity) || 0;
+      if (m.destination_location_id) {
+        if (!deltas[m.destination_location_id]) deltas[m.destination_location_id] = {};
+        deltas[m.destination_location_id][m.product_id] = (deltas[m.destination_location_id][m.product_id] || 0) + qty;
+      }
+      if (m.source_location_id) {
+        if (!deltas[m.source_location_id]) deltas[m.source_location_id] = {};
+        deltas[m.source_location_id][m.product_id] = (deltas[m.source_location_id][m.product_id] || 0) - qty;
+      }
+    }
 
-        if (isDestFreezer && !isSrcFreezer) {
-          incoming += qty;
-        } else if (isSrcFreezer && !isDestFreezer) {
-          outgoing += qty;
+    const results: { location_id: string; product_id: string; quantity: number }[] = [];
+    for (const loc of Object.keys(deltas)) {
+      if (!locationId || loc === locationId) {
+        for (const pid of Object.keys(deltas[loc])) {
+          results.push({
+            location_id: loc,
+            product_id: pid,
+            quantity: deltas[loc][pid],
+          });
         }
       }
     }
-    return Math.max(0, incoming - outgoing);
+    return results;
+  }
+
+  public getAvailableFreezerStock(productId: string): number {
+    const balances = this.getFreezerBalances();
+    const product = this.state.products.find(
+      (p) => p.id === productId || p.sku === productId || p.name_en === productId || p.name_hi === productId
+    );
+    const pid = product ? product.id : productId;
+    return balances[pid] || 0;
   }
 
   public getFreezerBalances(): Record<string, number> {
+    const freezerLocIds = new Set<string>([
+      'a0000000-0000-0000-0000-000000000002',
+      'loc-freezer',
+      'loc-freezer-01',
+    ]);
+    for (const loc of this.state.stock_locations) {
+      if (loc.location_type === 'main_freezer') {
+        freezerLocIds.add(loc.id);
+      }
+    }
+
     const balances: Record<string, number> = {};
     for (const p of this.state.products) {
-      balances[p.id] = this.getAvailableFreezerStock(p.id);
+      balances[p.id] = 0;
     }
+
+    const stockRows = this.getCurrentLocationStock();
+    for (const row of stockRows) {
+      if (freezerLocIds.has(row.location_id)) {
+        const prod = this.state.products.find(
+          (p) => p.id === row.product_id || p.sku === row.product_id || p.name_en === row.product_id
+        );
+        const pid = prod ? prod.id : row.product_id;
+        balances[pid] = (balances[pid] || 0) + row.quantity;
+      }
+    }
+
     return balances;
   }
 

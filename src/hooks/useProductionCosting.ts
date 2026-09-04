@@ -96,6 +96,8 @@ export function useSaveRecipe() {
   });
 }
 
+import { invalidateAndRefetchStockQueries } from './useProducts';
+
 export function useCreateProductionCostingBatch() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
@@ -127,12 +129,11 @@ export function useCreateProductionCostingBatch() {
       }[];
       notes?: string;
     }) => api.createProductionCostingBatch(data, user?.id || 'usr-owner-001'),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_locations'] });
-      queryClient.invalidateQueries({ queryKey: ['freezer_stock'] });
+    onSuccess: async () => {
+      queryClient.invalidateQueries({ queryKey: ['stock_locations'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'], exact: false });
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
+

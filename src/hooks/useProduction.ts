@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
+import { invalidateAndRefetchStockQueries } from './useProducts';
 
 export function useProductionBatches() {
   return useQuery({
@@ -33,12 +34,8 @@ export function useCreateProductionBatch() {
         user?.id || 'usr-owner-001'
       );
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['freezer_stock'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
@@ -51,11 +48,8 @@ export function useCompleteProductionBatch() {
     mutationFn: async (batchId: string) => {
       return api.completeProductionBatch(batchId, user?.id || 'usr-owner-001');
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
@@ -84,15 +78,12 @@ export function useCompleteProductionWithRawMaterials() {
         user?.id || 'usr-owner-001'
       );
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['ingredients'] });
-      queryClient.invalidateQueries({ queryKey: ['raw-material-movements'] });
-      queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] });
-      queryClient.invalidateQueries({ queryKey: ['reorder-list'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      queryClient.invalidateQueries({ queryKey: ['ingredients'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-movements'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['reorder-list'], exact: false });
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
@@ -106,7 +97,7 @@ export function useCancelProductionBatch() {
       return api.cancelProductionBatch(batchId, user?.id || 'usr-owner-001');
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
+      queryClient.invalidateQueries({ queryKey: ['production_batches'], exact: false });
     },
   });
 }
@@ -138,10 +129,8 @@ export function useUpdateDraftProductionBatch() {
         user?.id || 'usr-owner-001'
       );
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
@@ -176,11 +165,8 @@ export function useCorrectProductionBatch() {
         user?.id || 'usr-owner-001'
       );
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
@@ -201,11 +187,8 @@ export function useDeleteProductionBatch() {
     mutationFn: async ({ batchId, reason }: { batchId: string; reason?: string }) => {
       return api.deleteProductionBatch(batchId, reason || 'Deleted by Owner', user?.id || 'usr-owner-001');
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }

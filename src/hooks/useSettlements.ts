@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
+import { invalidateAndRefetchStockQueries } from './useProducts';
 
 export function useSellerSettlements() {
   return useQuery({
@@ -50,13 +51,11 @@ export function useProcessSettlement() {
         user?.id || 'usr-owner-001'
       );
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['seller_settlements'] });
-      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['sellers'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      queryClient.invalidateQueries({ queryKey: ['seller_settlements'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['sellers'], exact: false });
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
@@ -69,13 +68,11 @@ export function useApproveSettlement() {
     mutationFn: async (settlementId: string) => {
       return api.approvePendingSettlement(settlementId, user?.id || 'usr-owner-001');
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['seller_settlements'] });
-      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['sellers'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      queryClient.invalidateQueries({ queryKey: ['seller_settlements'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['sellers'], exact: false });
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
@@ -118,9 +115,9 @@ export function useUpdatePendingSettlement() {
       );
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['seller_settlements'] });
-      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+      queryClient.invalidateQueries({ queryKey: ['seller_settlements'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'], exact: false });
     },
   });
 }
@@ -168,13 +165,11 @@ export function useCorrectApprovedSettlement() {
         user?.id || 'usr-owner-001'
       );
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['seller_settlements'] });
-      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['sellers'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      queryClient.invalidateQueries({ queryKey: ['seller_settlements'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['sellers'], exact: false });
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
@@ -195,13 +190,12 @@ export function useDeleteSellerSettlement() {
     mutationFn: async ({ settlementId, reason }: { settlementId: string; reason?: string }) => {
       return api.deleteSellerSettlement(settlementId, reason || 'Deleted by Owner', user?.id || 'usr-owner-001');
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['seller_settlements'] });
-      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['sellers'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      queryClient.invalidateQueries({ queryKey: ['seller_settlements'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['sellers'], exact: false });
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
+

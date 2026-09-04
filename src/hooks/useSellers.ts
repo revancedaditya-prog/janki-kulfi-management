@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
+import { invalidateAndRefetchStockQueries } from './useProducts';
 
 export function useSellers() {
   return useQuery({
@@ -162,12 +163,9 @@ export function useIssueSellerStock() {
     }) => {
       return api.issueSellerStock(sellerId, cartId, issueDate, items, notes, user?.id || 'usr-owner-001');
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['sellers'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      queryClient.invalidateQueries({ queryKey: ['sellers'], exact: false });
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
@@ -194,10 +192,8 @@ export function useUpdateDraftSellerIssue() {
     }) => {
       return api.updateDraftSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, user?.id || 'usr-owner-001');
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
@@ -211,7 +207,7 @@ export function useCancelDraftSellerIssue() {
       return api.cancelDraftSellerIssue(issueId, user?.id || 'usr-owner-001');
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'], exact: false });
     },
   });
 }
@@ -240,12 +236,9 @@ export function useCorrectSellerIssue() {
     }) => {
       return api.correctSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, reason, user?.id || 'usr-owner-001');
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['sellers'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      queryClient.invalidateQueries({ queryKey: ['sellers'], exact: false });
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
@@ -266,12 +259,10 @@ export function useDeleteSellerIssue() {
     mutationFn: async ({ issueId, reason }: { issueId: string; reason?: string }) => {
       return api.deleteSellerIssue(issueId, reason || 'Deleted by Owner', user?.id || 'usr-owner-001');
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['sellers'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    onSuccess: async () => {
+      queryClient.invalidateQueries({ queryKey: ['sellers'], exact: false });
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
+

@@ -59,15 +59,18 @@ export function setSimulatedProfile(profile: Profile) {
   localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(profile));
 }
 
+export const MAIN_FREEZER_LOCATION_ID = 'a0000000-0000-0000-0000-000000000002';
+
 async function getOrCreateDefaultStockLocations() {
   const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type, name, seller_id');
-  let freezerLoc = locs?.find((l: any) => l.location_type === 'main_freezer');
+  let freezerLoc = locs?.find((l: any) => l.location_type === 'main_freezer' || l.id === MAIN_FREEZER_LOCATION_ID);
   let prodLoc = locs?.find((l: any) => l.location_type === 'production');
   let damagedLoc = locs?.find((l: any) => l.location_type === 'damaged');
   let compLoc = locs?.find((l: any) => l.location_type === 'complimentary');
 
   if (!freezerLoc) {
     const { data: newLoc } = await (supabase as any).from('stock_locations').insert({
+      id: MAIN_FREEZER_LOCATION_ID,
       name: 'Main Cold Storage Freezer',
       location_type: 'main_freezer',
     }).select().single();
@@ -140,85 +143,86 @@ export const api = {
     return data;
   },
 
-  // --- Authoritative Inventory Balance Service ---
+  // --- Authoritative Inventory Balance Service (Canonical current_location_stock) ---
+  async getCurrentLocationStock(locationId?: string): Promise<{ location_id: string; product_id: string; quantity: number }[]> {
+    if (useMockMode) {
+      return mockStore.getCurrentLocationStock(locationId);
+    }
+    try {
+      let query = (supabase as any).from('current_location_stock').select('location_id, product_id, quantity');
+      if (locationId) {
+        query = query.eq('location_id', locationId);
+      }
+      const { data, error } = await query;
+      if (!error && data) {
+        return data;
+      }
+    } catch (err) {
+      console.warn('Exception reading current_location_stock view:', err);
+    }
+    return mockStore.getCurrentLocationStock(locationId);
+  },
+
   async getFreezerBalances(): Promise<Record<string, number>> {
     if (useMockMode) {
       return mockStore.getFreezerBalances();
     }
 
     try {
-      // 1. Load products to have all canonical IDs and SKUs
-      const { data: products } = await (supabase as any).from('products').select('id, sku, name_en, name_hi');
-      const productLookup = new Map<string, string>();
-      const balances: Record<string, number> = {};
+      const freezerLocIds = new Set<string>([
+        MAIN_FREEZER_LOCATION_ID,
+        'loc-freezer',
+        'loc-freezer-01',
+      ]);
 
-      if (products) {
-        for (const p of products) {
-          balances[p.id] = 0;
-          productLookup.set(p.id, p.id);
-          if (p.sku) productLookup.set(p.sku, p.id);
-          if (p.name_en) productLookup.set(p.name_en, p.id);
-          if (p.name_hi) productLookup.set(p.name_hi, p.id);
-        }
-      }
+      // 1. Primary: Read from canonical database view public.current_location_stock
+      const { data: stockRows, error: viewErr } = await (supabase as any)
+        .from('current_location_stock')
+        .select('location_id, product_id, quantity');
 
-      // 2. Load all freezer locations
-      const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type, name');
-      const freezerLocIds = new Set<string>();
-      freezerLocIds.add('loc-freezer');
-      freezerLocIds.add('loc-freezer-01');
-
-      if (locs) {
-        for (const l of locs) {
-          if (l.location_type === 'main_freezer' || l.name?.toLowerCase().includes('freezer')) {
-            freezerLocIds.add(l.id);
+      if (!viewErr && stockRows && Array.isArray(stockRows)) {
+        // Also check any dynamically created main_freezer locations
+        const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type, name');
+        if (locs && Array.isArray(locs)) {
+          for (const l of locs) {
+            if (l.location_type === 'main_freezer' || l.name?.toLowerCase().includes('freezer')) {
+              freezerLocIds.add(l.id);
+            }
           }
         }
-      }
 
-      // 3. Load all stock movements
-      const { data: movements, error } = await (supabase as any)
-        .from('stock_movements')
-        .select('product_id, quantity, source_location_id, destination_location_id, movement_type');
-
-      if (!error && movements) {
-        for (const m of movements) {
-          const canonicalId = productLookup.get(m.product_id);
-          if (!canonicalId) continue;
-
-          const qty = Number(m.quantity) || 0;
-          if (qty <= 0) continue;
-
-          const isDestFreezer = freezerLocIds.has(m.destination_location_id);
-          const isSrcFreezer = freezerLocIds.has(m.source_location_id);
-
-          if (isDestFreezer && !isSrcFreezer) {
-            balances[canonicalId] = (balances[canonicalId] || 0) + qty;
-          } else if (isSrcFreezer && !isDestFreezer) {
-            balances[canonicalId] = (balances[canonicalId] || 0) - qty;
+        const balances: Record<string, number> = {};
+        for (const row of stockRows) {
+          if (freezerLocIds.has(row.location_id)) {
+            balances[row.product_id] = (balances[row.product_id] || 0) + Number(row.quantity || 0);
           }
         }
-      } else {
-        // Fallback to v_freezer_stock if direct movements query fails
-        const { data: stockData } = await (supabase as any).from('v_freezer_stock').select('*');
-        if (stockData) {
-          for (const s of stockData) {
-            const canonicalId = productLookup.get(s.product_id) || s.product_id;
-            balances[canonicalId] = Math.max(0, Number(s.available_quantity) || 0);
-          }
+        return balances;
+      }
+
+      // 2. Secondary fallback: Read from v_freezer_stock
+      const { data: stockData, error: fbErr } = await (supabase as any)
+        .from('v_freezer_stock')
+        .select('product_id, available_quantity');
+
+      if (!fbErr && stockData && Array.isArray(stockData)) {
+        const balances: Record<string, number> = {};
+        for (const s of stockData) {
+          balances[s.product_id] = Number(s.available_quantity) || 0;
         }
+        return balances;
       }
 
-      // Ensure non-negative balances
-      for (const id of Object.keys(balances)) {
-        balances[id] = Math.max(0, balances[id]);
+      // 3. Tertiary fallback: Stored procedure get_freezer_balances
+      const { data: rpcBalances, error: rpcErr } = await (supabase as any).rpc('get_freezer_balances');
+      if (!rpcErr && rpcBalances && typeof rpcBalances === 'object') {
+        return rpcBalances;
       }
-
-      return balances;
     } catch (err) {
       console.warn('Exception in getFreezerBalances:', err);
-      return mockStore.getFreezerBalances();
     }
+
+    return mockStore.getFreezerBalances();
   },
 
   async getAvailableFreezerStock(productId: string): Promise<number> {

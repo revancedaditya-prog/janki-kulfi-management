@@ -78,6 +78,24 @@ export function useUpdateProductPrice() {
   });
 }
 
+export async function invalidateAndRefetchStockQueries(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ['products'], exact: false });
+  queryClient.invalidateQueries({ queryKey: ['current_location_stock'], exact: false });
+  queryClient.invalidateQueries({ queryKey: ['freezer_stock'], exact: false });
+  queryClient.invalidateQueries({ queryKey: ['stock_movements'], exact: false });
+  queryClient.invalidateQueries({ queryKey: ['production_batches'], exact: false });
+  queryClient.invalidateQueries({ queryKey: ['seller_issues'], exact: false });
+  queryClient.invalidateQueries({ queryKey: ['seller_settlements'], exact: false });
+  queryClient.invalidateQueries({ queryKey: ['dashboard_summary'], exact: false });
+
+  await Promise.all([
+    queryClient.refetchQueries({ queryKey: ['products'], exact: false }),
+    queryClient.refetchQueries({ queryKey: ['stock_movements'], exact: false }),
+    queryClient.refetchQueries({ queryKey: ['current_location_stock'], exact: false }),
+    queryClient.refetchQueries({ queryKey: ['freezer_stock'], exact: false }),
+  ]);
+}
+
 export function useAdjustFreezerStock() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
@@ -94,11 +112,8 @@ export function useAdjustFreezerStock() {
     }) => {
       return api.adjustFreezerStock(productId, newQuantity, reason, user?.id || 'usr-owner-001');
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
-      queryClient.invalidateQueries({ queryKey: ['freezer_stock'] });
+    onSuccess: async () => {
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
@@ -110,13 +125,8 @@ export function useSyncFreezerStock() {
     mutationFn: async () => {
       return api.reconcileFreezerStock();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
-      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
-      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
-      queryClient.invalidateQueries({ queryKey: ['freezer_stock'] });
+    onSuccess: async () => {
+      await invalidateAndRefetchStockQueries(queryClient);
     },
   });
 }
