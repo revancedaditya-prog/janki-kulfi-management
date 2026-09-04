@@ -233,217 +233,44 @@ export const api = {
     return balances[productId] || 0;
   },
 
-  async reconcileFreezerStock(): Promise<{
+  async syncCompletedBatchesStock(): Promise<{
     success: boolean;
-    synced_batch_items: number;
-    synced_issue_items: number;
-    freezer_balances: Record<string, number>;
+    synced_count: number;
+    synced_batch_items?: number;
+    batches_checked: number;
     message: string;
+    message_hi: string;
   }> {
     if (useMockMode) {
-      return mockStore.reconcileFreezerStock();
+      return mockStore.syncCompletedBatchesStock();
     }
 
-    try {
-      // 1. Try RPC first
-      const { data, error } = await (supabase as any).rpc('reconcile_freezer_stock_transaction');
-      if (!error && data) {
-        return data;
-      }
-      console.warn('RPC reconcile_freezer_stock_transaction failed or not installed, running direct sync:', error);
-    } catch (rpcErr) {
-      console.warn('Exception running reconcile_freezer_stock_transaction:', rpcErr);
+    const { data, error } = await (supabase as any).rpc('sync_completed_production_batches_stock');
+    if (error) {
+      console.error('[sync stock] failed', error);
+      throw new Error(`[Supabase Error ${error.code || ''}]: ${error.message}`);
     }
-
-    // Direct fallback reconciliation in Supabase
-    try {
-      const { freezerLoc, prodLoc } = await getOrCreateDefaultStockLocations();
-      let syncedBatches = 0;
-      let syncedIssues = 0;
-
-      // 1. Fetch completed batches
-      const { data: batches } = await (supabase as any)
-        .from('production_batches')
-        .select('*, items:production_items(*)')
-        .eq('status', 'completed')
-        .neq('is_current_version', false);
-
-      // 2. Fetch existing movements
-      const { data: existingMovements } = await (supabase as any)
-        .from('stock_movements')
-        .select('reference_table, reference_id, product_id, movement_type');
-
-      const movementKeySet = new Set<string>();
-      if (existingMovements) {
-        for (const m of existingMovements) {
-          movementKeySet.add(`${m.reference_table}:${m.reference_id}:${m.product_id}:${m.movement_type}`);
-        }
-      }
-
-      const missingMovements: any[] = [];
-
-      if (batches && freezerLoc && prodLoc) {
-        for (const b of batches) {
-          if (b.items) {
-            for (const it of b.items) {
-              const saleable = Number(it.saleable_quantity) || 0;
-              if (saleable > 0) {
-                const key = `production_batches:${b.id}:${it.product_id}:production_completed`;
-                if (!movementKeySet.has(key)) {
-                  missingMovements.push({
-                    movement_date: b.completed_at || b.production_date || new Date().toISOString(),
-                    product_id: it.product_id,
-                    source_location_id: prodLoc.id,
-                    destination_location_id: freezerLoc.id,
-                    quantity: saleable,
-                    movement_type: 'production_completed',
-                    reference_table: 'production_batches',
-                    reference_id: b.id,
-                    notes: `Auto-Synced from Batch: ${b.batch_number}`,
-                    created_by: toSafeUuid(b.created_by),
-                  });
-                  syncedBatches++;
-                  movementKeySet.add(key);
-                }
-              }
-            }
-          }
-        }
-      }
-
-      // 3. Heal Orphan Production Reversals in direct fallback
-      const { data: allMovements } = await (supabase as any)
-        .from('stock_movements')
-        .select('*')
-        .eq('reference_table', 'production_batches');
-
-      if (allMovements && freezerLoc && prodLoc) {
-        const reversals = allMovements.filter((m: any) => m.movement_type === 'production_reversal' && m.reference_id);
-        for (const rev of reversals) {
-          const hasCompleted = allMovements.some(
-            (m: any) =>
-              m.reference_id === rev.reference_id &&
-              m.product_id === rev.product_id &&
-              m.movement_type === 'production_completed'
-          );
-          if (!hasCompleted) {
-            missingMovements.push({
-              movement_date: rev.movement_date || new Date().toISOString(),
-              product_id: rev.product_id,
-              source_location_id: prodLoc.id,
-              destination_location_id: freezerLoc.id,
-              quantity: rev.quantity,
-              movement_type: 'production_completed',
-              reference_table: 'production_batches',
-              reference_id: rev.reference_id,
-              notes: 'Auto-Reconciled base production for deleted batch reversal',
-              created_by: toSafeUuid(rev.created_by),
-            });
-            syncedBatches++;
-          }
-        }
-      }
-
-      // 4. Fetch issued issues
-      const { data: issues } = await (supabase as any)
-        .from('seller_issues')
-        .select('*, items:seller_issue_items(*)')
-        .in('status', ['issued', 'settled', 'partially_settled'])
-        .neq('is_current_version', false);
-
-      if (issues && freezerLoc) {
-        for (const iss of issues) {
-          let { data: sellerLoc } = await (supabase as any)
-            .from('stock_locations')
-            .select('id')
-            .eq('seller_id', iss.seller_id)
-            .eq('location_type', 'seller')
-            .maybeSingle();
-
-          if (!sellerLoc) {
-            const { data: newLoc } = await (supabase as any)
-              .from('stock_locations')
-              .insert({
-                location_type: 'seller',
-                name: 'Seller Cart Stock',
-                seller_id: iss.seller_id,
-                is_active: true,
-              })
-              .select()
-              .single();
-            sellerLoc = newLoc;
-          }
-
-          if (iss.items && sellerLoc) {
-            for (const it of iss.items) {
-              const issuedQty = Number(it.issued_quantity) || 0;
-              if (issuedQty > 0) {
-                const key = `seller_issues:${iss.id}:${it.product_id}:seller_issued`;
-                if (!movementKeySet.has(key)) {
-                  missingMovements.push({
-                    movement_date: iss.issued_at || iss.issue_date || new Date().toISOString(),
-                    product_id: it.product_id,
-                    source_location_id: freezerLoc.id,
-                    destination_location_id: sellerLoc.id,
-                    quantity: issuedQty,
-                    movement_type: 'seller_issued',
-                    reference_table: 'seller_issues',
-                    reference_id: iss.id,
-                    notes: `Auto-Synced from Issue: ${iss.issue_number}`,
-                    created_by: toSafeUuid(iss.created_by),
-                  });
-                  syncedIssues++;
-                  movementKeySet.add(key);
-                }
-              }
-            }
-          }
-        }
-      }
-
-      if (missingMovements.length > 0) {
-        await (supabase as any).from('stock_movements').insert(missingMovements);
-      }
-
-      // 5. Clean Any Remaining Negative Deficit in Main Freezer
-      const balancesBeforeClean = await this.getFreezerBalances();
-      const deficitFixMovements: any[] = [];
-      const damagedLoc = (await (supabase as any).from('stock_locations').select('id').eq('location_type', 'damaged').maybeSingle())?.data;
-      const adjLocId = damagedLoc?.id || prodLoc?.id || freezerLoc?.id;
-
-      for (const [prodId, qty] of Object.entries(balancesBeforeClean)) {
-        if (qty < 0 && freezerLoc) {
-          deficitFixMovements.push({
-            movement_date: new Date().toISOString(),
-            product_id: prodId,
-            source_location_id: adjLocId,
-            destination_location_id: freezerLoc.id,
-            quantity: Math.abs(qty),
-            movement_type: 'manual_adjustment',
-            reference_table: 'stock_locations',
-            reference_id: freezerLoc.id,
-            notes: `Auto-reconciled negative freezer deficit (${qty} pcs -> 0)`,
-            created_by: null,
-          });
-        }
-      }
-
-      if (deficitFixMovements.length > 0) {
-        await (supabase as any).from('stock_movements').insert(deficitFixMovements);
-      }
-
-      const refreshedBalances = await this.getFreezerBalances();
-      return {
+    return {
+      ...(data || {
         success: true,
-        synced_batch_items: syncedBatches,
-        synced_issue_items: syncedIssues,
-        freezer_balances: refreshedBalances,
-        message: 'Freezer stock successfully reconciled and synced with all production batches and issues.',
-      };
-    } catch (err: any) {
-      console.warn('Error during direct reconciliation fallback:', err);
-      return mockStore.reconcileFreezerStock();
-    }
+        synced_count: 0,
+        batches_checked: 0,
+        message: 'Stock already synchronized—no changes required.',
+        message_hi: 'स्टॉक पहले से सिंक है - कोई बदलाव आवश्यक नहीं।',
+      }),
+      synced_batch_items: data?.synced_count ?? 0,
+    };
+  },
+
+  async reconcileFreezerStock(): Promise<{
+    success: boolean;
+    synced_count: number;
+    synced_batch_items?: number;
+    batches_checked: number;
+    message: string;
+    message_hi: string;
+  }> {
+    return this.syncCompletedBatchesStock();
   },
 
   // --- Products & Prices ---
@@ -1504,6 +1331,41 @@ export const api = {
     return batch;
   },
 
+  async reconcileFreezerStockCounts(
+    counts: Record<string, number>,
+    reason: string = 'Physical Stock Count Reconciliation',
+    idempotencyKey?: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    old_balances: Record<string, number>;
+    new_balances: Record<string, number>;
+    adjustments: any[];
+    total_adjusted_products: number;
+  }> {
+    if (useMockMode) {
+      return mockStore.reconcileFreezerStockCounts(counts, reason, idempotencyKey);
+    }
+
+    const payload: any = {
+      p_counts: counts,
+      p_reason: reason,
+    };
+    if (idempotencyKey) {
+      payload.p_idempotency_key = idempotencyKey;
+    }
+
+    const { data, error } = await (supabase as any).rpc('reconcile_freezer_stock_transaction', payload);
+    if (error) {
+      console.error('[stock reconciliation] failed', error);
+      throw new Error(`[Supabase Error ${error.code || ''}]: ${error.message}`);
+    }
+    if (!data || !data.success) {
+      throw new Error(data?.message || 'Stock reconciliation failed on server');
+    }
+    return data;
+  },
+
   async adjustFreezerStock(
     productId: string,
     newQuantity: number,
@@ -1514,106 +1376,14 @@ export const api = {
       return mockStore.adjustFreezerStock(productId, newQuantity, reason, userId);
     }
 
-    try {
-      const { data, error } = await (supabase as any).rpc('adjust_freezer_stock_transaction', {
-        p_product_id: productId,
-        p_new_quantity: newQuantity,
-        p_reason: reason,
-        p_user_id: userId,
-      });
-      if (!error && data) {
-        return data;
-      }
-      console.warn('RPC adjust_freezer_stock_transaction failed or not installed, using direct Supabase adjustment:', error);
-    } catch (err) {
-      console.warn('adjustFreezerStock RPC error, using direct Supabase adjustment:', err);
-    }
-
-    // Direct Supabase implementation
-    const { freezerLoc, prodLoc, damagedLoc } = await getOrCreateDefaultStockLocations();
-    if (!freezerLoc) throw new Error('Main Freezer location not found');
-
-    // Calculate current available freezer stock
-    const { data: movements } = await (supabase as any)
-      .from('stock_movements')
-      .select('product_id, quantity, source_location_id, destination_location_id')
-      .eq('product_id', productId);
-
-    let currentQty = 0;
-    if (movements) {
-      for (const m of movements) {
-        if (m.destination_location_id === freezerLoc.id) {
-          currentQty += Number(m.quantity) || 0;
-        } else if (m.source_location_id === freezerLoc.id) {
-          currentQty -= Number(m.quantity) || 0;
-        }
-      }
-    }
-    const targetQty = Math.max(0, Math.round(Number(newQuantity) || 0));
-    const difference = targetQty - currentQty;
-
-    if (difference === 0) {
-      return {
-        success: true,
-        previousQuantity: currentQty,
-        newQuantity: targetQty,
-        difference: 0,
-        message: 'No change in freezer stock quantity',
-      };
-    }
-
-    const now = new Date().toISOString();
-    const adjLoc = damagedLoc || prodLoc || freezerLoc;
-
-    if (difference > 0) {
-      // Stock increase
-      await (supabase as any).from('stock_movements').insert({
-        movement_date: now,
-        product_id: productId,
-        source_location_id: adjLoc.id,
-        destination_location_id: freezerLoc.id,
-        quantity: difference,
-        movement_type: 'manual_adjustment',
-        reference_table: 'stock_locations',
-        reference_id: freezerLoc.id,
-        notes: `Freezer stock adjusted (+${difference} pcs): ${currentQty} -> ${targetQty}. Reason: ${reason}`,
-        created_by: userId,
-      });
-    } else {
-      // Stock decrease
-      const reduceQty = Math.abs(difference);
-      await (supabase as any).from('stock_movements').insert({
-        movement_date: now,
-        product_id: productId,
-        source_location_id: freezerLoc.id,
-        destination_location_id: adjLoc.id,
-        quantity: reduceQty,
-        movement_type: 'manual_adjustment',
-        reference_table: 'stock_locations',
-        reference_id: freezerLoc.id,
-        notes: `Freezer stock adjusted (-${reduceQty} pcs): ${currentQty} -> ${targetQty}. Reason: ${reason}`,
-        created_by: userId,
-      });
-    }
-
-    // Insert audit log
-    await (supabase as any).from('audit_logs').insert({
-      table_name: 'stock_locations',
-      record_id: freezerLoc.id,
-      action: 'FREEZER_STOCK_ADJUSTMENT',
-      old_values: { product_id: productId, previous_quantity: currentQty },
-      new_values: { product_id: productId, new_quantity: targetQty, difference },
-      change_reason: reason,
-      user_id: userId,
-      created_at: now,
-    });
-
+    const res = await this.reconcileFreezerStockCounts({ [productId]: newQuantity }, reason);
+    const adj = res.adjustments?.find((a: any) => a.product_id === productId);
     return {
       success: true,
-      previousQuantity: currentQty,
-      newQuantity: targetQty,
-      difference,
-      message: `Freezer stock updated from ${currentQty} to ${targetQty} pcs`,
+      previousQuantity: Number(res.old_balances?.[productId] ?? 0),
+      newQuantity: Number(res.new_balances?.[productId] ?? newQuantity),
+      difference: adj ? Number(adj.difference) : 0,
+      message: res.message || 'Freezer stock successfully updated',
     };
   },
 
@@ -1625,11 +1395,11 @@ export const api = {
       return mockStore.resetAllFreezerStockToZero(reason, userId);
     }
     const products = await this.getProducts();
+    const counts: Record<string, number> = {};
     for (const prod of products) {
-      if ((prod.available_quantity || 0) !== 0) {
-        await this.adjustFreezerStock(prod.id, 0, reason, userId);
-      }
+      counts[prod.id] = 0;
     }
+    await this.reconcileFreezerStockCounts(counts, reason);
     return { success: true, message: 'All freezer stock successfully reset to 0 pcs' };
   },
 

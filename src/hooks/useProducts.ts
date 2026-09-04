@@ -145,5 +145,26 @@ export function useResetAllFreezerStock() {
   });
 }
 
+export function useReconcileFreezerStockCounts() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      counts,
+      reason,
+      idempotencyKey,
+    }: {
+      counts: Record<string, number>;
+      reason: string;
+      idempotencyKey?: string;
+    }) => {
+      return api.reconcileFreezerStockCounts(counts, reason, idempotencyKey);
+    },
+    onSuccess: async () => {
+      await invalidateAndRefetchStockQueries(queryClient);
+    },
+  });
+}
+
 
 

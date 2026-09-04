@@ -1,5 +1,10 @@
 import React, { useState } from 'react';
-import { useProducts, useAdjustFreezerStock, useSyncFreezerStock, useResetAllFreezerStock } from '@/hooks/useProducts';
+import {
+  useProducts,
+  useAdjustFreezerStock,
+  useSyncFreezerStock,
+  useReconcileFreezerStockCounts,
+} from '@/hooks/useProducts';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { Card, CardHeader } from '@/components/common/Card';
@@ -8,7 +13,17 @@ import { Badge } from '@/components/common/Badge';
 import { Modal } from '@/components/common/Modal';
 import { Input } from '@/components/common/Input';
 import { formatCurrency, formatQuantity, formatDateTime } from '@/lib/formatters';
-import { Boxes, Edit3, Trash2, ShieldAlert, AlertCircle, RefreshCw } from 'lucide-react';
+import {
+  Boxes,
+  Edit3,
+  Trash2,
+  ShieldAlert,
+  AlertCircle,
+  RefreshCw,
+  Scale,
+  CheckCircle2,
+  XCircle,
+} from 'lucide-react';
 import { api } from '@/lib/api';
 import { useQuery } from '@tanstack/react-query';
 import { ProductWithPrice } from '@/types';
@@ -20,53 +35,33 @@ export const StockPage: React.FC = () => {
     queryFn: () => api.getStockMovements(),
   });
   const { t, language } = useLanguage();
-  const { isOwner } = useAuth();
+  const { isOwner, user } = useAuth();
   const adjustStockMutation = useAdjustFreezerStock();
   const syncFreezerStock = useSyncFreezerStock();
-  const resetAllStockMutation = useResetAllFreezerStock();
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const reconcileMutation = useReconcileFreezerStockCounts();
 
-  // Reset All Stock State
-  const [showResetAllModal, setShowResetAllModal] = useState(false);
-  const [resetAllReason, setResetAllReason] = useState('कारखाने का भौतिक स्टॉक शून्य / नया प्रोडक्शन शुरू करने हेतु रीसेट');
-  const [resetAllError, setResetAllError] = useState<string | null>(null);
+  // Banner Messages
+  const [bannerStatus, setBannerStatus] = useState<{
+    type: 'success' | 'error';
+    message: string;
+    details?: string;
+  } | null>(null);
 
-  const handleSyncStock = async () => {
-    try {
-      setSyncMessage(language === 'hi' ? 'सिंक्रोनाइज़ हो रहा है...' : 'Syncing stock...');
-      await syncFreezerStock.mutateAsync();
-      setSyncMessage(language === 'hi' ? '✅ फ्रीजर स्टॉक और उत्पादन बैच पूर्णतः सिंक हो गए!' : '✅ Stock & Batches fully synced!');
-      setTimeout(() => setSyncMessage(null), 4000);
-    } catch (err: any) {
-      setSyncMessage(`❌ ${err.message || 'Sync failed'}`);
-      setTimeout(() => setSyncMessage(null), 4000);
-    }
-  };
+  // Reconciliation Dialog State (Owner-Only)
+  const [showReconcileModal, setShowReconcileModal] = useState(false);
+  const [reconcileCounts, setReconcileCounts] = useState<Record<string, string>>({});
+  const [reconcileReason, setReconcileReason] = useState('दैनिक भौतिक स्टॉक मिलान / भौतिक गणना अनुसार संशोधन');
+  const [reconcileError, setReconcileError] = useState<string | null>(null);
+  const [showReconcileConfirm, setShowReconcileConfirm] = useState(false);
 
-  const handleResetAllSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!resetAllReason.trim()) {
-      setResetAllError('कृपया कारण दर्ज करें।');
-      return;
-    }
-    try {
-      await resetAllStockMutation.mutateAsync(resetAllReason.trim());
-      setShowResetAllModal(false);
-      setSyncMessage(language === 'hi' ? '✅ सभी उत्पादों का फ्रीजर स्टॉक सफलतापूर्वक 0 pcs कर दिया गया।' : '✅ All freezer stock reset to 0 pcs.');
-      setTimeout(() => setSyncMessage(null), 4000);
-    } catch (err: any) {
-      setResetAllError(err.message || 'स्टॉक रीसेट करने में त्रुटि हुई');
-    }
-  };
-
-  // Edit Stock State
+  // Single Product Edit State
   const [editingProduct, setEditingProduct] = useState<ProductWithPrice | null>(null);
   const [editNewQty, setEditNewQty] = useState<string>('');
   const [editReason, setEditReason] = useState<string>('');
   const [editError, setEditError] = useState<string | null>(null);
   const [showEditConfirm, setShowEditConfirm] = useState(false);
 
-  // Delete / Reset Stock State
+  // Single Product Reset/Delete State
   const [deletingProduct, setDeletingProduct] = useState<ProductWithPrice | null>(null);
   const [deleteReason, setDeleteReason] = useState<string>('');
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -80,7 +75,111 @@ export const StockPage: React.FC = () => {
     0
   );
 
-  // Open Edit Modal
+  // 1. Handle Sync Stock
+  const handleSyncStock = async () => {
+    console.log('[Sync Stock] Started by user:', user?.id);
+    try {
+      setBannerStatus(null);
+      const res = await syncFreezerStock.mutateAsync();
+      console.log('[Sync Stock] RPC result:', res);
+      const msg = language === 'hi' ? res.message_hi || res.message : res.message;
+      setBannerStatus({
+        type: 'success',
+        message: msg,
+      });
+      setTimeout(() => setBannerStatus(null), 6000);
+    } catch (err: any) {
+      console.error('[Sync Stock] Error:', err);
+      setBannerStatus({
+        type: 'error',
+        message: language === 'hi' ? 'स्टॉक सिंक विफल रहा' : 'Stock synchronization failed',
+        details: err.message || 'Unknown database error',
+      });
+    }
+  };
+
+  // 2. Open Reconciliation Modal
+  const handleOpenReconcileModal = (defaultToZero: boolean = false) => {
+    const initialCounts: Record<string, string> = {};
+    products.forEach((p) => {
+      initialCounts[p.id] = defaultToZero ? '0' : String(p.available_quantity || 0);
+    });
+    setReconcileCounts(initialCounts);
+    setReconcileReason(
+      defaultToZero
+        ? 'कारखाने का भौतिक स्टॉक शून्य / नया प्रोडक्शन सत्र शुरू करने हेतु रीसेट'
+        : 'दैनिक भौतिक स्टॉक मिलान / भौतिक गणना अनुसार संशोधन'
+    );
+    setReconcileError(null);
+    setShowReconcileConfirm(false);
+    setShowReconcileModal(true);
+  };
+
+  // 3. Submit Multi-Product Reconciliation
+  const handleReconcileSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setReconcileError(null);
+
+    if (!reconcileReason.trim()) {
+      setReconcileError(language === 'hi' ? 'संशोधन का कारण लिखना अनिवार्य है।' : 'Reason is mandatory.');
+      return;
+    }
+
+    const payloadCounts: Record<string, number> = {};
+    for (const p of products) {
+      const valStr = reconcileCounts[p.id];
+      const val = parseInt(valStr, 10);
+      if (isNaN(val) || val < 0) {
+        setReconcileError(
+          language === 'hi'
+            ? `उत्पाद "${p.name_hi}" के लिए अमान्य संख्या दर्ज की गई है।`
+            : `Invalid quantity for product "${p.name_en}".`
+        );
+        return;
+      }
+      payloadCounts[p.id] = val;
+    }
+
+    if (!showReconcileConfirm) {
+      setShowReconcileConfirm(true);
+      return;
+    }
+
+    console.log('[Stock Reconciliation] Starting RPC with:', {
+      counts: payloadCounts,
+      reason: reconcileReason,
+      userId: user?.id,
+    });
+
+    try {
+      const res = await reconcileMutation.mutateAsync({
+        counts: payloadCounts,
+        reason: reconcileReason.trim(),
+      });
+      console.log('[Stock Reconciliation] RPC Success:', res);
+      setShowReconcileModal(false);
+      setShowReconcileConfirm(false);
+      setBannerStatus({
+        type: 'success',
+        message:
+          language === 'hi'
+            ? '✅ भौतिक स्टॉक सफलतापूर्वक मिलान व अपडेट कर दिया गया!'
+            : '✅ Stock reconciliation successfully applied!',
+        details: `${res.total_adjusted_products || 0} products adjusted.`,
+      });
+      setTimeout(() => setBannerStatus(null), 6000);
+    } catch (err: any) {
+      console.error('[Stock Reconciliation] Error:', err);
+      setReconcileError(err.message || 'स्टॉक मिलान करने में त्रुटि हुई');
+      setBannerStatus({
+        type: 'error',
+        message: language === 'hi' ? 'स्टॉक मिलान विफल रहा' : 'Stock reconciliation failed',
+        details: err.message || 'Unknown database error',
+      });
+    }
+  };
+
+  // 4. Single Product Edit
   const handleOpenEdit = (prod: ProductWithPrice) => {
     setEditingProduct(prod);
     setEditNewQty(String(prod.available_quantity || 0));
@@ -89,7 +188,6 @@ export const StockPage: React.FC = () => {
     setShowEditConfirm(false);
   };
 
-  // Submit Edit Stock
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProduct) return;
@@ -118,25 +216,29 @@ export const StockPage: React.FC = () => {
       });
       setEditingProduct(null);
       setShowEditConfirm(false);
+      setBannerStatus({
+        type: 'success',
+        message: language === 'hi' ? '✅ स्टॉक सफलतापूर्वक अपडेट हुआ!' : '✅ Stock updated!',
+      });
+      setTimeout(() => setBannerStatus(null), 4000);
     } catch (err: any) {
       setEditError(err.message || 'स्टॉक संशोधित करने में त्रुटि हुई');
     }
   };
 
-  // Open Delete / Reset Modal
+  // 5. Single Product Reset to 0
   const handleOpenDelete = (prod: ProductWithPrice) => {
     setDeletingProduct(prod);
-    setDeleteReason('');
+    setDeleteReason('स्टॉक 0 किया गया');
     setDeleteError(null);
   };
 
-  // Submit Delete / Reset Stock
   const handleDeleteSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!deletingProduct) return;
 
     if (!deleteReason.trim()) {
-      setDeleteError('स्टॉक हटाने / शून्य करने का कारण (Reason) लिखना अनिवार्य है।');
+      setDeleteError('स्टॉक 0 करने का कारण (Reason) लिखना अनिवार्य है।');
       return;
     }
 
@@ -147,6 +249,11 @@ export const StockPage: React.FC = () => {
         reason: deleteReason.trim(),
       });
       setDeletingProduct(null);
+      setBannerStatus({
+        type: 'success',
+        message: language === 'hi' ? '✅ स्टॉक 0 pcs कर दिया गया!' : '✅ Stock set to 0 pcs!',
+      });
+      setTimeout(() => setBannerStatus(null), 4000);
     } catch (err: any) {
       setDeleteError(err.message || 'स्टॉक हटाने में त्रुटि हुई');
     }
@@ -167,9 +274,15 @@ export const StockPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Sync Stock Button */}
           <Button
+            type="button"
             variant="outline"
-            leftIcon={<RefreshCw className={`w-4 h-4 text-emerald-800 ${syncFreezerStock.isPending ? 'animate-spin' : ''}`} />}
+            leftIcon={
+              <RefreshCw
+                className={`w-4 h-4 text-emerald-800 ${syncFreezerStock.isPending ? 'animate-spin' : ''}`}
+              />
+            }
             className="border-emerald-700 text-emerald-900 font-bold hover:bg-emerald-50 text-xs py-2"
             onClick={handleSyncStock}
             disabled={syncFreezerStock.isPending}
@@ -179,16 +292,28 @@ export const StockPage: React.FC = () => {
               : (language === 'hi' ? '🔄 स्टॉक सिंक करें' : '🔄 Sync Stock')}
           </Button>
 
+          {/* Owner Stock Reconciliation & Reset Button */}
+          {isOwner && (
+            <Button
+              type="button"
+              variant="outline"
+              leftIcon={<Scale className="w-3.5 h-3.5 text-indigo-700" />}
+              className="border-indigo-300 text-indigo-900 font-bold hover:bg-indigo-50 text-xs py-2"
+              onClick={() => handleOpenReconcileModal(false)}
+              disabled={reconcileMutation.isPending}
+            >
+              {language === 'hi' ? '⚖️ स्टॉक मिलान / सुलह' : '⚖️ Reconcile Stock'}
+            </Button>
+          )}
+
           {isOwner && totalStockPieces > 0 && (
             <Button
+              type="button"
               variant="outline"
               leftIcon={<Trash2 className="w-3.5 h-3.5 text-rose-700" />}
               className="border-rose-300 text-rose-800 font-bold hover:bg-rose-50 text-xs py-2"
-              onClick={() => {
-                setShowResetAllModal(true);
-                setResetAllError(null);
-              }}
-              disabled={resetAllStockMutation.isPending}
+              onClick={() => handleOpenReconcileModal(true)}
+              disabled={reconcileMutation.isPending}
             >
               {language === 'hi' ? '🗑️ सभी स्टॉक 0 करें' : '🗑️ Reset All to 0'}
             </Button>
@@ -209,12 +334,37 @@ export const StockPage: React.FC = () => {
         </div>
       </div>
 
-
-      {/* Sync Status Banner */}
-      {syncMessage && (
-        <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-2xl text-xs font-bold text-emerald-900 flex items-center justify-between shadow-sm animate-fade-in">
-          <span>{syncMessage}</span>
-          <Button size="sm" variant="ghost" className="text-emerald-800 h-6 px-2 text-[10px]" onClick={() => setSyncMessage(null)}>
+      {/* Visible Status Banner (Bilingual) */}
+      {bannerStatus && (
+        <div
+          className={`p-3.5 rounded-2xl text-xs font-bold flex items-start justify-between shadow-sm animate-fade-in ${
+            bannerStatus.type === 'success'
+              ? 'bg-emerald-50 border border-emerald-300 text-emerald-950'
+              : 'bg-rose-50 border border-rose-300 text-rose-950'
+          }`}
+        >
+          <div className="flex items-start gap-2.5">
+            {bannerStatus.type === 'success' ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-700 flex-shrink-0 mt-0.5" />
+            ) : (
+              <XCircle className="w-5 h-5 text-rose-700 flex-shrink-0 mt-0.5" />
+            )}
+            <div>
+              <p className="text-sm font-black">{bannerStatus.message}</p>
+              {bannerStatus.details && (
+                <p className="font-mono text-[11px] font-normal text-gray-700 mt-0.5 break-all">
+                  {bannerStatus.details}
+                </p>
+              )}
+            </div>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2 text-xs font-bold"
+            onClick={() => setBannerStatus(null)}
+          >
             ✕
           </Button>
         </div>
@@ -228,7 +378,10 @@ export const StockPage: React.FC = () => {
           const isOutOfStock = availQty === 0;
 
           return (
-            <Card key={prod.id} className="bg-gradient-to-br from-white to-cream-50/50 border-cream-300 relative flex flex-col justify-between">
+            <Card
+              key={prod.id}
+              className="bg-gradient-to-br from-white to-cream-50/50 border-cream-300 relative flex flex-col justify-between"
+            >
               <div>
                 <div className="flex items-start justify-between gap-2">
                   <div>
@@ -250,9 +403,11 @@ export const StockPage: React.FC = () => {
                     <span className="text-3xl font-black font-mono text-maroon-900 block tracking-tight">
                       {formatQuantity(availQty)}
                     </span>
-                    <span className={`text-[11px] font-bold uppercase tracking-wider ${
-                      isOutOfStock ? 'text-rose-700' : isLowStock ? 'text-amber-700' : 'text-emerald-800'
-                    }`}>
+                    <span
+                      className={`text-[11px] font-bold uppercase tracking-wider ${
+                        isOutOfStock ? 'text-rose-700' : isLowStock ? 'text-amber-700' : 'text-emerald-800'
+                      }`}
+                    >
                       {isOutOfStock ? 'आउट ऑफ स्टॉक' : isLowStock ? 'कम स्टॉक' : `${t.pieces} उपलब्ध`}
                     </span>
                   </div>
@@ -270,6 +425,7 @@ export const StockPage: React.FC = () => {
               {isOwner && (
                 <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-end gap-2">
                   <Button
+                    type="button"
                     variant="outline"
                     size="sm"
                     className="text-xs text-indigo-800 border-indigo-200 hover:bg-indigo-50"
@@ -279,6 +435,7 @@ export const StockPage: React.FC = () => {
                     संशोधन करें (Edit)
                   </Button>
                   <Button
+                    type="button"
                     variant="outline"
                     size="sm"
                     className="text-xs text-rose-800 border-rose-200 hover:bg-rose-50"
@@ -286,7 +443,7 @@ export const StockPage: React.FC = () => {
                     onClick={() => handleOpenDelete(prod)}
                     disabled={availQty === 0}
                   >
-                    हटाएं (Delete)
+                    हटाएं (0 करें)
                   </Button>
                 </div>
               )}
@@ -323,6 +480,7 @@ export const StockPage: React.FC = () => {
                     m.movement_type === 'production_completed' ||
                     m.movement_type === 'seller_returned' ||
                     m.movement_type === ('issue_reversal' as any) ||
+                    ((m.movement_type as any) === 'inventory_adjustment' && m.notes?.includes('(+')) ||
                     ((m.movement_type as any) === 'manual_adjustment' && m.notes?.includes('(+'));
 
                   return (
@@ -353,7 +511,208 @@ export const StockPage: React.FC = () => {
         )}
       </Card>
 
-      {/* Owner Edit Stock Modal */}
+      {/* Safe Owner-Only Stock Reconciliation Dialog */}
+      {showReconcileModal && (
+        <Modal
+          isOpen={true}
+          onClose={() => {
+            if (!reconcileMutation.isPending) {
+              setShowReconcileModal(false);
+              setShowReconcileConfirm(false);
+            }
+          }}
+          title={
+            language === 'hi'
+              ? '⚖️ भौतिक स्टॉक मिलान व सुलह (Physical Stock Reconciliation)'
+              : '⚖️ Physical Stock Reconciliation'
+          }
+        >
+          <form onSubmit={handleReconcileSubmit} className="space-y-4">
+            {reconcileError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-600" />
+                <span>{reconcileError}</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between text-xs bg-cream-50 p-2.5 rounded-xl border border-cream-200">
+              <span className="font-bold text-gray-700">त्वरित विकल्प:</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="px-2 py-1 bg-white border border-rose-300 rounded text-rose-800 font-bold hover:bg-rose-50"
+                  onClick={() => {
+                    const zeros: Record<string, string> = {};
+                    products.forEach((p) => {
+                      zeros[p.id] = '0';
+                    });
+                    setReconcileCounts(zeros);
+                    setShowReconcileConfirm(false);
+                  }}
+                >
+                  सबको 0 करें (Set All 0)
+                </button>
+                <button
+                  type="button"
+                  className="px-2 py-1 bg-white border border-indigo-300 rounded text-indigo-800 font-bold hover:bg-indigo-50"
+                  onClick={() => {
+                    const sys: Record<string, string> = {};
+                    products.forEach((p) => {
+                      sys[p.id] = String(p.available_quantity || 0);
+                    });
+                    setReconcileCounts(sys);
+                    setShowReconcileConfirm(false);
+                  }}
+                >
+                  सिस्टम स्टॉक भरें (Copy System)
+                </button>
+              </div>
+            </div>
+
+            {/* Product Stock Table / Rows */}
+            <div className="space-y-3 max-h-[50vh] overflow-y-auto pr-1">
+              {products.map((prod) => {
+                const currentQty = prod.available_quantity || 0;
+                const enteredVal = parseInt(reconcileCounts[prod.id] ?? '', 10);
+                const diff = !isNaN(enteredVal) ? enteredVal - currentQty : 0;
+
+                return (
+                  <div
+                    key={prod.id}
+                    className="p-3 bg-white rounded-xl border border-gray-200 space-y-2 shadow-sm"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-mono font-bold text-gray-500 block">
+                          {prod.sku}
+                        </span>
+                        <span className="text-sm font-black text-gray-900">
+                          {language === 'hi' ? prod.name_hi : prod.name_en}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] font-bold text-gray-500 block">सिस्टम स्टॉक:</span>
+                        <span className="text-sm font-black font-mono text-gray-800">
+                          {currentQty} pcs
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 items-center pt-2 border-t border-gray-100">
+                      <div>
+                        <label className="text-[11px] font-bold text-gray-700 block mb-1">
+                          वास्तविक भौतिक गिनती (Actual Pcs)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          className="w-full px-3 py-1.5 text-xs font-mono font-bold border border-gray-300 rounded-lg focus:ring-2 focus:ring-maroon-800 focus:outline-none"
+                          value={reconcileCounts[prod.id] ?? ''}
+                          onChange={(e) => {
+                            setReconcileCounts({
+                              ...reconcileCounts,
+                              [prod.id]: e.target.value,
+                            });
+                            setShowReconcileConfirm(false);
+                          }}
+                          required
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[11px] font-bold text-gray-500 block mb-1">
+                          समायोजन अंतर (Difference)
+                        </span>
+                        <div
+                          className={`px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold text-center ${
+                            diff > 0
+                              ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                              : diff < 0
+                              ? 'bg-rose-100 text-rose-900 border border-rose-300'
+                              : 'bg-gray-100 text-gray-700 border border-gray-200'
+                          }`}
+                        >
+                          {diff > 0 ? `+${diff} pcs (वृद्धि)` : diff < 0 ? `${diff} pcs (कमी)` : '0 pcs (समान)'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">
+                संशोधन / मिलान का अनिवार्य कारण (Reason) <span className="text-rose-600">*</span>
+              </label>
+              <textarea
+                className="w-full px-3 py-2 text-xs border border-gray-300 rounded-xl focus:ring-2 focus:ring-maroon-800 focus:outline-none"
+                rows={2}
+                placeholder="उदा. भौतिक गिनती में कमी पाई गई / नया उत्पादन सत्र शुरू करने हेतु रीसेट"
+                value={reconcileReason}
+                onChange={(e) => {
+                  setReconcileReason(e.target.value);
+                  setShowReconcileConfirm(false);
+                }}
+                required
+              />
+            </div>
+
+            {/* Confirmation Alert */}
+            {showReconcileConfirm && (
+              <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-950 space-y-2">
+                <p className="font-bold flex items-center gap-1.5 text-sm text-amber-900">
+                  <ShieldAlert className="w-4 h-4 text-amber-700" />
+                  कृपया स्टॉक समायोजन की पुष्टि करें:
+                </p>
+                <div className="bg-white/80 p-2 rounded-lg border border-amber-200 text-[11px] font-mono space-y-1">
+                  {products.map((p) => {
+                    const cur = p.available_quantity || 0;
+                    const next = parseInt(reconcileCounts[p.id] ?? '', 10) || 0;
+                    const diff = next - cur;
+                    return (
+                      <div key={p.id} className="flex justify-between">
+                        <span className="font-sans font-medium">
+                          {language === 'hi' ? p.name_hi : p.name_en}:
+                        </span>
+                        <span className="font-bold">
+                          {cur} pcs ➔ {next} pcs ({diff >= 0 ? `+${diff}` : `${diff}`} pcs)
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-gray-600">
+                  पुराना रिकॉर्ड सुरक्षित रहेगा। बहीखाता (Ledger) में समायोजन प्रविष्टियां दर्ज की जाएंगी।
+                </p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setShowReconcileModal(false);
+                  setShowReconcileConfirm(false);
+                }}
+                disabled={reconcileMutation.isPending}
+              >
+                रद्द करें
+              </Button>
+              <Button
+                type="submit"
+                variant={showReconcileConfirm ? 'danger' : 'primary'}
+                isLoading={reconcileMutation.isPending}
+                disabled={reconcileMutation.isPending}
+              >
+                {showReconcileConfirm ? 'हाँ, स्टॉक मिलान सुरक्षित करें' : 'समीक्षा व पुष्टि करें'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Owner Single Edit Stock Modal */}
       {editingProduct && (
         <Modal
           isOpen={true}
@@ -386,28 +745,6 @@ export const StockPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Calculated Difference Badge */}
-            {(() => {
-              const current = editingProduct.available_quantity || 0;
-              const next = parseInt(editNewQty, 10);
-              if (!isNaN(next)) {
-                const diff = next - current;
-                return (
-                  <div className={`p-3 rounded-xl text-xs font-bold flex items-center justify-between ${
-                    diff > 0 ? 'bg-emerald-50 text-emerald-900 border border-emerald-200' :
-                    diff < 0 ? 'bg-rose-50 text-rose-900 border border-rose-200' :
-                    'bg-gray-50 text-gray-800 border border-gray-200'
-                  }`}>
-                    <span>स्टॉक समायोजन (Difference):</span>
-                    <span className="text-sm font-mono font-black">
-                      {diff > 0 ? `+${diff} pcs (स्टॉक वृद्धि)` : diff < 0 ? `${diff} pcs (स्टॉक कमी)` : '0 pcs (कोई बदलाव नहीं)'}
-                    </span>
-                  </div>
-                );
-              }
-              return null;
-            })()}
-
             <Input
               label="नया स्टॉक (Pieces)"
               type="number"
@@ -427,7 +764,7 @@ export const StockPage: React.FC = () => {
               <textarea
                 className="w-full px-3 py-2 text-xs border border-gray-300 rounded-xl focus:ring-2 focus:ring-maroon-800 focus:outline-none"
                 rows={2}
-                placeholder="उदा. भौतिक गिनती में 20 पीस कम पाए गए / गलती से गलत संख्या दर्ज हो गई थी"
+                placeholder="उदा. भौतिक गणना अनुसार संशोधन"
                 value={editReason}
                 onChange={(e) => {
                   setEditReason(e.target.value);
@@ -444,7 +781,7 @@ export const StockPage: React.FC = () => {
                   कृपया संशोधन की पुष्टि करें:
                 </p>
                 <p className="mt-1">
-                  मुख्य फ्रीजर में <strong>{editingProduct.available_quantity || 0} pcs</strong> को बदलकर <strong>{editNewQty} pcs</strong> किया जाएगा। यह कार्रवाई स्टॉक बहीखाता (Ledger) में दर्ज होगी।
+                  मुख्य फ्रीजर में <strong>{editingProduct.available_quantity || 0} pcs</strong> को बदलकर <strong>{editNewQty} pcs</strong> किया जाएगा।
                 </p>
               </div>
             )}
@@ -472,12 +809,12 @@ export const StockPage: React.FC = () => {
         </Modal>
       )}
 
-      {/* Owner Delete / Reset Stock Modal */}
+      {/* Owner Single Product Delete Modal */}
       {deletingProduct && (
         <Modal
           isOpen={true}
           onClose={() => setDeletingProduct(null)}
-          title="फ्रीजर स्टॉक हटाएं / शून्य करें"
+          title="फ्रीजर स्टॉक 0 करें"
         >
           <form onSubmit={handleDeleteSubmit} className="space-y-4">
             {deleteError && (
@@ -490,7 +827,7 @@ export const StockPage: React.FC = () => {
             <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 space-y-2">
               <div className="flex items-center gap-2 font-bold text-sm text-rose-950">
                 <Trash2 className="w-5 h-5 text-rose-700" />
-                <span>क्या आप यह स्टॉक हटाना चाहते हैं?</span>
+                <span>क्या आप यह स्टॉक 0 pcs करना चाहते हैं?</span>
               </div>
               <p>
                 उत्पाद: <strong>{language === 'hi' ? deletingProduct.name_hi : deletingProduct.name_en} ({deletingProduct.sku})</strong>
@@ -498,19 +835,16 @@ export const StockPage: React.FC = () => {
               <p>
                 वर्तमान स्टॉक: <strong className="text-base text-rose-950 font-mono">{deletingProduct.available_quantity || 0} pcs</strong>
               </p>
-              <p className="text-gray-600">
-                यह कार्रवाई वर्तमान उपलब्ध स्टॉक को सुरक्षित रूप से घटाकर <strong>0 pcs</strong> कर देगी और बहीखाता (Ledger) में पूर्ण ऑडिट रिकॉर्ड रखेगी।
-              </p>
             </div>
 
             <div>
               <label className="block text-xs font-bold text-gray-700 mb-1">
-                हटाने का कारण (Reason) <span className="text-rose-600">*</span>
+                कारण (Reason) <span className="text-rose-600">*</span>
               </label>
               <textarea
                 className="w-full px-3 py-2 text-xs border border-gray-300 rounded-xl focus:ring-2 focus:ring-rose-800 focus:outline-none"
                 rows={2}
-                placeholder="उदा. स्टॉक खराब होने के कारण फेंक दिया गया / बैच रद्द कर दिया गया"
+                placeholder="उदा. भौतिक स्टॉक शून्य किया गया"
                 value={deleteReason}
                 onChange={(e) => setDeleteReason(e.target.value)}
                 required
@@ -530,77 +864,7 @@ export const StockPage: React.FC = () => {
                 variant="danger"
                 isLoading={adjustStockMutation.isPending}
               >
-                हाँ, स्टॉक 0 करें (Reset to 0)
-              </Button>
-            </div>
-          </form>
-        </Modal>
-      )}
-
-      {/* Owner Reset All Stock Modal */}
-      {showResetAllModal && (
-        <Modal
-          isOpen={true}
-          onClose={() => setShowResetAllModal(false)}
-          title="सभी उत्पादों का फ्रीजर स्टॉक 0 करें (Reset All Stock to 0)"
-        >
-          <form onSubmit={handleResetAllSubmit} className="space-y-4">
-            {resetAllError && (
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-600" />
-                <span>{resetAllError}</span>
-              </div>
-            )}
-
-            <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 space-y-2">
-              <div className="flex items-center gap-2 font-bold text-sm text-rose-950">
-                <Trash2 className="w-5 h-5 text-rose-700" />
-                <span>क्या आप सभी कुल्फी स्टॉक को 0 pcs करना चाहते हैं?</span>
-              </div>
-              <p>
-                कुल वर्तमान स्टॉक: <strong className="text-base text-rose-950 font-mono">{formatQuantity(totalStockPieces)} pcs ({formatCurrency(totalStockValue)})</strong>
-              </p>
-              <div className="bg-white/80 p-2.5 rounded-lg border border-rose-200 space-y-1 font-mono text-[11px]">
-                {products.map((p) => (
-                  <div key={p.id} className="flex justify-between">
-                    <span className="font-sans font-medium">{language === 'hi' ? p.name_hi : p.name_en}:</span>
-                    <span className="font-bold text-rose-900">{p.available_quantity || 0} pcs ➔ 0 pcs</span>
-                  </div>
-                ))}
-              </div>
-              <p className="text-gray-600">
-                यह कार्रवाई सभी उत्पादों के उपलब्ध स्टॉक को बहीखाता (Ledger) में समायोजन (Adjustment) प्रविष्टियां डालकर <strong>0 pcs</strong> कर देगी।
-              </p>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1">
-                रीसेट करने का कारण (Reason) <span className="text-rose-600">*</span>
-              </label>
-              <textarea
-                className="w-full px-3 py-2 text-xs border border-gray-300 rounded-xl focus:ring-2 focus:ring-rose-800 focus:outline-none"
-                rows={2}
-                placeholder="उदा. कारखाने का भौतिक स्टॉक शून्य / नया प्रोडक्शन शुरू करने हेतु रीसेट"
-                value={resetAllReason}
-                onChange={(e) => setResetAllReason(e.target.value)}
-                required
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setShowResetAllModal(false)}
-              >
-                रद्द करें
-              </Button>
-              <Button
-                type="submit"
-                variant="danger"
-                isLoading={resetAllStockMutation.isPending}
-              >
-                हाँ, सभी स्टॉक 0 करें (Reset All to 0)
+                हाँ, 0 pcs करें
               </Button>
             </div>
           </form>

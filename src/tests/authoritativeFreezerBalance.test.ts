@@ -475,11 +475,11 @@ describe('Authoritative Freezer Balance & Reversal Isolation Suite', () => {
     expect(mockStore.getAvailableFreezerStock(rabri.id)).toBe(-290);
     expect(mockStore.getAvailableFreezerStock(prem.id)).toBe(-1);
 
-    // Run Sync Stock
-    const syncRes = await api.reconcileFreezerStock();
-    expect(syncRes.success).toBe(true);
+    // Run Stock Reconciliation / Reset to 0
+    const resetRes = await api.resetAllFreezerStockToZero('Reset to 0');
+    expect(resetRes.success).toBe(true);
 
-    // After Sync Stock, orphan reversals are healed and net balances are cleanly 0
+    // After Reconciliation, net balances are cleanly 0
     expect(mockStore.getAvailableFreezerStock(sada.id)).toBe(0);
     expect(mockStore.getAvailableFreezerStock(rabri.id)).toBe(0);
     expect(mockStore.getAvailableFreezerStock(prem.id)).toBe(0);

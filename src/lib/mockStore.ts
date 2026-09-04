@@ -1774,7 +1774,7 @@ class MockStore {
         source_location_id: safeAdjLoc.id,
         destination_location_id: safeFreezerLoc.id,
         quantity: difference,
-        movement_type: 'manual_adjustment' as any,
+        movement_type: 'inventory_adjustment' as any,
         reference_table: 'stock_locations',
         reference_id: safeFreezerLoc.id,
         notes: `Freezer stock adjusted (+${difference} pcs): ${currentQty} -> ${targetQty}. Reason: ${reason}`,
@@ -1791,7 +1791,7 @@ class MockStore {
         source_location_id: safeFreezerLoc.id,
         destination_location_id: safeAdjLoc.id,
         quantity: reduceQty,
-        movement_type: 'manual_adjustment' as any,
+        movement_type: 'inventory_adjustment' as any,
         reference_table: 'stock_locations',
         reference_id: safeFreezerLoc.id,
         notes: `Freezer stock adjusted (-${reduceQty} pcs): ${currentQty} -> ${targetQty}. Reason: ${reason}`,
@@ -1820,16 +1820,228 @@ class MockStore {
     };
   }
 
+  public reconcileFreezerStockCounts(
+    counts: Record<string, number>,
+    reason: string = 'Physical Stock Count Reconciliation',
+    idempotencyKey?: string,
+    userId: string = 'usr-owner-001'
+  ): {
+    success: boolean;
+    message: string;
+    old_balances: Record<string, number>;
+    new_balances: Record<string, number>;
+    adjustments: any[];
+    total_adjusted_products: number;
+  } {
+    if (!reason || !reason.trim()) {
+      throw new Error('Reconciliation reason is mandatory and cannot be empty.');
+    }
+
+    let freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer');
+    if (!freezerLoc) {
+      freezerLoc = {
+        id: 'a0000000-0000-0000-0000-000000000002',
+        name: 'Main Cold Storage Freezer',
+        location_type: 'main_freezer',
+        seller_id: null,
+        cart_id: null,
+        is_active: true,
+      };
+      this.state.stock_locations.push(freezerLoc);
+    }
+
+    let adjLoc = this.state.stock_locations.find(
+      (l) => l.location_type === 'damaged' || l.id === 'a0000000-0000-0000-0000-000000000005'
+    );
+    if (!adjLoc) {
+      adjLoc = {
+        id: 'a0000000-0000-0000-0000-000000000005',
+        name: 'Physical Stock Count / Inventory Adjustment',
+        location_type: 'damaged',
+        seller_id: null,
+        cart_id: null,
+        is_active: true,
+      };
+      this.state.stock_locations.push(adjLoc);
+    }
+
+    const old_balances: Record<string, number> = {};
+    const new_balances: Record<string, number> = {};
+    const adjustments: any[] = [];
+    let total_adjusted_products = 0;
+    const now = new Date().toISOString();
+
+    for (const [prodId, targetVal] of Object.entries(counts)) {
+      const prod = this.state.products.find((p) => p.id === prodId);
+      const currentQty = this.getAvailableFreezerStock(prodId);
+      const targetQty = Math.max(0, Math.round(Number(targetVal) || 0));
+      const difference = targetQty - currentQty;
+
+      old_balances[prodId] = currentQty;
+      new_balances[prodId] = targetQty;
+
+      if (difference !== 0) {
+        if (difference > 0) {
+          // Positive adjustment: source = adjLoc, destination = freezerLoc
+          this.state.stock_movements.push({
+            id: `mv-${generateId().slice(0, 8)}`,
+            movement_date: now,
+            product_id: prodId,
+            source_location_id: adjLoc.id,
+            destination_location_id: freezerLoc.id,
+            quantity: difference,
+            movement_type: 'inventory_adjustment' as any,
+            reference_table: 'stock_locations',
+            reference_id: freezerLoc.id,
+            notes: `Physical Stock Reconciliation (+${difference} pcs): ${currentQty} -> ${targetQty}. Reason: ${reason}`,
+            created_by: userId,
+            created_at: now,
+          });
+        } else {
+          // Negative adjustment: source = freezerLoc, destination = adjLoc
+          const reduceQty = Math.abs(difference);
+          this.state.stock_movements.push({
+            id: `mv-${generateId().slice(0, 8)}`,
+            movement_date: now,
+            product_id: prodId,
+            source_location_id: freezerLoc.id,
+            destination_location_id: adjLoc.id,
+            quantity: reduceQty,
+            movement_type: 'inventory_adjustment' as any,
+            reference_table: 'stock_locations',
+            reference_id: freezerLoc.id,
+            notes: `Physical Stock Reconciliation (-${reduceQty} pcs): ${currentQty} -> ${targetQty}. Reason: ${reason}`,
+            created_by: userId,
+            created_at: now,
+          });
+        }
+
+        adjustments.push({
+          product_id: prodId,
+          sku: prod?.sku || '',
+          name_hi: prod?.name_hi || '',
+          name_en: prod?.name_en || '',
+          previous_quantity: currentQty,
+          new_quantity: targetQty,
+          difference,
+        });
+        total_adjusted_products++;
+      }
+    }
+
+    this.logAudit(
+      'stock_locations',
+      freezerLoc.id,
+      'OWNER_STOCK_RECONCILIATION',
+      { counts: old_balances, idempotency_key: idempotencyKey },
+      { counts: new_balances, adjustments },
+      reason,
+      userId
+    );
+    this.saveState();
+
+    return {
+      success: true,
+      message: 'Stock reconciliation completed successfully',
+      old_balances,
+      new_balances,
+      adjustments,
+      total_adjusted_products,
+    };
+  }
+
+  public syncCompletedBatchesStock(): {
+    success: boolean;
+    synced_count: number;
+    synced_batch_items?: number;
+    batches_checked: number;
+    message: string;
+    message_hi: string;
+  } {
+    let freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer');
+    let prodLoc = this.state.stock_locations.find((l) => l.location_type === 'production');
+    if (!freezerLoc) {
+      freezerLoc = { id: 'a0000000-0000-0000-0000-000000000002', name: 'Main Cold Storage Freezer', location_type: 'main_freezer', seller_id: null, cart_id: null, is_active: true };
+      this.state.stock_locations.push(freezerLoc);
+    }
+    if (!prodLoc) {
+      prodLoc = { id: 'a0000000-0000-0000-0000-000000000001', name: 'Production Floor', location_type: 'production', seller_id: null, cart_id: null, is_active: true };
+      this.state.stock_locations.push(prodLoc);
+    }
+
+    const completedBatches = this.state.production_batches.filter(
+      (b) => b.status === 'completed' && (b.is_current_version === undefined || b.is_current_version === true)
+    );
+
+    let synced_count = 0;
+    const now = new Date().toISOString();
+
+    for (const b of completedBatches) {
+      if (b.items) {
+        for (const item of b.items) {
+          const saleable = Number(item.saleable_quantity) || 0;
+          if (saleable > 0) {
+            const hasMovement = this.state.stock_movements.some(
+              (m) =>
+                m.reference_table === 'production_batches' &&
+                m.reference_id === b.id &&
+                m.product_id === item.product_id &&
+                m.movement_type === 'production_completed'
+            );
+            if (!hasMovement) {
+              this.state.stock_movements.push({
+                id: `mv-${generateId().slice(0, 8)}`,
+                movement_date: b.completed_at || b.production_date || now,
+                product_id: item.product_id,
+                source_location_id: prodLoc.id,
+                destination_location_id: freezerLoc.id,
+                quantity: saleable,
+                movement_type: 'production_completed',
+                reference_table: 'production_batches',
+                reference_id: b.id,
+                notes: `Auto-Synced from Batch ${b.batch_number}`,
+                created_by: b.created_by,
+                created_at: now,
+              });
+              synced_count++;
+            }
+          }
+        }
+      }
+    }
+
+    this.saveState();
+
+    if (synced_count === 0) {
+      return {
+        success: true,
+        synced_count: 0,
+        synced_batch_items: 0,
+        batches_checked: completedBatches.length,
+        message: 'Stock already synchronized—no changes required.',
+        message_hi: 'स्टॉक पहले से सिंक है - कोई बदलाव आवश्यक नहीं।',
+      };
+    }
+
+    return {
+      success: true,
+      synced_count,
+      synced_batch_items: synced_count,
+      batches_checked: completedBatches.length,
+      message: `Successfully synchronized ${synced_count} missing batch production items.`,
+      message_hi: `सफलतापूर्वक ${synced_count} छूटे हुए उत्पादन आइटम सिंक किए गए।`,
+    };
+  }
+
   public resetAllFreezerStockToZero(
     reason: string = 'Reset stock to 0 by Owner',
     userId: string = 'usr-owner-001'
   ): { success: boolean; message: string } {
+    const counts: Record<string, number> = {};
     for (const prod of this.state.products) {
-      const current = this.getAvailableFreezerStock(prod.id);
-      if (current !== 0) {
-        this.adjustFreezerStock(prod.id, 0, reason, userId);
-      }
+      counts[prod.id] = 0;
     }
+    this.reconcileFreezerStockCounts(counts, reason, undefined, userId);
     return { success: true, message: 'All freezer stock reset to 0' };
   }
 
