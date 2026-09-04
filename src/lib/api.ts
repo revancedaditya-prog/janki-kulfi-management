@@ -148,19 +148,11 @@ export const api = {
     if (useMockMode) {
       return mockStore.getCurrentLocationStock(locationId);
     }
-    try {
-      let query = (supabase as any).from('current_location_stock').select('location_id, product_id, quantity');
-      if (locationId) {
-        query = query.eq('location_id', locationId);
-      }
-      const { data, error } = await query;
-      if (!error && data) {
-        return data;
-      }
-    } catch (err) {
-      console.warn('Exception reading current_location_stock view:', err);
-    }
-    return mockStore.getCurrentLocationStock(locationId);
+    let query = (supabase as any).from('current_location_stock').select('location_id, product_id, quantity');
+    if (locationId) query = query.eq('location_id', locationId);
+    const { data, error } = await query;
+    if (error) throw new Error(`[Supabase stock view ${error.code || ''}]: ${error.message}`);
+    return data || [];
   },
 
   async getFreezerBalances(): Promise<Record<string, number>> {
@@ -168,7 +160,7 @@ export const api = {
       return mockStore.getFreezerBalances();
     }
 
-    try {
+    {
       const freezerLocIds = new Set<string>([
         MAIN_FREEZER_LOCATION_ID,
         'loc-freezer',
@@ -200,6 +192,8 @@ export const api = {
         return balances;
       }
 
+      console.error('[freezer balance] current_location_stock failed', viewErr);
+
       // 2. Secondary fallback: Read from v_freezer_stock
       const { data: stockData, error: fbErr } = await (supabase as any)
         .from('v_freezer_stock')
@@ -218,11 +212,11 @@ export const api = {
       if (!rpcErr && rpcBalances && typeof rpcBalances === 'object') {
         return rpcBalances;
       }
-    } catch (err) {
-      console.warn('Exception in getFreezerBalances:', err);
-    }
 
-    return mockStore.getFreezerBalances();
+      throw new Error(
+        `[Supabase freezer balance]: ${viewErr?.message || fbErr?.message || rpcErr?.message || 'No live balance source available'}`
+      );
+    }
   },
 
   async getAvailableFreezerStock(productId: string): Promise<number> {

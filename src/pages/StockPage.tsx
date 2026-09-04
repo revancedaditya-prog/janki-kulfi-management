@@ -53,6 +53,7 @@ export const StockPage: React.FC = () => {
   const [reconcileReason, setReconcileReason] = useState('दैनिक भौतिक स्टॉक मिलान / भौतिक गणना अनुसार संशोधन');
   const [reconcileError, setReconcileError] = useState<string | null>(null);
   const [showReconcileConfirm, setShowReconcileConfirm] = useState(false);
+  const [reconcileOperationId, setReconcileOperationId] = useState<string>('');
 
   // Single Product Edit State
   const [editingProduct, setEditingProduct] = useState<ProductWithPrice | null>(null);
@@ -112,6 +113,7 @@ export const StockPage: React.FC = () => {
     );
     setReconcileError(null);
     setShowReconcileConfirm(false);
+    setReconcileOperationId(crypto.randomUUID());
     setShowReconcileModal(true);
   };
 
@@ -155,6 +157,7 @@ export const StockPage: React.FC = () => {
       const res = await reconcileMutation.mutateAsync({
         counts: payloadCounts,
         reason: reconcileReason.trim(),
+        idempotencyKey: reconcileOperationId || crypto.randomUUID(),
       });
       console.log('[Stock Reconciliation] RPC Success:', res);
       setShowReconcileModal(false);
