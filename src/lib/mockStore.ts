@@ -1820,6 +1820,20 @@ class MockStore {
     };
   }
 
+  public resetAllFreezerStockToZero(
+    reason: string = 'Reset stock to 0 by Owner',
+    userId: string = 'usr-owner-001'
+  ): { success: boolean; message: string } {
+    for (const prod of this.state.products) {
+      const current = this.getAvailableFreezerStock(prod.id);
+      if (current !== 0) {
+        this.adjustFreezerStock(prod.id, 0, reason, userId);
+      }
+    }
+    return { success: true, message: 'All freezer stock reset to 0' };
+  }
+
+
   // --- Suppliers Master ---
   public getSuppliers(includeInactive: boolean = false): Supplier[] {
     const list = this.state.suppliers || [];

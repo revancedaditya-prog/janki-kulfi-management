@@ -131,4 +131,19 @@ export function useSyncFreezerStock() {
   });
 }
 
+export function useResetAllFreezerStock() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async (reason: string = 'Reset all stock to 0 by Owner') => {
+      return api.resetAllFreezerStockToZero(reason, user?.id || 'usr-owner-001');
+    },
+    onSuccess: async () => {
+      await invalidateAndRefetchStockQueries(queryClient);
+    },
+  });
+}
+
+
 

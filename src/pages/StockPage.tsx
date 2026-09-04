@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useProducts, useAdjustFreezerStock, useSyncFreezerStock } from '@/hooks/useProducts';
+import { useProducts, useAdjustFreezerStock, useSyncFreezerStock, useResetAllFreezerStock } from '@/hooks/useProducts';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { Card, CardHeader } from '@/components/common/Card';
@@ -23,7 +23,13 @@ export const StockPage: React.FC = () => {
   const { isOwner } = useAuth();
   const adjustStockMutation = useAdjustFreezerStock();
   const syncFreezerStock = useSyncFreezerStock();
+  const resetAllStockMutation = useResetAllFreezerStock();
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
+  // Reset All Stock State
+  const [showResetAllModal, setShowResetAllModal] = useState(false);
+  const [resetAllReason, setResetAllReason] = useState('कारखाने का भौतिक स्टॉक शून्य / नया प्रोडक्शन शुरू करने हेतु रीसेट');
+  const [resetAllError, setResetAllError] = useState<string | null>(null);
 
   const handleSyncStock = async () => {
     try {
@@ -34,6 +40,22 @@ export const StockPage: React.FC = () => {
     } catch (err: any) {
       setSyncMessage(`❌ ${err.message || 'Sync failed'}`);
       setTimeout(() => setSyncMessage(null), 4000);
+    }
+  };
+
+  const handleResetAllSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetAllReason.trim()) {
+      setResetAllError('कृपया कारण दर्ज करें।');
+      return;
+    }
+    try {
+      await resetAllStockMutation.mutateAsync(resetAllReason.trim());
+      setShowResetAllModal(false);
+      setSyncMessage(language === 'hi' ? '✅ सभी उत्पादों का फ्रीजर स्टॉक सफलतापूर्वक 0 pcs कर दिया गया।' : '✅ All freezer stock reset to 0 pcs.');
+      setTimeout(() => setSyncMessage(null), 4000);
+    } catch (err: any) {
+      setResetAllError(err.message || 'स्टॉक रीसेट करने में त्रुटि हुई');
     }
   };
 
@@ -157,6 +179,21 @@ export const StockPage: React.FC = () => {
               : (language === 'hi' ? '🔄 स्टॉक सिंक करें' : '🔄 Sync Stock')}
           </Button>
 
+          {isOwner && totalStockPieces > 0 && (
+            <Button
+              variant="outline"
+              leftIcon={<Trash2 className="w-3.5 h-3.5 text-rose-700" />}
+              className="border-rose-300 text-rose-800 font-bold hover:bg-rose-50 text-xs py-2"
+              onClick={() => {
+                setShowResetAllModal(true);
+                setResetAllError(null);
+              }}
+              disabled={resetAllStockMutation.isPending}
+            >
+              {language === 'hi' ? '🗑️ सभी स्टॉक 0 करें' : '🗑️ Reset All to 0'}
+            </Button>
+          )}
+
           <div className="bg-white px-4 py-2 rounded-2xl border border-cream-300 shadow-sm text-right">
             <span className="text-[10px] font-bold text-gray-500 block">कुल स्टॉक पीस</span>
             <span className="text-lg font-black text-emerald-800 font-mono">
@@ -171,6 +208,7 @@ export const StockPage: React.FC = () => {
           </div>
         </div>
       </div>
+
 
       {/* Sync Status Banner */}
       {syncMessage && (
@@ -493,6 +531,76 @@ export const StockPage: React.FC = () => {
                 isLoading={adjustStockMutation.isPending}
               >
                 हाँ, स्टॉक 0 करें (Reset to 0)
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Owner Reset All Stock Modal */}
+      {showResetAllModal && (
+        <Modal
+          isOpen={true}
+          onClose={() => setShowResetAllModal(false)}
+          title="सभी उत्पादों का फ्रीजर स्टॉक 0 करें (Reset All Stock to 0)"
+        >
+          <form onSubmit={handleResetAllSubmit} className="space-y-4">
+            {resetAllError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-rose-600" />
+                <span>{resetAllError}</span>
+              </div>
+            )}
+
+            <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 space-y-2">
+              <div className="flex items-center gap-2 font-bold text-sm text-rose-950">
+                <Trash2 className="w-5 h-5 text-rose-700" />
+                <span>क्या आप सभी कुल्फी स्टॉक को 0 pcs करना चाहते हैं?</span>
+              </div>
+              <p>
+                कुल वर्तमान स्टॉक: <strong className="text-base text-rose-950 font-mono">{formatQuantity(totalStockPieces)} pcs ({formatCurrency(totalStockValue)})</strong>
+              </p>
+              <div className="bg-white/80 p-2.5 rounded-lg border border-rose-200 space-y-1 font-mono text-[11px]">
+                {products.map((p) => (
+                  <div key={p.id} className="flex justify-between">
+                    <span className="font-sans font-medium">{language === 'hi' ? p.name_hi : p.name_en}:</span>
+                    <span className="font-bold text-rose-900">{p.available_quantity || 0} pcs ➔ 0 pcs</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-gray-600">
+                यह कार्रवाई सभी उत्पादों के उपलब्ध स्टॉक को बहीखाता (Ledger) में समायोजन (Adjustment) प्रविष्टियां डालकर <strong>0 pcs</strong> कर देगी।
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">
+                रीसेट करने का कारण (Reason) <span className="text-rose-600">*</span>
+              </label>
+              <textarea
+                className="w-full px-3 py-2 text-xs border border-gray-300 rounded-xl focus:ring-2 focus:ring-rose-800 focus:outline-none"
+                rows={2}
+                placeholder="उदा. कारखाने का भौतिक स्टॉक शून्य / नया प्रोडक्शन शुरू करने हेतु रीसेट"
+                value={resetAllReason}
+                onChange={(e) => setResetAllReason(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowResetAllModal(false)}
+              >
+                रद्द करें
+              </Button>
+              <Button
+                type="submit"
+                variant="danger"
+                isLoading={resetAllStockMutation.isPending}
+              >
+                हाँ, सभी स्टॉक 0 करें (Reset All to 0)
               </Button>
             </div>
           </form>

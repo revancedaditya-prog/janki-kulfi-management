@@ -1617,6 +1617,23 @@ export const api = {
     };
   },
 
+  async resetAllFreezerStockToZero(
+    reason: string = 'Reset all stock to 0 by Owner',
+    userId: string = 'usr-owner-001'
+  ): Promise<{ success: boolean; message: string }> {
+    if (useMockMode) {
+      return mockStore.resetAllFreezerStockToZero(reason, userId);
+    }
+    const products = await this.getProducts();
+    for (const prod of products) {
+      if ((prod.available_quantity || 0) !== 0) {
+        await this.adjustFreezerStock(prod.id, 0, reason, userId);
+      }
+    }
+    return { success: true, message: 'All freezer stock successfully reset to 0 pcs' };
+  },
+
+
   // --- Seller Stock Issues ---
   async getSellerIssues(): Promise<SellerIssueWithDetails[]> {
     if (useMockMode) {
