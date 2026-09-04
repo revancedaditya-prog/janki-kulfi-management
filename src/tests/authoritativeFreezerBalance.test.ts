@@ -417,6 +417,79 @@ describe('Authoritative Freezer Balance & Reversal Isolation Suite', () => {
     expect(mockStore.getStockMovements().length).toBe(movementCountBeforeSync);
     expect(mockStore.getAvailableFreezerStock(sada.id)).toBe(100);
   });
+
+  it('7. Negative Deficit Healing: Sync Stock heals negative balances from orphan reversals back to 0', async () => {
+    const products = mockStore.getProducts();
+    const sada = products[0];
+    const rabri = products[1];
+    const prem = products[2];
+
+    // Simulate orphan reversals (e.g. from deleting batches that had no prior completed movement)
+    mockStore.getState().stock_movements.push(
+      {
+        id: 'mv-orphan-rev-sada',
+        movement_date: '2026-09-04T12:13:00Z',
+        product_id: sada.id,
+        source_location_id: 'a0000000-0000-0000-0000-000000000002',
+        destination_location_id: 'loc-prod',
+        quantity: 979,
+        movement_type: 'production_reversal',
+        reference_table: 'production_batches',
+        reference_id: 'batch-orphan-01',
+        notes: 'Reversal for deleted batch',
+        created_by: 'usr-owner-001',
+        created_at: '2026-09-04T12:13:00Z',
+      },
+      {
+        id: 'mv-orphan-rev-rabri',
+        movement_date: '2026-09-04T12:13:00Z',
+        product_id: rabri.id,
+        source_location_id: 'a0000000-0000-0000-0000-000000000002',
+        destination_location_id: 'loc-prod',
+        quantity: 290,
+        movement_type: 'production_reversal',
+        reference_table: 'production_batches',
+        reference_id: 'batch-orphan-02',
+        notes: 'Reversal for deleted batch',
+        created_by: 'usr-owner-001',
+        created_at: '2026-09-04T12:13:00Z',
+      },
+      {
+        id: 'mv-orphan-rev-prem',
+        movement_date: '2026-09-04T12:13:00Z',
+        product_id: prem.id,
+        source_location_id: 'a0000000-0000-0000-0000-000000000002',
+        destination_location_id: 'loc-prod',
+        quantity: 1,
+        movement_type: 'production_reversal',
+        reference_table: 'production_batches',
+        reference_id: 'batch-orphan-03',
+        notes: 'Reversal for deleted batch',
+        created_by: 'usr-owner-001',
+        created_at: '2026-09-04T12:13:00Z',
+      }
+    );
+
+    // Initial state has negative balance
+    expect(mockStore.getAvailableFreezerStock(sada.id)).toBe(-979);
+    expect(mockStore.getAvailableFreezerStock(rabri.id)).toBe(-290);
+    expect(mockStore.getAvailableFreezerStock(prem.id)).toBe(-1);
+
+    // Run Sync Stock
+    const syncRes = await api.reconcileFreezerStock();
+    expect(syncRes.success).toBe(true);
+
+    // After Sync Stock, orphan reversals are healed and net balances are cleanly 0
+    expect(mockStore.getAvailableFreezerStock(sada.id)).toBe(0);
+    expect(mockStore.getAvailableFreezerStock(rabri.id)).toBe(0);
+    expect(mockStore.getAvailableFreezerStock(prem.id)).toBe(0);
+
+    const healedProducts = await api.getProducts();
+    expect(healedProducts.find((p) => p.id === sada.id)?.available_quantity).toBe(0);
+    expect(healedProducts.find((p) => p.id === rabri.id)?.available_quantity).toBe(0);
+    expect(healedProducts.find((p) => p.id === prem.id)?.available_quantity).toBe(0);
+  });
 });
+
 
 

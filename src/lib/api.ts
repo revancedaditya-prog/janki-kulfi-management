@@ -311,7 +311,40 @@ export const api = {
         }
       }
 
-      // 3. Fetch issued issues
+      // 3. Heal Orphan Production Reversals in direct fallback
+      const { data: allMovements } = await (supabase as any)
+        .from('stock_movements')
+        .select('*')
+        .eq('reference_table', 'production_batches');
+
+      if (allMovements && freezerLoc && prodLoc) {
+        const reversals = allMovements.filter((m: any) => m.movement_type === 'production_reversal' && m.reference_id);
+        for (const rev of reversals) {
+          const hasCompleted = allMovements.some(
+            (m: any) =>
+              m.reference_id === rev.reference_id &&
+              m.product_id === rev.product_id &&
+              m.movement_type === 'production_completed'
+          );
+          if (!hasCompleted) {
+            missingMovements.push({
+              movement_date: rev.movement_date || new Date().toISOString(),
+              product_id: rev.product_id,
+              source_location_id: prodLoc.id,
+              destination_location_id: freezerLoc.id,
+              quantity: rev.quantity,
+              movement_type: 'production_completed',
+              reference_table: 'production_batches',
+              reference_id: rev.reference_id,
+              notes: 'Auto-Reconciled base production for deleted batch reversal',
+              created_by: toSafeUuid(rev.created_by),
+            });
+            syncedBatches++;
+          }
+        }
+      }
+
+      // 4. Fetch issued issues
       const { data: issues } = await (supabase as any)
         .from('seller_issues')
         .select('*, items:seller_issue_items(*)')
@@ -370,6 +403,33 @@ export const api = {
 
       if (missingMovements.length > 0) {
         await (supabase as any).from('stock_movements').insert(missingMovements);
+      }
+
+      // 5. Clean Any Remaining Negative Deficit in Main Freezer
+      const balancesBeforeClean = await this.getFreezerBalances();
+      const deficitFixMovements: any[] = [];
+      const damagedLoc = (await (supabase as any).from('stock_locations').select('id').eq('location_type', 'damaged').maybeSingle())?.data;
+      const adjLocId = damagedLoc?.id || prodLoc?.id || freezerLoc?.id;
+
+      for (const [prodId, qty] of Object.entries(balancesBeforeClean)) {
+        if (qty < 0 && freezerLoc) {
+          deficitFixMovements.push({
+            movement_date: new Date().toISOString(),
+            product_id: prodId,
+            source_location_id: adjLocId,
+            destination_location_id: freezerLoc.id,
+            quantity: Math.abs(qty),
+            movement_type: 'manual_adjustment',
+            reference_table: 'stock_locations',
+            reference_id: freezerLoc.id,
+            notes: `Auto-reconciled negative freezer deficit (${qty} pcs -> 0)`,
+            created_by: null,
+          });
+        }
+      }
+
+      if (deficitFixMovements.length > 0) {
+        await (supabase as any).from('stock_movements').insert(deficitFixMovements);
       }
 
       const refreshedBalances = await this.getFreezerBalances();
@@ -1489,7 +1549,6 @@ export const api = {
         }
       }
     }
-    currentQty = Math.max(0, currentQty);
     const targetQty = Math.max(0, Math.round(Number(newQuantity) || 0));
     const difference = targetQty - currentQty;
 

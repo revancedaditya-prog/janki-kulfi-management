@@ -1012,11 +1012,15 @@ class MockStore {
     success: boolean;
     synced_batch_items: number;
     synced_issue_items: number;
+    healed_reversals: number;
+    healed_deficits: number;
     freezer_balances: Record<string, number>;
     message: string;
   } {
     let syncedBatches = 0;
     let syncedIssues = 0;
+    let healedReversals = 0;
+    let healedDeficits = 0;
 
     const prodLoc = this.state.stock_locations.find((l) => l.location_type === 'production') || {
       id: 'loc-prod-01',
@@ -1027,13 +1031,14 @@ class MockStore {
       is_active: true,
     };
     const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer') || {
-      id: 'loc-freezer-01',
+      id: 'a0000000-0000-0000-0000-000000000002',
       name: 'Main Cold Storage Freezer',
       location_type: 'main_freezer' as const,
       seller_id: null,
       cart_id: null,
       is_active: true,
     };
+    const adjLoc = this.state.stock_locations.find((l) => l.location_type === 'damaged') || prodLoc;
 
     // 1. Scan completed batches
     for (const batch of this.state.production_batches) {
@@ -1071,7 +1076,39 @@ class MockStore {
       }
     }
 
-    // 2. Scan issued issues
+    // 2. Heal Orphan Production Reversals
+    // If a reversal exists for a deleted batch that lacked production_completed, insert the base completed movement so net is 0
+    const reversals = this.state.stock_movements.filter(
+      (m) => m.movement_type === 'production_reversal' && m.reference_table === 'production_batches' && m.reference_id
+    );
+    for (const rev of reversals) {
+      const hasCompleted = this.state.stock_movements.some(
+        (m) =>
+          m.reference_table === 'production_batches' &&
+          m.reference_id === rev.reference_id &&
+          (m.product_id === rev.product_id || m.product_id === rev.product_id) &&
+          m.movement_type === 'production_completed'
+      );
+      if (!hasCompleted) {
+        this.state.stock_movements.push({
+          id: `mv-${generateId().slice(0, 8)}`,
+          movement_date: rev.movement_date || new Date().toISOString(),
+          product_id: rev.product_id,
+          source_location_id: prodLoc.id,
+          destination_location_id: freezerLoc.id,
+          quantity: rev.quantity,
+          movement_type: 'production_completed',
+          reference_table: 'production_batches',
+          reference_id: rev.reference_id,
+          notes: 'Auto-Reconciled base production for deleted batch reversal',
+          created_by: rev.created_by || 'usr-owner-001',
+          created_at: rev.movement_date || new Date().toISOString(),
+        });
+        healedReversals++;
+      }
+    }
+
+    // 3. Scan issued issues
     for (const issue of this.state.seller_issues) {
       if ((issue.status === 'issued' || issue.status === 'settled' || issue.status === 'partially_settled') && issue.is_current_version !== false) {
         let sellerLoc = this.state.stock_locations.find((l) => l.location_type === 'seller' && l.seller_id === issue.seller_id);
@@ -1118,15 +1155,40 @@ class MockStore {
       }
     }
 
+    // 4. Heal any remaining negative freezer deficit
+    const currentBalances = this.getFreezerBalances();
+    for (const [prodId, qty] of Object.entries(currentBalances)) {
+      if (qty < 0) {
+        this.state.stock_movements.push({
+          id: `mv-${generateId().slice(0, 8)}`,
+          movement_date: new Date().toISOString(),
+          product_id: prodId,
+          source_location_id: adjLoc.id,
+          destination_location_id: freezerLoc.id,
+          quantity: Math.abs(qty),
+          movement_type: 'manual_adjustment' as any,
+          reference_table: 'stock_locations',
+          reference_id: freezerLoc.id,
+          notes: `Auto-reconciled negative freezer deficit (${qty} pcs -> 0)`,
+          created_by: 'usr-owner-001',
+          created_at: new Date().toISOString(),
+        });
+        healedDeficits++;
+      }
+    }
+
     this.saveState();
     return {
       success: true,
       synced_batch_items: syncedBatches,
       synced_issue_items: syncedIssues,
+      healed_reversals: healedReversals,
+      healed_deficits: healedDeficits,
       freezer_balances: this.getFreezerBalances(),
-      message: 'Freezer stock successfully reconciled and synced with all production batches and issues.',
+      message: 'Freezer stock successfully reconciled and synchronized.',
     };
   }
+
 
   public getSellerHeldStock(sellerId: string, productId?: string): number {
     const sellerLoc = this.state.stock_locations.find(
