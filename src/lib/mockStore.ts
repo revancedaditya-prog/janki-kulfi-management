@@ -985,6 +985,126 @@ class MockStore {
     return balances;
   }
 
+  public reconcileFreezerStock(): {
+    success: boolean;
+    synced_batch_items: number;
+    synced_issue_items: number;
+    freezer_balances: Record<string, number>;
+    message: string;
+  } {
+    let syncedBatches = 0;
+    let syncedIssues = 0;
+
+    const prodLoc = this.state.stock_locations.find((l) => l.location_type === 'production') || {
+      id: 'loc-prod-01',
+      name: 'Production Floor',
+      location_type: 'production' as const,
+      seller_id: null,
+      cart_id: null,
+      is_active: true,
+    };
+    const freezerLoc = this.state.stock_locations.find((l) => l.location_type === 'main_freezer') || {
+      id: 'loc-freezer-01',
+      name: 'Main Cold Storage Freezer',
+      location_type: 'main_freezer' as const,
+      seller_id: null,
+      cart_id: null,
+      is_active: true,
+    };
+
+    // 1. Scan completed batches
+    for (const batch of this.state.production_batches) {
+      if (batch.status === 'completed' && batch.is_current_version !== false) {
+        for (const it of batch.items) {
+          if (it.saleable_quantity > 0) {
+            const exists = this.state.stock_movements.some(
+              (m) =>
+                m.reference_table === 'production_batches' &&
+                m.reference_id === batch.id &&
+                (m.product_id === it.product_id ||
+                  (it.product && m.product_id === it.product.sku) ||
+                  (it.product && m.product_id === it.product.id)) &&
+                m.movement_type === 'production_completed'
+            );
+            if (!exists) {
+              this.state.stock_movements.push({
+                id: `mv-${generateId().slice(0, 8)}`,
+                movement_date: batch.completed_at || batch.production_date || new Date().toISOString(),
+                product_id: it.product_id,
+                source_location_id: prodLoc.id,
+                destination_location_id: freezerLoc.id,
+                quantity: it.saleable_quantity,
+                movement_type: 'production_completed',
+                reference_table: 'production_batches',
+                reference_id: batch.id,
+                notes: `Auto-Synced from Batch: ${batch.batch_number}`,
+                created_by: batch.created_by || 'usr-owner-001',
+                created_at: batch.completed_at || new Date().toISOString(),
+              });
+              syncedBatches++;
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Scan issued issues
+    for (const issue of this.state.seller_issues) {
+      if ((issue.status === 'issued' || issue.status === 'settled' || issue.status === 'partially_settled') && issue.is_current_version !== false) {
+        let sellerLoc = this.state.stock_locations.find((l) => l.location_type === 'seller' && l.seller_id === issue.seller_id);
+        if (!sellerLoc) {
+          sellerLoc = {
+            id: `loc-seller-${issue.seller_id}`,
+            location_type: 'seller',
+            name: 'Seller Cart Stock',
+            seller_id: issue.seller_id,
+            cart_id: issue.cart_id,
+            is_active: true,
+          };
+          this.state.stock_locations.push(sellerLoc);
+        }
+
+        for (const it of issue.items) {
+          if (it.issued_quantity > 0) {
+            const exists = this.state.stock_movements.some(
+              (m) =>
+                m.reference_table === 'seller_issues' &&
+                m.reference_id === issue.id &&
+                m.product_id === it.product_id &&
+                m.movement_type === 'seller_issued'
+            );
+            if (!exists) {
+              this.state.stock_movements.push({
+                id: `mv-${generateId().slice(0, 8)}`,
+                movement_date: issue.issued_at || issue.issue_date || new Date().toISOString(),
+                product_id: it.product_id,
+                source_location_id: freezerLoc.id,
+                destination_location_id: sellerLoc.id,
+                quantity: it.issued_quantity,
+                movement_type: 'seller_issued',
+                reference_table: 'seller_issues',
+                reference_id: issue.id,
+                notes: `Auto-Synced from Issue: ${issue.issue_number}`,
+                created_by: issue.created_by || 'usr-owner-001',
+                created_at: issue.issued_at || new Date().toISOString(),
+              });
+              syncedIssues++;
+            }
+          }
+        }
+      }
+    }
+
+    this.saveState();
+    return {
+      success: true,
+      synced_batch_items: syncedBatches,
+      synced_issue_items: syncedIssues,
+      freezer_balances: this.getFreezerBalances(),
+      message: 'Freezer stock successfully reconciled and synced with all production batches and issues.',
+    };
+  }
+
   public getSellerHeldStock(sellerId: string, productId?: string): number {
     const sellerLoc = this.state.stock_locations.find(
       (l) => l.location_type === 'seller' && l.seller_id === sellerId

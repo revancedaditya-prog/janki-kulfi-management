@@ -36,6 +36,8 @@ export function useCreateProductionBatch() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['production_batches'] });
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
+      queryClient.invalidateQueries({ queryKey: ['freezer_stock'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
     },
   });

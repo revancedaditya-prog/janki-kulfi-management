@@ -103,3 +103,22 @@ export function useAdjustFreezerStock() {
   });
 }
 
+export function useSyncFreezerStock() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      return api.reconcileFreezerStock();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['stock_movements'] });
+      queryClient.invalidateQueries({ queryKey: ['production_batches'] });
+      queryClient.invalidateQueries({ queryKey: ['seller_issues'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+      queryClient.invalidateQueries({ queryKey: ['freezer_stock'] });
+    },
+  });
+}
+
+

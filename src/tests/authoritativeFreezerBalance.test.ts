@@ -192,4 +192,88 @@ describe('Authoritative Freezer Balance & Reversal Isolation Suite', () => {
     // Querying by SKU also resolves
     expect(mockStore.getAvailableFreezerStock(sada.sku)).toBe(50);
   });
+
+  it('4. Auto-Reconciles Freezer Stock with Batches and Issues when movements were missing or out of sync', async () => {
+    const products = mockStore.getProducts();
+    const sada = products[0];
+    const rabri = products[1];
+    const prem = products[2];
+
+    // Simulate batch created without movement (or movements wiped)
+    mockStore.getState().production_batches.push({
+      id: 'batch-unsynced-01',
+      batch_number: 'BAT-20260904-9131',
+      production_date: '2026-09-04',
+      status: 'completed',
+      total_ingredient_cost: 7888.76,
+      notes: 'Daily production test',
+      completed_at: new Date().toISOString(),
+      version_number: 1,
+      is_current_version: true,
+      correction_of_id: null,
+      superseded_by_id: null,
+      correction_reason: null,
+      corrected_by: null,
+      corrected_at: null,
+      created_by: 'usr-owner-001',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      items: [
+        {
+          id: 'pi-1',
+          batch_id: 'batch-unsynced-01',
+          product_id: sada.id,
+          produced_quantity: 655,
+          damaged_quantity: 0,
+          saleable_quantity: 655,
+          allocated_ingredient_cost: 5491.11,
+          unit_production_cost: 8.38,
+          notes: null,
+        },
+        {
+          id: 'pi-2',
+          batch_id: 'batch-unsynced-01',
+          product_id: rabri.id,
+          produced_quantity: 245,
+          damaged_quantity: 0,
+          saleable_quantity: 245,
+          allocated_ingredient_cost: 2053.93,
+          unit_production_cost: 8.38,
+          notes: null,
+        },
+        {
+          id: 'pi-3',
+          batch_id: 'batch-unsynced-01',
+          product_id: prem.id,
+          produced_quantity: 41,
+          damaged_quantity: 0,
+          saleable_quantity: 41,
+          allocated_ingredient_cost: 343.72,
+          unit_production_cost: 8.38,
+          notes: null,
+        },
+      ],
+    });
+
+    // Before reconcile: movements don't exist, so available stock is 0
+    expect(mockStore.getAvailableFreezerStock(sada.id)).toBe(0);
+    expect(mockStore.getAvailableFreezerStock(rabri.id)).toBe(0);
+    expect(mockStore.getAvailableFreezerStock(prem.id)).toBe(0);
+
+    // Run reconciliation
+    const syncRes = await api.reconcileFreezerStock();
+    expect(syncRes.success).toBe(true);
+    expect(syncRes.synced_batch_items).toBe(3);
+
+    // After reconcile: stock balances are perfectly in sync with the production batch!
+    expect(mockStore.getAvailableFreezerStock(sada.id)).toBe(655);
+    expect(mockStore.getAvailableFreezerStock(rabri.id)).toBe(245);
+    expect(mockStore.getAvailableFreezerStock(prem.id)).toBe(41);
+
+    const refreshedProducts = await api.getProducts();
+    expect(refreshedProducts.find((p) => p.id === sada.id)?.available_quantity).toBe(655);
+    expect(refreshedProducts.find((p) => p.id === rabri.id)?.available_quantity).toBe(245);
+    expect(refreshedProducts.find((p) => p.id === prem.id)?.available_quantity).toBe(41);
+  });
 });
+

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useProducts, useAdjustFreezerStock } from '@/hooks/useProducts';
+import { useProducts, useAdjustFreezerStock, useSyncFreezerStock } from '@/hooks/useProducts';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { Card, CardHeader } from '@/components/common/Card';
@@ -8,7 +8,7 @@ import { Badge } from '@/components/common/Badge';
 import { Modal } from '@/components/common/Modal';
 import { Input } from '@/components/common/Input';
 import { formatCurrency, formatQuantity, formatDateTime } from '@/lib/formatters';
-import { Boxes, Edit3, Trash2, ShieldAlert, AlertCircle } from 'lucide-react';
+import { Boxes, Edit3, Trash2, ShieldAlert, AlertCircle, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useQuery } from '@tanstack/react-query';
 import { ProductWithPrice } from '@/types';
@@ -22,6 +22,20 @@ export const StockPage: React.FC = () => {
   const { t, language } = useLanguage();
   const { isOwner } = useAuth();
   const adjustStockMutation = useAdjustFreezerStock();
+  const syncFreezerStock = useSyncFreezerStock();
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
+  const handleSyncStock = async () => {
+    try {
+      setSyncMessage(language === 'hi' ? 'सिंक्रोनाइज़ हो रहा है...' : 'Syncing stock...');
+      await syncFreezerStock.mutateAsync();
+      setSyncMessage(language === 'hi' ? '✅ फ्रीजर स्टॉक और उत्पादन बैच पूर्णतः सिंक हो गए!' : '✅ Stock & Batches fully synced!');
+      setTimeout(() => setSyncMessage(null), 4000);
+    } catch (err: any) {
+      setSyncMessage(`❌ ${err.message || 'Sync failed'}`);
+      setTimeout(() => setSyncMessage(null), 4000);
+    }
+  };
 
   // Edit Stock State
   const [editingProduct, setEditingProduct] = useState<ProductWithPrice | null>(null);
@@ -130,7 +144,19 @@ export const StockPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            leftIcon={<RefreshCw className={`w-4 h-4 text-emerald-800 ${syncFreezerStock.isPending ? 'animate-spin' : ''}`} />}
+            className="border-emerald-700 text-emerald-900 font-bold hover:bg-emerald-50 text-xs py-2"
+            onClick={handleSyncStock}
+            disabled={syncFreezerStock.isPending}
+          >
+            {syncFreezerStock.isPending
+              ? (language === 'hi' ? 'सिंक हो रहा है...' : 'Syncing...')
+              : (language === 'hi' ? '🔄 स्टॉक सिंक करें' : '🔄 Sync Stock')}
+          </Button>
+
           <div className="bg-white px-4 py-2 rounded-2xl border border-cream-300 shadow-sm text-right">
             <span className="text-[10px] font-bold text-gray-500 block">कुल स्टॉक पीस</span>
             <span className="text-lg font-black text-emerald-800 font-mono">
@@ -145,6 +171,16 @@ export const StockPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Sync Status Banner */}
+      {syncMessage && (
+        <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-2xl text-xs font-bold text-emerald-900 flex items-center justify-between shadow-sm animate-fade-in">
+          <span>{syncMessage}</span>
+          <Button size="sm" variant="ghost" className="text-emerald-800 h-6 px-2 text-[10px]" onClick={() => setSyncMessage(null)}>
+            ✕
+          </Button>
+        </div>
+      )}
 
       {/* Stock Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

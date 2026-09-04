@@ -9,7 +9,7 @@ import {
   useDeleteProductionBatch,
   useProductionRevisionHistory,
 } from '@/hooks/useProduction';
-import { useProducts } from '@/hooks/useProducts';
+import { useProducts, useSyncFreezerStock } from '@/hooks/useProducts';
 import { useDailyClosings } from '@/hooks/useDailyClosing';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
@@ -39,6 +39,7 @@ import {
   ArrowRight,
   ShieldAlert,
   Trash2,
+  RefreshCw,
 } from 'lucide-react';
 import { ProductionBatchWithItems } from '@/types';
 import { CompleteBatchWithIngredientsModal } from '@/components/production/CompleteBatchWithIngredientsModal';
@@ -57,6 +58,20 @@ export const ProductionPage: React.FC = () => {
   const updateDraftBatch = useUpdateDraftProductionBatch();
   const correctBatch = useCorrectProductionBatch();
   const deleteBatch = useDeleteProductionBatch();
+  const syncFreezerStock = useSyncFreezerStock();
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
+  const handleSyncStock = async () => {
+    try {
+      setSyncMessage(language === 'hi' ? 'सिंक्रोनाइज़ हो रहा है...' : 'Syncing stock...');
+      await syncFreezerStock.mutateAsync();
+      setSyncMessage(language === 'hi' ? '✅ फ्रीजर स्टॉक और उत्पादन बैच पूर्णतः सिंक हो गए!' : '✅ Stock & Batches fully synced!');
+      setTimeout(() => setSyncMessage(null), 4000);
+    } catch (err: any) {
+      setSyncMessage(`❌ ${err.message || 'Sync failed'}`);
+      setTimeout(() => setSyncMessage(null), 4000);
+    }
+  };
 
   const [isNewModalOpen, setIsNewModalOpen] = useState(searchParams.get('new') === 'true');
   const [batchToComplete, setBatchToComplete] = useState<ProductionBatchWithItems | null>(null);
@@ -365,7 +380,19 @@ export const ProductionPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            leftIcon={<RefreshCw className={`w-4 h-4 text-emerald-800 ${syncFreezerStock.isPending ? 'animate-spin' : ''}`} />}
+            className="border-emerald-700 text-emerald-900 font-bold hover:bg-emerald-50"
+            onClick={handleSyncStock}
+            disabled={syncFreezerStock.isPending}
+          >
+            {syncFreezerStock.isPending
+              ? (language === 'hi' ? 'सिंक हो रहा है...' : 'Syncing...')
+              : (language === 'hi' ? '🔄 स्टॉक सिंक करें' : '🔄 Sync Stock')}
+          </Button>
+
           <Link to="/production/cost-calculator">
             <Button
               variant="outline"
@@ -384,6 +411,16 @@ export const ProductionPage: React.FC = () => {
           </Button>
         </div>
       </div>
+
+      {/* Sync Status Banner */}
+      {syncMessage && (
+        <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-2xl text-xs font-bold text-emerald-900 flex items-center justify-between shadow-sm animate-fade-in">
+          <span>{syncMessage}</span>
+          <Button size="sm" variant="ghost" className="text-emerald-800 h-6 px-2 text-[10px]" onClick={() => setSyncMessage(null)}>
+            ✕
+          </Button>
+        </div>
+      )}
 
       {/* Batches List */}
       {isLoading ? (

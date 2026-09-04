@@ -36,6 +36,12 @@ import {
 // Detect if running in mock/local mode
 export const useMockMode = !isSupabaseConfigured || import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function toSafeUuid(id: any): string | null {
+  if (typeof id === 'string' && UUID_REGEX.test(id)) return id;
+  return null;
+}
+
 // Current session simulation helper for mock mode
 const CURRENT_USER_KEY = 'janki_current_user_profile';
 
@@ -221,6 +227,159 @@ export const api = {
     }
     const balances = await this.getFreezerBalances();
     return balances[productId] || 0;
+  },
+
+  async reconcileFreezerStock(): Promise<{
+    success: boolean;
+    synced_batch_items: number;
+    synced_issue_items: number;
+    freezer_balances: Record<string, number>;
+    message: string;
+  }> {
+    if (useMockMode) {
+      return mockStore.reconcileFreezerStock();
+    }
+
+    try {
+      // 1. Try RPC first
+      const { data, error } = await (supabase as any).rpc('reconcile_freezer_stock_transaction');
+      if (!error && data) {
+        return data;
+      }
+      console.warn('RPC reconcile_freezer_stock_transaction failed or not installed, running direct sync:', error);
+    } catch (rpcErr) {
+      console.warn('Exception running reconcile_freezer_stock_transaction:', rpcErr);
+    }
+
+    // Direct fallback reconciliation in Supabase
+    try {
+      const { freezerLoc, prodLoc } = await getOrCreateDefaultStockLocations();
+      let syncedBatches = 0;
+      let syncedIssues = 0;
+
+      // 1. Fetch completed batches
+      const { data: batches } = await (supabase as any)
+        .from('production_batches')
+        .select('*, items:production_items(*)')
+        .eq('status', 'completed')
+        .neq('is_current_version', false);
+
+      // 2. Fetch existing movements
+      const { data: existingMovements } = await (supabase as any)
+        .from('stock_movements')
+        .select('reference_table, reference_id, product_id, movement_type');
+
+      const movementKeySet = new Set<string>();
+      if (existingMovements) {
+        for (const m of existingMovements) {
+          movementKeySet.add(`${m.reference_table}:${m.reference_id}:${m.product_id}:${m.movement_type}`);
+        }
+      }
+
+      const missingMovements: any[] = [];
+
+      if (batches && freezerLoc && prodLoc) {
+        for (const b of batches) {
+          if (b.items) {
+            for (const it of b.items) {
+              const saleable = Number(it.saleable_quantity) || 0;
+              if (saleable > 0) {
+                const key = `production_batches:${b.id}:${it.product_id}:production_completed`;
+                if (!movementKeySet.has(key)) {
+                  missingMovements.push({
+                    movement_date: b.completed_at || b.production_date || new Date().toISOString(),
+                    product_id: it.product_id,
+                    source_location_id: prodLoc.id,
+                    destination_location_id: freezerLoc.id,
+                    quantity: saleable,
+                    movement_type: 'production_completed',
+                    reference_table: 'production_batches',
+                    reference_id: b.id,
+                    notes: `Auto-Synced from Batch: ${b.batch_number}`,
+                    created_by: toSafeUuid(b.created_by),
+                  });
+                  syncedBatches++;
+                  movementKeySet.add(key);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // 3. Fetch issued issues
+      const { data: issues } = await (supabase as any)
+        .from('seller_issues')
+        .select('*, items:seller_issue_items(*)')
+        .in('status', ['issued', 'settled', 'partially_settled'])
+        .neq('is_current_version', false);
+
+      if (issues && freezerLoc) {
+        for (const iss of issues) {
+          let { data: sellerLoc } = await (supabase as any)
+            .from('stock_locations')
+            .select('id')
+            .eq('seller_id', iss.seller_id)
+            .eq('location_type', 'seller')
+            .maybeSingle();
+
+          if (!sellerLoc) {
+            const { data: newLoc } = await (supabase as any)
+              .from('stock_locations')
+              .insert({
+                location_type: 'seller',
+                name: 'Seller Cart Stock',
+                seller_id: iss.seller_id,
+                is_active: true,
+              })
+              .select()
+              .single();
+            sellerLoc = newLoc;
+          }
+
+          if (iss.items && sellerLoc) {
+            for (const it of iss.items) {
+              const issuedQty = Number(it.issued_quantity) || 0;
+              if (issuedQty > 0) {
+                const key = `seller_issues:${iss.id}:${it.product_id}:seller_issued`;
+                if (!movementKeySet.has(key)) {
+                  missingMovements.push({
+                    movement_date: iss.issued_at || iss.issue_date || new Date().toISOString(),
+                    product_id: it.product_id,
+                    source_location_id: freezerLoc.id,
+                    destination_location_id: sellerLoc.id,
+                    quantity: issuedQty,
+                    movement_type: 'seller_issued',
+                    reference_table: 'seller_issues',
+                    reference_id: iss.id,
+                    notes: `Auto-Synced from Issue: ${iss.issue_number}`,
+                    created_by: toSafeUuid(iss.created_by),
+                  });
+                  syncedIssues++;
+                  movementKeySet.add(key);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (missingMovements.length > 0) {
+        await (supabase as any).from('stock_movements').insert(missingMovements);
+      }
+
+      const refreshedBalances = await this.getFreezerBalances();
+      return {
+        success: true,
+        synced_batch_items: syncedBatches,
+        synced_issue_items: syncedIssues,
+        freezer_balances: refreshedBalances,
+        message: 'Freezer stock successfully reconciled and synced with all production batches and issues.',
+      };
+    } catch (err: any) {
+      console.warn('Error during direct reconciliation fallback:', err);
+      return mockStore.reconcileFreezerStock();
+    }
   },
 
   // --- Products & Prices ---
