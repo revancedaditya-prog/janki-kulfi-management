@@ -18,7 +18,6 @@ import {
   Boxes,
   ShieldCheck,
   Flame,
-  ShoppingCart,
   Layers,
 } from 'lucide-react';
 
@@ -31,13 +30,7 @@ export const DesktopSidebar: React.FC = () => {
       title: 'Operations / संचालन',
       items: [
         { to: '/', label: t.navDashboard, icon: LayoutDashboard, show: true },
-        { to: '/production', label: t.navProduction, icon: Factory, show: isProduction },
-        {
-          to: '/production/cost-calculator',
-          label: t.productionCostCalculatorHi || 'लागत कैलकुलेटर',
-          icon: Calculator,
-          show: isProduction || isOwner,
-        },
+        { to: '/production', label: t.navProduction, icon: Factory, show: isProduction || isOwner },
         { to: '/issues', label: t.navStockIssues, icon: Truck, show: isProduction || isOwner },
         { to: '/settlements', label: t.navSettlements, icon: Receipt, show: true },
         { to: '/stock', label: t.navStock, icon: Boxes, show: isProduction || isOwner },
@@ -46,10 +39,12 @@ export const DesktopSidebar: React.FC = () => {
     {
       title: 'Raw Materials / कच्चा माल',
       items: [
-        { to: '/inventory', label: 'कच्ची सामग्री स्टॉक', icon: Layers, show: isProduction || isOwner },
+        { to: '/inventory', label: 'कच्चा माल स्टॉक (Stock)', icon: Layers, show: isProduction || isOwner },
         { to: '/inventory/purchases', label: 'सामग्री खरीद (Stock-In)', icon: Truck, show: isOwner },
+        { to: '/inventory/check', label: 'स्टॉक सत्यापन (Physical Check)', icon: CalendarCheck, show: isOwner },
+        { to: '/inventory/wastage', label: 'खराबी / वेस्टेज (Wastage)', icon: Boxes, show: isOwner },
+        { to: '/inventory/returns', label: 'सप्लायर वापसी (Returns)', icon: Truck, show: isOwner },
         { to: '/inventory/lpg', label: 'LPG गैस सिलेंडर', icon: Flame, show: isProduction || isOwner },
-        { to: '/inventory/shopping-list', label: 'खरीद सूची (Shopping)', icon: ShoppingCart, show: isOwner },
       ],
     },
     {
@@ -63,8 +58,9 @@ export const DesktopSidebar: React.FC = () => {
     {
       title: 'Master Data / मास्टर डेटा',
       items: [
-        { to: '/inventory/items', label: 'सामग्री मास्टर (Ingredients)', icon: Package, show: isOwner },
-        { to: '/products', label: t.navProducts, icon: Package, show: isOwner },
+        { to: '/products', label: 'उत्पाद व मूल्य (Products & Prices)', icon: Package, show: isOwner },
+        { to: '/production/cost-calculator', label: 'रेसिपी और लागत कैलकुलेटर', icon: Calculator, show: isOwner || isProduction },
+        { to: '/inventory/items', label: 'कच्चा माल मास्टर (Raw Materials)', icon: Package, show: isOwner },
         { to: '/sellers', label: t.navSellers, icon: Users, show: isOwner },
         { to: '/audit', label: t.navAudit, icon: History, show: isOwner },
         { to: '/settings/backup', label: 'बैकअप केंद्र (Backup)', icon: ShieldCheck, show: isOwner },

@@ -77,8 +77,10 @@ export function useSaveRecipe() {
       product_id: string;
       name?: string;
       standard_output_pieces: number;
+      expected_yield_pieces?: number;
       default_overheads: AdditionalOverheads;
       notes?: string;
+      status?: 'draft' | 'active' | 'archived';
       items: {
         ingredient_id: string;
         quantity: number;
@@ -92,6 +94,34 @@ export function useSaveRecipe() {
       queryClient.invalidateQueries({ queryKey: ['recipe_history', variables.product_id] });
       queryClient.invalidateQueries({ queryKey: ['recipes'] });
       queryClient.invalidateQueries({ queryKey: ['ingredients'] });
+    },
+  });
+}
+
+export function useActivateRecipeVersion() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: (recipeId: string) => api.activateRecipeVersion(recipeId, user?.id || 'usr-owner-001'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['recipe'] });
+      queryClient.invalidateQueries({ queryKey: ['recipe_history'] });
+      queryClient.invalidateQueries({ queryKey: ['recipes'] });
+    },
+  });
+}
+
+export function useDeleteRecipeVersion() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: (recipeId: string) => api.deleteRecipeVersion(recipeId, user?.id || 'usr-owner-001'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['recipe'] });
+      queryClient.invalidateQueries({ queryKey: ['recipe_history'] });
+      queryClient.invalidateQueries({ queryKey: ['recipes'] });
     },
   });
 }

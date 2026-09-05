@@ -7,6 +7,7 @@ import {
   useDeactivateIngredient,
   useReactivateIngredient,
   useDeleteIngredient,
+  useCorrectRawMaterialStock,
 } from '@/hooks/useInventory';
 import { useSuppliers } from '@/hooks/useSuppliers';
 import { useLanguage } from '@/i18n/LanguageContext';
@@ -26,6 +27,7 @@ import {
   PowerOff,
   Search,
   ArrowRight,
+  Scale,
 } from 'lucide-react';
 
 export const InventoryItemsPage: React.FC = () => {
@@ -41,6 +43,7 @@ export const InventoryItemsPage: React.FC = () => {
   const deactivateMutation = useDeactivateIngredient();
   const reactivateMutation = useReactivateIngredient();
   const deleteMutation = useDeleteIngredient();
+  const correctStockMutation = useCorrectRawMaterialStock();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -51,6 +54,9 @@ export const InventoryItemsPage: React.FC = () => {
   const [editingIngredient, setEditingIngredient] = useState<Ingredient | null>(null);
   const [itemToDeactivate, setItemToDeactivate] = useState<Ingredient | null>(null);
   const [itemToDelete, setItemToDelete] = useState<Ingredient | null>(null);
+  const [itemToCorrect, setItemToCorrect] = useState<Ingredient | null>(null);
+  const [newPhysicalStock, setNewPhysicalStock] = useState<string>('');
+  const [correctionReason, setCorrectionReason] = useState<string>('');
   const [deactivateReason, setDeactivateReason] = useState('');
   const [deleteReason, setDeleteReason] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
@@ -195,13 +201,45 @@ export const InventoryItemsPage: React.FC = () => {
     }
   };
 
+  const handleOpenCorrectStock = (ing: Ingredient) => {
+    setItemToCorrect(ing);
+    setNewPhysicalStock(String(ing.available_base_quantity || 0));
+    setCorrectionReason('');
+    setFormError(null);
+  };
+
+  const handleCorrectStockSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!itemToCorrect) return;
+    if (!correctionReason || correctionReason.trim().length < 3) {
+      setFormError('संशोधन का स्पष्ट कारण दर्ज करना अनिवार्य है।');
+      return;
+    }
+
+    try {
+      await correctStockMutation.mutateAsync({
+        ingredientId: itemToCorrect.id,
+        newQuantity: parseFloat(newPhysicalStock) || 0,
+        reason: correctionReason.trim(),
+      });
+      setItemToCorrect(null);
+      setNewPhysicalStock('');
+      setCorrectionReason('');
+    } catch (err: any) {
+      setFormError(err.message || 'स्टॉक संशोधन में त्रुटि हुई');
+    }
+  };
+
   const handleDelete = async () => {
     if (!itemToDelete) return;
     try {
-      await deleteMutation.mutateAsync({
-        id: itemToDelete.id,
+      const res = await deleteMutation.mutateAsync({
+        ingredientId: itemToDelete.id,
         reason: deleteReason.trim() || 'Deleted Draft Item',
       });
+      if (res && res.deactivated) {
+        alert(res.message || 'सामग्री का इतिहास होने के कारण इसे निष्क्रिय किया गया।');
+      }
       setItemToDelete(null);
       setDeleteReason('');
     } catch (err: any) {
@@ -435,6 +473,14 @@ export const InventoryItemsPage: React.FC = () => {
 
                           {isOwner && (
                             <>
+                              <button
+                                title="भौतिक स्टॉक संशोधन (Correct Stock)"
+                                onClick={() => handleOpenCorrectStock(ing)}
+                                className="p-1.5 text-indigo-700 hover:bg-indigo-100 rounded cursor-pointer"
+                              >
+                                <Scale className="w-3.5 h-3.5" />
+                              </button>
+
                               <button
                                 title="संपादित करें"
                                 onClick={() => handleOpenEditModal(ing)}
@@ -725,6 +771,100 @@ export const InventoryItemsPage: React.FC = () => {
               className="bg-amber-600 hover:bg-amber-700 text-white font-bold"
             >
               {editingIngredient ? 'अपडेट करें' : 'सहेजें'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Quick Physical Stock Correction Modal */}
+      <Modal
+        isOpen={Boolean(itemToCorrect)}
+        onClose={() => setItemToCorrect(null)}
+        title={`भौतिक स्टॉक संशोधन: ${itemToCorrect?.name_hi || ''} (${itemToCorrect?.name_en || ''})`}
+        maxWidth="md"
+      >
+        <form onSubmit={handleCorrectStockSubmit} className="space-y-4">
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
+            <p className="font-bold">सुरक्षित स्टॉक संशोधन (Safe Correction):</p>
+            <p>
+              पिछला बहीखाता हटाया नहीं जाएगा। नया भौतिक स्टॉक दर्ज करने पर एक{' '}
+              <strong>physical_count_correction</strong> एंट्री स्वतः बनाई जाएगी।
+            </p>
+          </div>
+
+          {formError && (
+            <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-semibold">
+              {formError}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-stone-500 mb-1">
+                वर्तमान बहीखाता स्टॉक
+              </label>
+              <div className="px-3 py-2 bg-stone-100 rounded-lg text-xs font-bold font-mono text-stone-800">
+                {itemToCorrect?.available_base_quantity || 0} {itemToCorrect?.base_unit}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-stone-800 mb-1">
+                नया भौतिक स्टॉक ({itemToCorrect?.base_unit}) *
+              </label>
+              <input
+                type="number"
+                step="any"
+                min="0"
+                value={newPhysicalStock}
+                onChange={(e) => setNewPhysicalStock(e.target.value)}
+                placeholder="नया स्टॉक"
+                className="w-full px-3 py-2 text-xs font-bold font-mono border border-stone-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+                required
+              />
+            </div>
+          </div>
+
+          {itemToCorrect && newPhysicalStock !== '' && (
+            <div className="p-2.5 bg-stone-50 border border-stone-200 rounded-lg text-xs flex justify-between items-center">
+              <span>अंतर (Difference):</span>
+              <span className={`font-bold font-mono ${
+                (parseFloat(newPhysicalStock) || 0) - (itemToCorrect.available_base_quantity || 0) >= 0
+                  ? 'text-emerald-700'
+                  : 'text-rose-700'
+              }`}>
+                {(parseFloat(newPhysicalStock) || 0) - (itemToCorrect.available_base_quantity || 0) >= 0 ? '+' : ''}
+                {((parseFloat(newPhysicalStock) || 0) - (itemToCorrect.available_base_quantity || 0)).toFixed(3)} {itemToCorrect.base_unit}
+              </span>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-stone-800 mb-1">
+              संशोधन का अनिवार्य कारण (Reason) *
+            </label>
+            <input
+              type="text"
+              placeholder="जैसे: भौतिक गणना में पाया गया, रिसाव/नुकसान..."
+              value={correctionReason}
+              onChange={(e) => setCorrectionReason(e.target.value)}
+              className="w-full px-3 py-2 text-xs border border-stone-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+              required
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-200">
+            <Button variant="outline" size="sm" onClick={() => setItemToCorrect(null)}>
+              {t.cancel}
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              isLoading={correctStockMutation.isPending}
+              className="bg-amber-600 hover:bg-amber-700 text-white font-bold"
+            >
+              संशोधन दर्ज करें
             </Button>
           </div>
         </form>

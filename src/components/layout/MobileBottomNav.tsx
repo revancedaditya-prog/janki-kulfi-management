@@ -27,7 +27,7 @@ export const MobileBottomNav: React.FC = () => {
 
   const mainNavItems = [
     { to: '/', label: t.navDashboard, icon: LayoutDashboard, show: true },
-    { to: '/production', label: t.navProduction, icon: Factory, show: isProduction },
+    { to: '/production', label: t.navProduction, icon: Factory, show: isProduction || isOwner },
     { to: '/issues', label: t.navStockIssues, icon: Truck, show: isProduction || isOwner },
     { to: '/settlements', label: t.navSettlements, icon: Receipt, show: true },
   ].filter((item) => item.show);
@@ -36,11 +36,12 @@ export const MobileBottomNav: React.FC = () => {
     { to: '/inventory', label: 'कच्चा माल स्टॉक', icon: Package, show: isProduction || isOwner },
     { to: '/inventory/purchases', label: 'सामग्री खरीद', icon: Truck, show: isOwner },
     { to: '/inventory/lpg', label: 'LPG सिलेंडर', icon: Boxes, show: isProduction || isOwner },
-    { to: '/production/cost-calculator', label: t.productionCostCalculatorHi || 'लागत कैलकुलेटर', icon: Calculator, show: isProduction || isOwner },
+    { to: '/stock', label: t.navStock, icon: Boxes, show: isProduction || isOwner },
+    { to: '/production/cost-calculator', label: 'रेसिपी और लागत कैलकुलेटर', icon: Calculator, show: isProduction || isOwner },
+    { to: '/products', label: 'उत्पाद व मूल्य', icon: Package, show: isOwner },
+    { to: '/inventory/items', label: 'कच्चा माल मास्टर', icon: Package, show: isOwner },
     { to: '/expenses', label: t.navExpenses, icon: Wallet, show: isOwner },
     { to: '/closing', label: t.navClosing, icon: CalendarCheck, show: isOwner },
-    { to: '/stock', label: t.navStock, icon: Boxes, show: isProduction || isOwner },
-    { to: '/products', label: t.navProducts, icon: Package, show: isOwner },
     { to: '/sellers', label: t.navSellers, icon: Users, show: isOwner },
     { to: '/reports', label: t.navReports, icon: BarChart3, show: isOwner },
     { to: '/audit', label: t.navAudit, icon: History, show: isOwner },

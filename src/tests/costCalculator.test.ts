@@ -321,6 +321,7 @@ describe('Production Quantity Scaling & Fixed Overheads', () => {
       other: 10,
     },
     is_default: true,
+    status: 'active',
     effective_from: '2026-01-01T00:00:00.000Z',
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',

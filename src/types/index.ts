@@ -27,6 +27,12 @@ export interface ProductWithPrice extends Product {
 
 export interface ProductionBatchWithItems extends ProductionBatch {
   items: (ProductionItem & { product?: Product })[];
+  recipe?: RecipeWithItems | Recipe;
+  costing_source?: string;
+  cost_per_saleable_piece?: number;
+  total_batch_cost?: number;
+  expected_yield_snapshot?: number;
+  recipe_version_snapshot?: number;
 }
 
 export interface SellerIssueWithDetails extends SellerIssue {
@@ -544,8 +550,10 @@ export interface Recipe {
   version_number: number;
   name: string;
   standard_output_pieces: number;
+  expected_yield_pieces?: number;
   default_overheads: AdditionalOverheads;
   notes?: string | null;
+  status: 'draft' | 'active' | 'archived';
   is_default: boolean;
   effective_from: string;
   created_by?: string;
@@ -585,6 +593,9 @@ export interface ProductionBatchIngredient {
   rate_unit: UnitType;
   calculated_cost: number;
   is_packaging: boolean;
+  expected_quantity?: number;
+  actual_quantity?: number;
+  variance_reason?: string | null;
   created_at?: string;
 }
 

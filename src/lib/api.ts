@@ -29,17 +29,72 @@ import {
   LpgCylinderReading,
   InventoryWastage,
   SupplierReturn,
-  ReorderItem,
   RawMaterialDashboardKPIs,
 } from '@/types';
 
-// Detect if running in mock/local mode
-export const useMockMode = !isSupabaseConfigured || import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true';
+// Detect if running in mock/local mode (Supabase unconfigured or running unit tests)
+export const useMockMode = !isSupabaseConfigured || import.meta.env.MODE === 'test';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function toSafeUuid(id: any): string | null {
   if (typeof id === 'string' && UUID_REGEX.test(id)) return id;
   return null;
+}
+
+export function isValidUuid(id?: string | null): boolean {
+  if (!id || typeof id !== 'string') return false;
+  return UUID_REGEX.test(id.trim());
+}
+
+export async function resolveSupabaseIngredientId(ingredientId: string): Promise<string> {
+  if (!ingredientId) return ingredientId;
+  if (isValidUuid(ingredientId)) return ingredientId;
+
+  // Resolve mock ID (e.g. 'ing-milk-01') or code (e.g. 'ING-MILK') to real Supabase UUID
+  if (isSupabaseConfigured && import.meta.env.MODE !== 'test') {
+    try {
+      const mockIng = mockStore.getIngredientById(ingredientId);
+      const code = mockIng?.code || ingredientId.toUpperCase();
+      const nameEn = mockIng?.name_en;
+
+      let query = (supabase as any).from('ingredients').select('id');
+      if (code && nameEn) {
+        query = query.or(`code.ilike.${code},name_en.ilike.${nameEn}`);
+      } else if (code) {
+        query = query.ilike('code', code);
+      }
+      const { data } = await query.limit(1);
+      if (data && data.length > 0 && data[0].id) {
+        return data[0].id;
+      }
+    } catch {}
+  }
+  return ingredientId;
+}
+
+export async function resolveSupabaseProductId(productId: string): Promise<string> {
+  if (!productId) return productId;
+  if (isValidUuid(productId)) return productId;
+
+  if (isSupabaseConfigured && import.meta.env.MODE !== 'test') {
+    try {
+      const mockProd = mockStore.getProducts().find((p) => p.id === productId);
+      const sku = mockProd?.sku || productId.toUpperCase();
+      const nameEn = mockProd?.name_en;
+
+      let query = (supabase as any).from('products').select('id');
+      if (sku && nameEn) {
+        query = query.or(`sku.ilike.${sku},name_en.ilike.${nameEn}`);
+      } else if (sku) {
+        query = query.ilike('sku', sku);
+      }
+      const { data } = await query.limit(1);
+      if (data && data.length > 0 && data[0].id) {
+        return data[0].id;
+      }
+    } catch {}
+  }
+  return productId;
 }
 
 // Current session simulation helper for mock mode
@@ -966,12 +1021,13 @@ export const api = {
       return mockStore.updateIngredientRate(ingredientId, newRate, unit, saveToMaster, userId);
     }
     try {
+      const resolvedIngredientId = await resolveSupabaseIngredientId(ingredientId);
       if (saveToMaster) {
         // Fetch existing ingredient to preserve rate_unit if unit is not passed
         const { data: existingIng } = await (supabase as any)
           .from('ingredients')
           .select('rate_unit, base_unit')
-          .eq('id', ingredientId)
+          .eq('id', resolvedIngredientId)
           .maybeSingle();
 
         const effectiveRateUnit = unit || existingIng?.rate_unit || existingIng?.base_unit || 'kg';
@@ -980,11 +1036,11 @@ export const api = {
         await (supabase as any)
           .from('ingredient_prices')
           .update({ effective_to: new Date().toISOString() })
-          .eq('ingredient_id', ingredientId)
+          .eq('ingredient_id', resolvedIngredientId)
           .is('effective_to', null);
 
         await (supabase as any).from('ingredient_prices').insert({
-          ingredient_id: ingredientId,
+          ingredient_id: resolvedIngredientId,
           rate: newRate,
           unit: effectiveRateUnit,
           effective_from: new Date().toISOString(),
@@ -998,7 +1054,7 @@ export const api = {
             rate_unit: effectiveRateUnit,
             updated_at: new Date().toISOString(),
           })
-          .eq('id', ingredientId)
+          .eq('id', resolvedIngredientId)
           .select()
           .single();
         if (error) {
@@ -1006,7 +1062,7 @@ export const api = {
         }
         return data;
       }
-      const { data } = await (supabase as any).from('ingredients').select('*').eq('id', ingredientId).single();
+      const { data } = await (supabase as any).from('ingredients').select('*').eq('id', resolvedIngredientId).single();
       return data || mockStore.getIngredientById(ingredientId)!;
     } catch (err) {
       return mockStore.updateIngredientRate(ingredientId, newRate, unit, saveToMaster, userId);
@@ -1017,81 +1073,87 @@ export const api = {
     if (useMockMode) {
       return mockStore.getRecipes();
     }
-    try {
-      const { data, error } = await (supabase as any)
-        .from('recipes')
-        .select(`
+    const { data, error } = await (supabase as any)
+      .from('recipes')
+      .select(`
+        *,
+        product:products(*),
+        items:recipe_items(
           *,
-          product:products(*),
-          items:recipe_items(
-            *,
-            ingredient:ingredients(*)
-          )
-        `)
-        .order('version_number', { ascending: false });
-      if (error || !data || data.length === 0) {
-        console.warn('Recipes table not found or empty in Supabase, fallback to mock:', error);
-        return mockStore.getRecipes();
-      }
-      return data;
-    } catch (err) {
-      console.warn('Failed to fetch recipes from Supabase, fallback to mock:', err);
-      return mockStore.getRecipes();
+          ingredient:ingredients(*)
+        )
+      `)
+      .order('version_number', { ascending: false });
+    if (error) {
+      throw new Error(error.message || 'Failed to fetch recipes from database');
     }
+    return (data || []).map((r: any) => {
+      const yieldQty = Number(r.expected_yield_pieces || r.standard_output_pieces || 100);
+      return {
+        ...r,
+        expected_yield_pieces: yieldQty,
+        standard_output_pieces: yieldQty,
+      };
+    });
   },
 
   async getRecipeForProduct(productId: string): Promise<RecipeWithItems | undefined> {
     if (useMockMode) {
       return mockStore.getRecipeForProduct(productId);
     }
-    try {
-      const { data, error } = await (supabase as any)
-        .from('recipes')
-        .select(`
+    const { data, error } = await (supabase as any)
+      .from('recipes')
+      .select(`
+        *,
+        product:products(*),
+        items:recipe_items(
           *,
-          product:products(*),
-          items:recipe_items(
-            *,
-            ingredient:ingredients(*)
-          )
-        `)
-        .eq('product_id', productId)
-        .eq('is_default', true)
-        .order('version_number', { ascending: false })
-        .maybeSingle();
-      if (error || !data) {
-        return mockStore.getRecipeForProduct(productId);
-      }
-      return data;
-    } catch (err) {
-      return mockStore.getRecipeForProduct(productId);
+          ingredient:ingredients(*)
+        )
+      `)
+      .eq('product_id', productId)
+      .or('status.eq.active,is_default.eq.true')
+      .order('version_number', { ascending: false })
+      .maybeSingle();
+    if (error) {
+      throw new Error(error.message || 'Failed to fetch active recipe from database');
     }
+    if (!data) return undefined;
+    const yieldQty = Number(data.expected_yield_pieces || data.standard_output_pieces || 100);
+    return {
+      ...data,
+      expected_yield_pieces: yieldQty,
+      standard_output_pieces: yieldQty,
+    };
   },
 
   async getRecipeHistory(productId: string): Promise<RecipeWithItems[]> {
     if (useMockMode) {
       return mockStore.getRecipeHistory(productId);
     }
-    try {
-      const { data, error } = await (supabase as any)
-        .from('recipes')
-        .select(`
+    const { data, error } = await (supabase as any)
+      .from('recipes')
+      .select(`
+        *,
+        product:products(*),
+        items:recipe_items(
           *,
-          product:products(*),
-          items:recipe_items(
-            *,
-            ingredient:ingredients(*)
-          )
-        `)
-        .eq('product_id', productId)
-        .order('version_number', { ascending: false });
-      if (error || !data || data.length === 0) {
-        return mockStore.getRecipeHistory(productId);
-      }
-      return data;
-    } catch (err) {
-      return mockStore.getRecipeHistory(productId);
+          ingredient:ingredients(*)
+        )
+      `)
+      .eq('product_id', productId)
+      .order('version_number', { ascending: false });
+    if (error) {
+      throw new Error(error.message || 'Failed to fetch recipe history from database');
     }
+    return (data || []).map((r: any) => {
+      const yieldQty = Number(r.expected_yield_pieces || r.standard_output_pieces || 100);
+      return {
+        ...r,
+        expected_yield_pieces: yieldQty,
+        standard_output_pieces: yieldQty,
+      };
+    });
   },
 
   async saveRecipe(
@@ -1099,8 +1161,10 @@ export const api = {
       product_id: string;
       name?: string;
       standard_output_pieces: number;
+      expected_yield_pieces?: number;
       default_overheads: AdditionalOverheads;
       notes?: string;
+      status?: 'draft' | 'active' | 'archived';
       items: {
         ingredient_id: string;
         quantity: number;
@@ -1115,72 +1179,122 @@ export const api = {
       return mockStore.saveRecipe(data, userId);
     }
 
-    try {
-      // Get current version number
-      const { data: existing } = await (supabase as any)
-        .from('recipes')
-        .select('version_number')
-        .eq('product_id', data.product_id)
-        .order('version_number', { ascending: false })
-        .limit(1);
+    const resolvedProductId = await resolveSupabaseProductId(data.product_id);
 
-      const newVersion = (existing?.[0]?.version_number || 0) + 1;
+    // Get current version number
+    const { data: existing } = await (supabase as any)
+      .from('recipes')
+      .select('version_number')
+      .eq('product_id', resolvedProductId)
+      .order('version_number', { ascending: false })
+      .limit(1);
 
-      // Mark previous defaults as false
+    const newVersion = (existing?.[0]?.version_number || 0) + 1;
+    const isActivating = data.status === 'active' || data.status === undefined;
+
+    if (isActivating) {
       await (supabase as any)
         .from('recipes')
-        .update({ is_default: false })
-        .eq('product_id', data.product_id);
+        .update({ status: 'archived', is_default: false })
+        .eq('product_id', resolvedProductId);
+    }
 
-      const { data: newRecipe, error: recError } = await (supabase as any)
+    const stdYield = Math.max(1, Number(data.standard_output_pieces || data.expected_yield_pieces || 100));
+
+    const recipeInsertPayload: Record<string, any> = {
+      product_id: resolvedProductId,
+      version_number: newVersion,
+      name: data.name || `Standard Recipe v${newVersion}`,
+      standard_output_pieces: stdYield,
+      default_overheads: data.default_overheads,
+      notes: data.notes || null,
+      status: data.status || 'active',
+      is_default: isActivating,
+      created_by: userId,
+    };
+
+    let { data: newRecipe, error: recError } = await (supabase as any)
+      .from('recipes')
+      .insert(recipeInsertPayload)
+      .select()
+      .single();
+
+    // If status column is missing in older remote schema, retry without status column
+    if (recError && recError.message?.includes('status')) {
+      delete recipeInsertPayload.status;
+      const retry = await (supabase as any)
         .from('recipes')
-        .insert({
-          product_id: data.product_id,
-          version_number: newVersion,
-          name: data.name || `Standard Recipe v${newVersion}`,
-          standard_output_pieces: data.standard_output_pieces || 100,
-          default_overheads: data.default_overheads,
-          notes: data.notes || null,
-          is_default: true,
-          created_by: userId,
-        })
+        .insert(recipeInsertPayload)
         .select()
         .single();
-      if (recError) {
-        console.warn('Supabase recipes insert failed, fallback to mockStore:', recError);
-        return mockStore.saveRecipe(data, userId);
-      }
+      newRecipe = retry.data;
+      recError = retry.error;
+    }
 
-      // Insert recipe items
-      const itemsToInsert = data.items.map((it, idx) => ({
+    if (recError) {
+      throw new Error(recError.message || 'Failed to save recipe in Supabase');
+    }
+
+    // Insert recipe items with resolved ingredient UUIDs
+    const itemsToInsert = await Promise.all(
+      data.items.map(async (it, idx) => ({
         recipe_id: newRecipe.id,
-        ingredient_id: it.ingredient_id,
+        ingredient_id: await resolveSupabaseIngredientId(it.ingredient_id),
         quantity: it.quantity,
         unit: it.unit,
         sort_order: idx + 1,
-      }));
+      }))
+    );
 
-      const { error: itemsError } = await (supabase as any)
-        .from('recipe_items')
-        .insert(itemsToInsert);
-      if (itemsError) {
-        console.warn('Supabase recipe_items insert failed, fallback to mockStore:', itemsError);
-        return mockStore.saveRecipe(data, userId);
-      }
+    const { error: itemsError } = await (supabase as any)
+      .from('recipe_items')
+      .insert(itemsToInsert);
 
-      // Optionally update rates WITHOUT modifying rate_unit
-      for (const it of data.items) {
-        if (it.save_rate_to_master && typeof it.rate === 'number' && it.rate > 0) {
-          await this.updateIngredientRate(it.ingredient_id, it.rate, undefined, true, userId);
-        }
-      }
-
-      const freshRecipe = await this.getRecipeForProduct(data.product_id);
-      return freshRecipe || mockStore.saveRecipe(data, userId);
-    } catch (err) {
-      console.warn('Failed to save recipe in Supabase, using mock fallback:', err);
-      return mockStore.saveRecipe(data, userId);
+    if (itemsError) {
+      throw new Error(itemsError.message || 'Failed to insert recipe items');
     }
+
+    // Optionally update rates WITHOUT modifying rate_unit
+    for (const it of data.items) {
+      if (it.save_rate_to_master && typeof it.rate === 'number' && it.rate > 0) {
+        const resIngId = await resolveSupabaseIngredientId(it.ingredient_id);
+        await this.updateIngredientRate(resIngId, it.rate, undefined, true, userId);
+      }
+    }
+
+    const freshRecipe = await this.getRecipeForProduct(resolvedProductId);
+    if (!freshRecipe) {
+      throw new Error('Failed to retrieve newly saved recipe from Supabase');
+    }
+    return freshRecipe;
+  },
+
+  async activateRecipeVersion(recipeId: string, userId?: string): Promise<{ success: boolean; message: string }> {
+    if (useMockMode) {
+      return mockStore.activateRecipeVersion(recipeId, userId);
+    }
+    const { data, error } = await (supabase as any).rpc('activate_recipe_version_transaction', {
+      p_recipe_id: recipeId,
+      p_user_id: userId || null,
+    });
+    if (error) {
+      throw new Error(error.message || 'Failed to activate recipe version');
+    }
+    return data;
+  },
+
+  async deleteRecipeVersion(recipeId: string, userId?: string): Promise<{ success: boolean; archived?: boolean; deleted?: boolean; message: string }> {
+    if (useMockMode) {
+      return mockStore.deleteRecipeVersion(recipeId, userId);
+    }
+    const { data, error } = await (supabase as any).rpc('delete_recipe_version_transaction', {
+      p_recipe_id: recipeId,
+      p_user_id: userId || null,
+    });
+    if (error) {
+      throw new Error(error.message || 'Failed to delete recipe version');
+    }
+    return data;
   },
 
   async createProductionCostingBatch(
@@ -2782,14 +2896,27 @@ export const api = {
     if (useMockMode) {
       return mockStore.getIngredients(includeInactive);
     }
-    // Attempt live view or table
     try {
       let query = (supabase as any).from('v_raw_material_stock').select('*').order('name_hi');
       if (!includeInactive) {
         query = query.eq('is_active', true);
       }
       const { data, error } = await query;
-      if (!error && data) return data;
+      if (!error && data && data.length > 0) return data;
+
+      // Fallback: query ingredients table directly
+      let rawQuery = (supabase as any).from('ingredients').select('*').order('name_hi');
+      if (!includeInactive) {
+        rawQuery = rawQuery.eq('is_active', true);
+      }
+      const { data: rawData, error: rawError } = await rawQuery;
+      if (!rawError && rawData && rawData.length > 0) {
+        return rawData.map((ing: any) => ({
+          ...ing,
+          current_stock: Number(ing.current_stock) || 0,
+          current_rate: Number(ing.current_rate) || 0,
+        }));
+      }
     } catch {}
     return mockStore.getIngredients(includeInactive);
   },
@@ -2799,8 +2926,12 @@ export const api = {
       return mockStore.getIngredientById(id);
     }
     try {
-      const { data, error } = await (supabase as any).from('v_raw_material_stock').select('*').eq('id', id).maybeSingle();
+      const resolvedId = await resolveSupabaseIngredientId(id);
+      const { data, error } = await (supabase as any).from('v_raw_material_stock').select('*').eq('id', resolvedId).maybeSingle();
       if (!error && data) return data;
+
+      const { data: rawData, error: rawError } = await (supabase as any).from('ingredients').select('*').eq('id', resolvedId).maybeSingle();
+      if (!rawError && rawData) return rawData;
     } catch {}
     return mockStore.getIngredientById(id);
   },
@@ -2849,15 +2980,20 @@ export const api = {
     return mockStore.reactivateIngredient(id, userId);
   },
 
-  async deleteIngredient(id: string, reason: string, userId: string): Promise<boolean> {
+  async deleteIngredient(id: string, reason?: string, userId?: string): Promise<{ success: boolean; deactivated?: boolean; deleted?: boolean; message: string }> {
     if (useMockMode) {
-      return mockStore.deleteIngredient(id, reason, userId);
+      const deleted = mockStore.deleteIngredient(id, reason, userId);
+      return { success: true, deleted, message: 'सामग्री स्थायी रूप से हटा दी गई' };
     }
-    try {
-      const { error } = await (supabase as any).from('ingredients').delete().eq('id', id);
-      if (!error) return true;
-    } catch {}
-    return mockStore.deleteIngredient(id, reason, userId);
+    const { data, error } = await (supabase as any).rpc('delete_ingredient_transaction', {
+      p_ingredient_id: id,
+      p_reason: reason || null,
+      p_user_id: userId || null,
+    });
+    if (error) {
+      throw new Error(error.message || 'Failed to delete ingredient');
+    }
+    return data;
   },
 
   // --- Authoritative Raw Material Ledger Balances & KPIs ---
@@ -3111,6 +3247,30 @@ export const api = {
     return mockStore.getLpgReadings(cylinderId);
   },
 
+  async deleteLpgCylinder(id: string, userId: string = 'usr-owner-001'): Promise<{ success: boolean; cylinder_id?: string; message?: string }> {
+    if (useMockMode) {
+      return mockStore.deleteLpgCylinder(id, userId);
+    }
+    try {
+      const { data, error } = await (supabase as any).rpc('delete_lpg_cylinder_transaction', {
+        p_cylinder_id: id,
+        p_user_id: userId,
+      });
+      if (!error && data) return data;
+      if (error) {
+        // Fallback to direct delete if RPC is missing
+        const { error: delError } = await (supabase as any).from('lpg_cylinders').delete().eq('id', id);
+        if (delError) throw delError;
+        return { success: true, cylinder_id: id };
+      }
+    } catch (err) {
+      if (isSupabaseConfigured && import.meta.env.MODE !== 'test') {
+        throw err;
+      }
+    }
+    return mockStore.deleteLpgCylinder(id, userId);
+  },
+
   // --- Inventory Wastage & Damage ---
   async getInventoryWastages(): Promise<InventoryWastage[]> {
     if (useMockMode) {
@@ -3174,26 +3334,97 @@ export const api = {
     return mockStore.createSupplierReturn(data, userId);
   },
 
-  // --- Reorder Shopping List ---
-  async getReorderList(): Promise<ReorderItem[]> {
+  // --- Raw Material Stock Correction ---
+  async correctRawMaterialStock(params: {
+    ingredientId: string;
+    newQuantity: number;
+    reason: string;
+    userId?: string;
+  }): Promise<{ success: boolean; difference: number; message: string }> {
     if (useMockMode) {
-      return mockStore.getReorderList();
+      return mockStore.correctRawMaterialStock(params);
     }
-    return mockStore.getReorderList();
+    const { data, error } = await (supabase as any).rpc('correct_raw_material_stock_transaction', {
+      p_ingredient_id: params.ingredientId,
+      p_new_quantity: params.newQuantity,
+      p_reason: params.reason,
+      p_user_id: params.userId || null,
+    });
+    if (error) {
+      throw new Error(error.message || 'Failed to correct raw material stock');
+    }
+    return data;
   },
 
-  async updateReorderItemStatus(
-    ingredientId: string,
-    status: 'needed' | 'ordered' | 'received',
-    notes?: string
-  ): Promise<boolean> {
+  // --- Atomic Recipe-Based Production Completion ---
+  async completeProductionWithRecipeTransaction(params: {
+    productionDate: string;
+    productId: string;
+    producedQuantity: number;
+    damagedQuantity?: number;
+    recipeId?: string;
+    actualIngredients?: { ingredient_id: string; actual_quantity: number; unit: UnitType; reason?: string }[];
+    notes?: string;
+    lpgCost?: number;
+    overheadCosts?: AdditionalOverheads;
+    idempotencyKey?: string;
+    userId?: string;
+  }): Promise<{
+    success: boolean;
+    idempotent?: boolean;
+    batch_id: string;
+    batch_number: string;
+    saleable_quantity: number;
+    total_ingredient_cost: number;
+    cost_per_piece: number;
+    message: string;
+  }> {
     if (useMockMode) {
-      return mockStore.updateReorderItemStatus(ingredientId, status, notes);
+      return mockStore.completeProductionWithRecipeTransaction(params);
     }
-    return mockStore.updateReorderItemStatus(ingredientId, status, notes);
+
+    const resolvedProductId = await resolveSupabaseProductId(params.productId);
+    let resolvedRecipeId = params.recipeId;
+    if (resolvedRecipeId && !isValidUuid(resolvedRecipeId)) {
+      const { data: dbRec } = await (supabase as any)
+        .from('recipes')
+        .select('id')
+        .eq('product_id', resolvedProductId)
+        .or('status.eq.active,is_default.eq.true')
+        .limit(1);
+      resolvedRecipeId = dbRec?.[0]?.id || null;
+    }
+
+    let resolvedActualIngredients = params.actualIngredients;
+    if (resolvedActualIngredients && resolvedActualIngredients.length > 0) {
+      resolvedActualIngredients = await Promise.all(
+        resolvedActualIngredients.map(async (item) => ({
+          ...item,
+          ingredient_id: await resolveSupabaseIngredientId(item.ingredient_id),
+        }))
+      );
+    }
+
+    const { data, error } = await (supabase as any).rpc('complete_production_with_recipe_transaction', {
+      p_production_date: params.productionDate,
+      p_product_id: resolvedProductId,
+      p_produced_quantity: params.producedQuantity,
+      p_damaged_quantity: params.damagedQuantity || 0,
+      p_recipe_id: resolvedRecipeId,
+      p_actual_ingredients: resolvedActualIngredients && resolvedActualIngredients.length > 0 ? resolvedActualIngredients : null,
+      p_notes: params.notes || '',
+      p_lpg_cost: params.lpgCost || 0.0,
+      p_overhead_costs: params.overheadCosts || {},
+      p_idempotency_key: params.idempotencyKey || null,
+      p_user_id: params.userId || null,
+    });
+    if (error) {
+      throw new Error(error.message || 'Failed to complete production batch');
+    }
+    return data;
   },
 
-  // --- Atomic Production Completion with Raw Materials ---
+  // Backward compatibility alias for completeProductionWithRawMaterials
   async completeProductionWithRawMaterials(
     batchId: string,
     rawMaterials: {
@@ -3209,19 +3440,17 @@ export const api = {
     if (useMockMode) {
       return mockStore.completeProductionWithRawMaterials(batchId, rawMaterials, allowEmergencyOverride, overrideReason, userId);
     }
-    try {
-      const { data, error } = await (supabase as any).rpc('complete_production_with_raw_materials_transaction', {
-        p_batch_id: batchId,
-        p_raw_materials: rawMaterials,
-        p_allow_emergency_override: allowEmergencyOverride,
-        p_override_reason: overrideReason || null,
-        p_user_id: userId,
-      });
-      if (!error && data) {
-        const batches = await this.getProductionBatches();
-        return batches.find((b) => b.id === batchId) || mockStore.completeProductionWithRawMaterials(batchId, rawMaterials, allowEmergencyOverride, overrideReason, userId);
-      }
-    } catch {}
-    return mockStore.completeProductionWithRawMaterials(batchId, rawMaterials, allowEmergencyOverride, overrideReason, userId);
+    const { error } = await (supabase as any).rpc('complete_production_with_raw_materials_transaction', {
+      p_batch_id: batchId,
+      p_raw_materials: rawMaterials,
+      p_allow_emergency_override: allowEmergencyOverride,
+      p_override_reason: overrideReason || null,
+      p_user_id: userId,
+    });
+    if (error) {
+      throw new Error(error.message || 'Failed to complete production batch');
+    }
+    const batches = await this.getProductionBatches();
+    return batches.find((b) => b.id === batchId)!;
   },
 };

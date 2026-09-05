@@ -28,7 +28,6 @@ import { MaterialPurchasesPage } from './pages/inventory/MaterialPurchasesPage';
 import { AddMaterialPurchasePage } from './pages/inventory/AddMaterialPurchasePage';
 import { PhysicalStockCheckPage } from './pages/inventory/PhysicalStockCheckPage';
 import { LpgCylinderPage } from './pages/inventory/LpgCylinderPage';
-import { ShoppingListPage } from './pages/inventory/ShoppingListPage';
 import { WastagePage } from './pages/inventory/WastagePage';
 
 const queryClient = new QueryClient({
@@ -86,14 +85,15 @@ export function App() {
                   <Route index element={<DashboardPage />} />
                   <Route path="production" element={<ProductionPage />} />
                   <Route path="production/cost-calculator" element={<ProductionCostCalculatorPage />} />
+                  <Route path="master/recipes" element={<ProductionCostCalculatorPage />} />
                   <Route path="inventory" element={<InventoryDashboardPage />} />
                   <Route path="inventory/items" element={<InventoryItemsPage />} />
                   <Route path="inventory/items/:id" element={<IngredientDetailPage />} />
                   <Route path="inventory/purchases" element={<MaterialPurchasesPage />} />
                   <Route path="inventory/purchases/new" element={<AddMaterialPurchasePage />} />
+                  <Route path="inventory/check" element={<PhysicalStockCheckPage />} />
                   <Route path="inventory/stock-check" element={<PhysicalStockCheckPage />} />
                   <Route path="inventory/lpg" element={<LpgCylinderPage />} />
-                  <Route path="inventory/shopping-list" element={<ShoppingListPage />} />
                   <Route path="inventory/wastage" element={<WastagePage />} />
                   <Route path="issues" element={<StockIssuesPage />} />
                   <Route path="settlements" element={<SettlementsPage />} />

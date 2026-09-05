@@ -492,6 +492,7 @@ const DEFAULT_STATE: LocalStoreState = {
       version_number: 1,
       name: '₹10 Sada Kulfi Standard Recipe',
       standard_output_pieces: 100,
+      expected_yield_pieces: 100,
       default_overheads: {
         electricity: 30,
         generator_fuel: 0,
@@ -503,6 +504,7 @@ const DEFAULT_STATE: LocalStoreState = {
         other: 10,
       },
       notes: 'Classic standard stick kulfi with pure milk and cardamom',
+      status: 'active',
       is_default: true,
       effective_from: '2026-01-01T00:00:00.000Z',
       created_by: 'usr-owner-001',
@@ -515,6 +517,7 @@ const DEFAULT_STATE: LocalStoreState = {
       version_number: 1,
       name: '₹20 Rabri Kulfi Standard Recipe',
       standard_output_pieces: 100,
+      expected_yield_pieces: 100,
       default_overheads: {
         electricity: 50,
         generator_fuel: 0,
@@ -526,6 +529,7 @@ const DEFAULT_STATE: LocalStoreState = {
         other: 20,
       },
       notes: 'Rich rabri kulfi with crushed almonds and pistachios',
+      status: 'active',
       is_default: true,
       effective_from: '2026-01-01T00:00:00.000Z',
       created_by: 'usr-owner-001',
@@ -538,6 +542,7 @@ const DEFAULT_STATE: LocalStoreState = {
       version_number: 1,
       name: '₹40 Premium Kulfi Standard Recipe',
       standard_output_pieces: 100,
+      expected_yield_pieces: 100,
       default_overheads: {
         electricity: 70,
         generator_fuel: 0,
@@ -549,6 +554,7 @@ const DEFAULT_STATE: LocalStoreState = {
         other: 30,
       },
       notes: 'Royal saffron-infused kulfi loaded with cashews, pistachios and almonds',
+      status: 'active',
       is_default: true,
       effective_from: '2026-01-01T00:00:00.000Z',
       created_by: 'usr-owner-001',
@@ -2938,6 +2944,40 @@ class MockStore {
     return filtered.sort((a, b) => new Date(b.reading_date).getTime() - new Date(a.reading_date).getTime());
   }
 
+  public deleteLpgCylinder(cylinderId: string, userId: string = 'usr-owner-001'): { success: boolean; cylinder_id: string; message: string } {
+    const list = this.state.lpg_cylinders || [];
+    const index = list.findIndex((c) => c.id === cylinderId);
+    if (index === -1) {
+      throw new Error(`LPG Cylinder with ID ${cylinderId} not found`);
+    }
+
+    const [deletedCyl] = list.splice(index, 1);
+
+    // Also remove associated readings
+    if (this.state.lpg_cylinder_readings) {
+      this.state.lpg_cylinder_readings = this.state.lpg_cylinder_readings.filter(
+        (r) => r.cylinder_id !== cylinderId
+      );
+    }
+
+    this.logAudit(
+      'lpg_cylinders',
+      cylinderId,
+      'DELETE_LPG_CYLINDER',
+      deletedCyl,
+      null,
+      `Deleted LPG cylinder ${deletedCyl.cylinder_code}`,
+      userId
+    );
+    this.saveState();
+
+    return {
+      success: true,
+      cylinder_id: cylinderId,
+      message: `LPG cylinder ${deletedCyl.cylinder_code} deleted successfully`,
+    };
+  }
+
   // --- Inventory Wastage & Damage ---
   public getInventoryWastages(): InventoryWastage[] {
     const list = this.state.inventory_wastage || [];
@@ -3406,8 +3446,10 @@ class MockStore {
       product_id: string;
       name?: string;
       standard_output_pieces: number;
+      expected_yield_pieces?: number;
       default_overheads: AdditionalOverheads;
       notes?: string;
+      status?: 'draft' | 'active' | 'archived';
       items: {
         ingredient_id: string;
         quantity: number;
@@ -3424,22 +3466,30 @@ class MockStore {
     const existingRecipes = this.state.recipes.filter((r) => r.product_id === data.product_id);
     const latestVersion = existingRecipes.sort((a, b) => b.version_number - a.version_number)[0];
     const newVersion = (latestVersion?.version_number || 0) + 1;
+    const isActivating = data.status === 'active' || data.status === undefined;
 
-    // Mark previous defaults as false
-    for (const r of existingRecipes) {
-      r.is_default = false;
+    if (isActivating) {
+      // Archive previous active recipe
+      for (const r of existingRecipes) {
+        if (r.status === 'active' || r.is_default) {
+          r.status = 'archived';
+          r.is_default = false;
+        }
+      }
     }
 
     const now = new Date().toISOString();
     const recipeId = `rec-${generateId().slice(0, 8)}`;
     const product = this.state.products.find((p) => p.id === data.product_id);
+    const stdYield = Math.max(1, data.expected_yield_pieces || data.standard_output_pieces || 100);
 
     const newRecipe: Recipe = {
       id: recipeId,
       product_id: data.product_id,
       version_number: newVersion,
       name: data.name || `${product?.name_hi || product?.name_en || 'कुल्फी'} Standard Recipe v${newVersion}`,
-      standard_output_pieces: Math.max(1, data.standard_output_pieces || 100),
+      standard_output_pieces: stdYield,
+      expected_yield_pieces: stdYield,
       default_overheads: data.default_overheads || {
         electricity: 0,
         generator_fuel: 0,
@@ -3451,7 +3501,8 @@ class MockStore {
         other: 0,
       },
       notes: data.notes || null,
-      is_default: true,
+      status: data.status || 'active',
+      is_default: isActivating,
       effective_from: now,
       created_by: userId,
       created_at: now,
@@ -3501,6 +3552,417 @@ class MockStore {
         ingredient: this.getIngredientById(it.ingredient_id),
       })),
       product,
+    };
+  }
+
+  public activateRecipeVersion(recipeId: string, userId: string = 'usr-owner-001'): { success: boolean; message: string } {
+    const recipe = (this.state.recipes || []).find((r) => r.id === recipeId);
+    if (!recipe) throw new Error('Recipe not found');
+
+    const yieldQty = recipe.expected_yield_pieces || recipe.standard_output_pieces || 0;
+    if (yieldQty <= 0) throw new Error('Cannot activate recipe with 0 expected yield');
+
+    const items = (this.state.recipe_items || []).filter((ri) => ri.recipe_id === recipeId);
+    if (items.length === 0) throw new Error('Cannot activate recipe with no ingredient items');
+
+    // Archive previous active recipe
+    for (const r of this.state.recipes || []) {
+      if (r.product_id === recipe.product_id && (r.status === 'active' || r.is_default)) {
+        r.status = 'archived';
+        r.is_default = false;
+        r.updated_at = new Date().toISOString();
+      }
+    }
+
+    recipe.status = 'active';
+    recipe.is_default = true;
+    recipe.updated_at = new Date().toISOString();
+
+    this.logAudit('recipes', recipeId, 'ACTIVATE_RECIPE_VERSION', null, recipe, 'Activated recipe version', userId);
+    this.saveState();
+    return { success: true, message: 'रेसिपी संस्करण सफलतापूर्वक सक्रिय (Active) किया गया' };
+  }
+
+  public deleteRecipeVersion(recipeId: string, userId: string = 'usr-owner-001'): { success: boolean; archived?: boolean; deleted?: boolean; message: string } {
+    const recipe = (this.state.recipes || []).find((r) => r.id === recipeId);
+    if (!recipe) throw new Error('Recipe not found');
+
+    // Check if referenced by any production batches
+    const isUsedInBatches = (this.state.production_batches || []).some((b: any) => b.recipe_id === recipeId);
+    if (isUsedInBatches) {
+      recipe.status = 'archived';
+      recipe.is_default = false;
+      recipe.updated_at = new Date().toISOString();
+      this.logAudit('recipes', recipeId, 'ARCHIVE_USED_RECIPE', null, recipe, 'Archived used recipe version', userId);
+      this.saveState();
+      return {
+        success: false,
+        archived: true,
+        message: 'यह रेसिपी उत्पादन इतिहास में प्रयुक्त है, इसलिए इसे हटाया नहीं जा सकता। इसे संग्रहीत (Archived) कर दिया गया है।',
+      };
+    }
+
+    if (recipe.status === 'active') {
+      throw new Error('सक्रिय रेसिपी (Active Recipe) को सीधे हटाया नहीं जा सकता। कृपया पहले अन्य संस्करण सक्रिय करें अथवा इसे संग्रहीत करें।');
+    }
+
+    // Delete unused draft/archived recipe
+    this.state.recipe_items = (this.state.recipe_items || []).filter((ri) => ri.recipe_id !== recipeId);
+    this.state.recipes = (this.state.recipes || []).filter((r) => r.id !== recipeId);
+    this.logAudit('recipes', recipeId, 'DELETE_UNUSED_RECIPE', recipe, null, 'Permanently deleted unused recipe version', userId);
+    this.saveState();
+
+    return {
+      success: true,
+      deleted: true,
+      message: 'रेसिपी संस्करण सफलतापूर्वक स्थायी रूप से हटाया गया',
+    };
+  }
+
+  public correctRawMaterialStock(params: {
+    ingredientId: string;
+    newQuantity: number;
+    reason: string;
+    userId?: string;
+  }): { success: boolean; difference: number; message: string } {
+    const ing = this.getIngredientById(params.ingredientId);
+    if (!ing) throw new Error('Ingredient not found');
+    if (!params.reason || params.reason.trim().length < 3) {
+      throw new Error('A valid correction reason is mandatory');
+    }
+
+    const currentStock = this.getAvailableRawMaterialStock(params.ingredientId);
+    const targetStock = Math.max(0, Number(params.newQuantity) || 0);
+    const diff = Number((targetStock - currentStock).toFixed(3));
+    const now = new Date().toISOString();
+    const userId = params.userId || 'usr-owner-001';
+
+    if (diff !== 0) {
+      const movement: RawMaterialMovement = {
+        id: `rmm-${generateId().slice(0, 8)}`,
+        ingredient_id: params.ingredientId,
+        movement_date: now,
+        source_location: diff < 0 ? (ing.storage_location || 'Main Store') : 'Physical Stock Count',
+        destination_location: diff < 0 ? 'Physical Stock Loss' : (ing.storage_location || 'Main Store'),
+        quantity: diff,
+        base_unit: ing.base_unit,
+        movement_type: 'physical_count_correction',
+        unit_cost_snapshot: ing.current_rate,
+        total_value_snapshot: Number((Math.abs(diff) * ing.current_rate).toFixed(2)),
+        reason: `Physical stock correction: ${currentStock} -> ${targetStock} ${ing.base_unit}. Reason: ${params.reason.trim()}`,
+        created_by: userId,
+        created_at: now,
+      };
+
+      if (!this.state.raw_material_movements) this.state.raw_material_movements = [];
+      this.state.raw_material_movements.push(movement);
+      this.logAudit(
+        'raw_material_movements',
+        movement.id,
+        'PHYSICAL_STOCK_CORRECTION',
+        { previous_quantity: currentStock },
+        { new_quantity: targetStock, difference: diff },
+        params.reason.trim(),
+        userId
+      );
+      this.saveState();
+    }
+
+    return {
+      success: true,
+      difference: diff,
+      message: 'भौतिक स्टॉक संशोधन सफलतापूर्वक दर्ज हुआ',
+    };
+  }
+
+  public completeProductionWithRecipeTransaction(params: {
+    productionDate: string;
+    productId: string;
+    producedQuantity: number;
+    damagedQuantity?: number;
+    recipeId?: string;
+    actualIngredients?: { ingredient_id: string; actual_quantity: number; unit: UnitType; reason?: string }[];
+    notes?: string;
+    lpgCost?: number;
+    overheadCosts?: AdditionalOverheads;
+    idempotencyKey?: string;
+    userId?: string;
+  }): {
+    success: boolean;
+    idempotent?: boolean;
+    batch_id: string;
+    batch_number: string;
+    saleable_quantity: number;
+    total_ingredient_cost: number;
+    cost_per_piece: number;
+    message: string;
+  } {
+    const userId = params.userId || 'usr-prod-001';
+    const damagedQty = Math.max(0, Number(params.damagedQuantity) || 0);
+    const producedQty = Math.max(0, Number(params.producedQuantity) || 0);
+
+    if (producedQty <= 0) {
+      throw new Error('Produced quantity must be greater than 0');
+    }
+    if (damagedQty > producedQty) {
+      throw new Error(`खराब मात्रा (${damagedQty} पीस) उत्पादित मात्रा (${producedQty} पीस) से अधिक नहीं हो सकती`);
+    }
+
+    // Idempotency check
+    if (params.idempotencyKey) {
+      const existing = (this.state.production_batches || []).find(
+        (b: any) => b.idempotency_key === params.idempotencyKey
+      );
+      if (existing) {
+        return {
+          success: true,
+          idempotent: true,
+          batch_id: existing.id,
+          batch_number: existing.batch_number,
+          saleable_quantity: existing.items?.reduce((s: number, it: any) => s + (it.saleable_quantity || 0), 0) || (producedQty - damagedQty),
+          total_ingredient_cost: existing.total_ingredient_cost || 0,
+          cost_per_piece: (existing as any).cost_per_saleable_piece || 0,
+          message: 'Production batch already completed (Idempotent replay)',
+        };
+      }
+    }
+
+    const product = this.state.products.find((p) => p.id === params.productId);
+    if (!product) throw new Error('Product not found');
+
+    // Find active or specified recipe
+    let recipe = params.recipeId
+      ? (this.state.recipes || []).find((r) => r.id === params.recipeId)
+      : (this.state.recipes || []).find((r) => r.product_id === params.productId && (r.status === 'active' || r.is_default));
+
+    if (!recipe) {
+      throw new Error(`No active recipe configured for product "${product.name_hi}" (${product.name_en})`);
+    }
+
+    const expectedYield = recipe.expected_yield_pieces || recipe.standard_output_pieces || 100;
+    if (expectedYield <= 0) {
+      throw new Error('Recipe yield must be greater than 0');
+    }
+
+    const recipeItems = (this.state.recipe_items || []).filter((ri) => ri.recipe_id === recipe!.id);
+    if (recipeItems.length === 0) {
+      throw new Error('Active recipe has no ingredient items configured');
+    }
+
+    // Pre-calculate requirements and check stock availability
+    const shortages: any[] = [];
+    const calculatedItems: any[] = [];
+    let totalIngredientCost = 0;
+    let hasActualOverride = false;
+
+    for (const rItem of recipeItems) {
+      const ing = this.getIngredientById(rItem.ingredient_id);
+      if (!ing) continue;
+
+      const stdRequired = Number(((rItem.quantity / expectedYield) * producedQty).toFixed(3));
+      let actualQty = stdRequired;
+      let varianceReason: string | undefined = undefined;
+
+      if (params.actualIngredients && params.actualIngredients.length > 0) {
+        const override = params.actualIngredients.find((a) => a.ingredient_id === rItem.ingredient_id);
+        if (override) {
+          actualQty = Math.max(0, Number(override.actual_quantity) || 0);
+          varianceReason = override.reason;
+          if (actualQty !== stdRequired) {
+            hasActualOverride = true;
+            if (!varianceReason || varianceReason.trim().length < 3) {
+              throw new Error(`A valid reason is mandatory when actual consumption of "${ing.name_hi}" differs from recipe standard.`);
+            }
+          }
+        }
+      }
+
+      let baseQty = actualQty;
+      if (rItem.unit !== ing.base_unit) {
+        if (rItem.unit === 'g' && ing.base_unit === 'kg') baseQty = actualQty / 1000;
+        else if (rItem.unit === 'kg' && ing.base_unit === 'g') baseQty = actualQty * 1000;
+        else if (rItem.unit === 'ml' && ing.base_unit === 'litre') baseQty = actualQty / 1000;
+        else if (rItem.unit === 'litre' && ing.base_unit === 'ml') baseQty = actualQty * 1000;
+      }
+      baseQty = Number(baseQty.toFixed(3));
+      const availStock = this.getAvailableRawMaterialStock(ing.id);
+
+      if (availStock < baseQty) {
+        shortages.push({
+          ingredient_id: ing.id,
+          ingredient_name_hi: ing.name_hi,
+          ingredient_name_en: ing.name_en,
+          required: baseQty,
+          available: availStock,
+          shortage: Number((baseQty - availStock).toFixed(3)),
+          unit: ing.base_unit,
+        });
+      }
+
+      let rateQty = actualQty;
+      const rateUnit = ing.rate_unit || ing.base_unit;
+      if (rItem.unit !== rateUnit) {
+        if (rItem.unit === 'g' && rateUnit === 'kg') rateQty = actualQty / 1000;
+        else if (rItem.unit === 'kg' && rateUnit === 'g') rateQty = actualQty * 1000;
+        else if (rItem.unit === 'ml' && rateUnit === 'litre') rateQty = actualQty / 1000;
+        else if (rItem.unit === 'litre' && rateUnit === 'ml') rateQty = actualQty * 1000;
+      }
+      const itemRate = Number(ing.current_rate) || 0;
+      const itemCost = Number((rateQty * itemRate).toFixed(2));
+      totalIngredientCost += itemCost;
+
+      calculatedItems.push({
+        ingredient_id: ing.id,
+        ingredient_name: `${ing.name_hi} (${ing.name_en})`,
+        expected_qty: stdRequired,
+        actual_qty: actualQty,
+        unit: rItem.unit,
+        base_qty: baseQty,
+        rate_snapshot: itemRate,
+        rate_unit: ing.rate_unit,
+        calculated_cost: itemCost,
+        is_packaging: ing.category === 'packaging',
+        variance_reason: varianceReason,
+        storage_location: ing.storage_location || 'Main Store',
+      });
+    }
+
+    if (shortages.length > 0) {
+      throw new Error(`Insufficient raw material stock for production. Shortages: ${JSON.stringify(shortages)}`);
+    }
+
+    const lpgCost = Math.max(0, Number(params.lpgCost) || 0);
+    const totalBatchCost = Number((totalIngredientCost + lpgCost).toFixed(2));
+    const costPerPiece = producedQty > 0 ? Number((totalBatchCost / producedQty).toFixed(2)) : 0;
+    const saleableQty = producedQty - damagedQty;
+
+    const dateStr = params.productionDate.replace(/-/g, '');
+    const seq = String((this.state.production_batches || []).filter((b) => b.production_date === params.productionDate).length + 1).padStart(3, '0');
+    const batchNumber = `BAT-${dateStr}-${seq}`;
+    const batchId = `batch-${generateId().slice(0, 8)}`;
+    const now = new Date().toISOString();
+
+    const newBatch: any = {
+      id: batchId,
+      batch_number: batchNumber,
+      production_date: params.productionDate,
+      status: 'completed',
+      total_ingredient_cost: totalIngredientCost,
+      recipe_id: recipe.id,
+      overhead_costs: params.overheadCosts || {},
+      total_batch_cost: totalBatchCost,
+      cost_per_saleable_piece: costPerPiece,
+      costing_source: hasActualOverride ? 'actual_override' : 'recipe_calculated',
+      idempotency_key: params.idempotencyKey || null,
+      expected_yield_snapshot: expectedYield,
+      recipe_version_snapshot: recipe.version_number,
+      lpg_cost: lpgCost,
+      notes: params.notes || null,
+      completed_at: now,
+      version_number: 1,
+      is_current_version: true,
+      created_by: userId,
+      created_at: now,
+      updated_at: now,
+      items: [
+        {
+          id: `pitem-${generateId().slice(0, 8)}`,
+          batch_id: batchId,
+          product_id: params.productId,
+          produced_quantity: producedQty,
+          damaged_quantity: damagedQty,
+          saleable_quantity: saleableQty,
+          allocated_ingredient_cost: totalIngredientCost,
+          unit_production_cost: costPerPiece,
+          notes: params.notes || null,
+          product,
+        },
+      ],
+    };
+
+    if (!this.state.production_batches) this.state.production_batches = [];
+    this.state.production_batches.push(newBatch);
+
+    // Insert batch ingredients & raw material consumption movements
+    if (!this.state.production_batch_ingredients) this.state.production_batch_ingredients = [];
+    if (!this.state.raw_material_movements) this.state.raw_material_movements = [];
+
+    for (const cItem of calculatedItems) {
+      this.state.production_batch_ingredients.push({
+        id: `pbi-${generateId().slice(0, 8)}`,
+        batch_id: batchId,
+        ingredient_id: cItem.ingredient_id,
+        ingredient_name: cItem.ingredient_name,
+        quantity_used: cItem.actual_qty,
+        unit: cItem.unit,
+        converted_base_quantity: cItem.base_qty,
+        rate_snapshot: cItem.rate_snapshot,
+        rate_unit: cItem.rate_unit,
+        calculated_cost: cItem.calculated_cost,
+        is_packaging: cItem.is_packaging,
+        expected_quantity: cItem.expected_qty,
+        actual_quantity: cItem.actual_qty,
+        variance_reason: cItem.variance_reason,
+        created_at: now,
+      });
+
+      this.state.raw_material_movements.push({
+        id: `rmm-${generateId().slice(0, 8)}`,
+        ingredient_id: cItem.ingredient_id,
+        movement_date: now,
+        source_location: cItem.storage_location,
+        destination_location: 'Production Floor',
+        quantity: -cItem.base_qty, // Negative deduction
+        base_unit: cItem.rate_unit,
+        movement_type: 'production_consumption',
+        reference_table: 'production_batches',
+        reference_id: batchId,
+        unit_cost_snapshot: cItem.rate_snapshot,
+        total_value_snapshot: cItem.calculated_cost,
+        reason: `Batch ${batchNumber} (${product.name_hi} ${producedQty} pcs)`,
+        created_by: userId,
+        created_at: now,
+      });
+    }
+
+    // Add finished kulfi to Main Freezer
+    if (saleableQty > 0) {
+      if (!this.state.stock_movements) this.state.stock_movements = [];
+      this.state.stock_movements.push({
+        id: `sm-${generateId().slice(0, 8)}`,
+        movement_date: now,
+        product_id: params.productId,
+        source_location_id: 'loc-prod-01',
+        destination_location_id: 'loc-freezer-01',
+        quantity: saleableQty,
+        movement_type: 'production_completed',
+        reference_table: 'production_batches',
+        reference_id: batchId,
+        notes: `Recipe Batch Completed: ${batchNumber} (${product.name_hi})`,
+        created_by: userId,
+        created_at: now,
+      });
+    }
+
+    this.logAudit(
+      'production_batches',
+      batchId,
+      'COMPLETE_RECIPE_PRODUCTION',
+      null,
+      newBatch,
+      'Production completed atomically with recipe ingredient deduction',
+      userId
+    );
+    this.saveState();
+
+    return {
+      success: true,
+      batch_id: batchId,
+      batch_number: batchNumber,
+      saleable_quantity: saleableQty,
+      total_ingredient_cost: totalIngredientCost,
+      cost_per_piece: costPerPiece,
+      message: 'उत्पादन बैच सफलतापूर्वक दर्ज हुआ, कच्चा माल घटाया गया एवं स्टॉक मुख्य फ्रीजर में स्थानांतरित हुआ',
     };
   }
 

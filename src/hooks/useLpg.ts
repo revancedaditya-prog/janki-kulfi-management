@@ -105,3 +105,19 @@ export function useConnectLpgCylinder() {
     },
   });
 }
+
+export function useDeleteLpgCylinder() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: (cylinderId: string) =>
+      api.deleteLpgCylinder(cylinderId, user?.id || 'usr-owner-001'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['lpg-cylinders'] });
+      queryClient.invalidateQueries({ queryKey: ['lpg-readings'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] });
+    },
+  });
+}
+

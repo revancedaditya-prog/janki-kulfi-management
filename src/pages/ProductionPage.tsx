@@ -1,19 +1,18 @@
-import React, { useState } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import React, { useState, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   useProductionBatches,
-  useCreateProductionBatch,
+  useCompleteProductionWithRecipeTransaction,
   useCancelProductionBatch,
-  useUpdateDraftProductionBatch,
-  useCorrectProductionBatch,
   useDeleteProductionBatch,
   useProductionRevisionHistory,
 } from '@/hooks/useProduction';
 import { useProducts, useSyncFreezerStock } from '@/hooks/useProducts';
 import { useDailyClosings } from '@/hooks/useDailyClosing';
+import { useRecipeForProduct } from '@/hooks/useProductionCosting';
+import { useIngredients, useRawMaterialBalances } from '@/hooks/useInventory';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
-import { useSync } from '@/context/SyncContext';
 import { Card } from '@/components/common/Card';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
@@ -29,19 +28,21 @@ import {
 } from '@/lib/formatters';
 import {
   Factory,
-  Calculator,
   Plus,
   CheckCircle,
   AlertCircle,
-  Edit3,
+  AlertTriangle,
   History,
   Lock,
-  ArrowRight,
   ShieldAlert,
   Trash2,
   RefreshCw,
+  ChevronDown,
+  ChevronUp,
+  Sparkles,
+  Layers,
 } from 'lucide-react';
-import { ProductionBatchWithItems } from '@/types';
+import { ProductionBatchWithItems, UnitType } from '@/types';
 import { CompleteBatchWithIngredientsModal } from '@/components/production/CompleteBatchWithIngredientsModal';
 
 export const ProductionPage: React.FC = () => {
@@ -49,14 +50,13 @@ export const ProductionPage: React.FC = () => {
   const { data: batches = [], isLoading } = useProductionBatches();
   const { data: products = [] } = useProducts();
   const { data: closings = [] } = useDailyClosings();
+  const { data: allIngredients = [] } = useIngredients();
+  const { data: rawMaterialBalances = {} } = useRawMaterialBalances();
   const { t, language } = useLanguage();
   const { isOwner } = useAuth();
-  const { isOnline, saveDraft } = useSync();
 
-  const createBatch = useCreateProductionBatch();
+  const completeWithRecipe = useCompleteProductionWithRecipeTransaction();
   const cancelBatch = useCancelProductionBatch();
-  const updateDraftBatch = useUpdateDraftProductionBatch();
-  const correctBatch = useCorrectProductionBatch();
   const deleteBatch = useDeleteProductionBatch();
   const syncFreezerStock = useSyncFreezerStock();
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -73,6 +73,7 @@ export const ProductionPage: React.FC = () => {
     }
   };
 
+  // Modals state
   const [isNewModalOpen, setIsNewModalOpen] = useState(searchParams.get('new') === 'true');
   const [batchToComplete, setBatchToComplete] = useState<ProductionBatchWithItems | null>(null);
   const [batchToCancel, setBatchToCancel] = useState<string | null>(null);
@@ -80,266 +81,235 @@ export const ProductionPage: React.FC = () => {
   const [deleteReason, setDeleteReason] = useState<string>('');
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // Edit Draft Modal State
-  const [editingDraftBatch, setEditingDraftBatch] = useState<ProductionBatchWithItems | null>(null);
-
-  // Correct Completed Batch Modal State
-  const [correctingBatch, setCorrectingBatch] = useState<ProductionBatchWithItems | null>(null);
-  const [correctionReason, setCorrectionReason] = useState<string>('');
-
-  // Revision History Modal State
+  // Revision History Modal
   const [historyBatchId, setHistoryBatchId] = useState<string | null>(null);
   const { data: revisionHistory = [], isLoading: isHistoryLoading } = useProductionRevisionHistory(
     historyBatchId || undefined
   );
 
-  // Form State for New / Edit / Correction
-  const [productionDate, setProductionDate] = useState(getTodayDateString());
-  const [totalIngredientCost, setTotalIngredientCost] = useState<string>('500');
-  const [notes, setNotes] = useState('');
-  const [itemsState, setItemsState] = useState<
-    Record<string, { produced: number; damaged: number; notes: string }>
+  // --- Simplified New Production Form State ---
+  const [prodDate, setProdDate] = useState(getTodayDateString());
+  const [selectedProductId, setSelectedProductId] = useState<string>('');
+  const [producedQuantity, setProducedQuantity] = useState<number>(100);
+  const [damagedQuantity, setDamagedQuantity] = useState<number>(0);
+  const [lpgCost, setLpgCost] = useState<string>('0');
+  const [notes, setNotes] = useState<string>('');
+  const [isActualUsageOpen, setIsActualUsageOpen] = useState(false);
+  const [actualIngredientOverrides, setActualIngredientOverrides] = useState<
+    Record<string, { actual_quantity: number; reason: string }>
   >({});
   const [formError, setFormError] = useState<string | null>(null);
 
-  const isDayClosed = (dateStr: string) =>
-    closings.find((c) => c.business_date === dateStr)?.status === 'closed';
+  // Auto-select first active product if not selected
+  const activeProducts = useMemo(() => products.filter((p) => p.is_active !== false), [products]);
 
-  // Initialize form with active products for New Batch
-  const handleOpenNewModal = () => {
-    const initial: Record<string, { produced: number; damaged: number; notes: string }> = {};
-    products.forEach((p) => {
-      initial[p.id] = { produced: 0, damaged: 0, notes: '' };
+  const currentProductId = selectedProductId || activeProducts[0]?.id || '';
+
+  // Fetch active recipe for selected product
+  const { data: activeRecipe, isLoading: isRecipeLoading } = useRecipeForProduct(currentProductId);
+
+  // Calculate live saleable pieces
+  const saleableQuantity = Math.max(0, (producedQuantity || 0) - (damagedQuantity || 0));
+
+  // Calculate standard required ingredients, available stock, shortages, and costing
+  const calculatedRequirements = useMemo(() => {
+    if (!activeRecipe || !activeRecipe.items || activeRecipe.items.length === 0) {
+      return {
+        items: [],
+        totalIngredientCost: 0,
+        costPerPiece: 0,
+        hasShortages: false,
+        shortageItems: [],
+        expectedYield: 100,
+      };
+    }
+
+    const expectedYield = activeRecipe.expected_yield_pieces || activeRecipe.standard_output_pieces || 100;
+    const ratio = (producedQuantity || 0) / (expectedYield > 0 ? expectedYield : 100);
+
+    let totalCost = 0;
+    const shortageList: any[] = [];
+
+    const items = activeRecipe.items.map((rItem) => {
+      const ing = allIngredients.find((i) => i.id === rItem.ingredient_id) || rItem.ingredient;
+      const stdRequired = Number((rItem.quantity * ratio).toFixed(3));
+      const override = actualIngredientOverrides[rItem.ingredient_id];
+      const actualQty = override ? override.actual_quantity : stdRequired;
+      const varianceReason = override ? override.reason : '';
+
+      const conversionFactor = ing?.conversion_factor || 1;
+      const baseQty = Number((actualQty * conversionFactor).toFixed(3));
+      const availStock = rawMaterialBalances[rItem.ingredient_id] ?? 0;
+      const isShortage = availStock < baseQty;
+      const shortageQty = isShortage ? Number((baseQty - availStock).toFixed(3)) : 0;
+
+      const rate = Number(ing?.current_rate) || 0;
+      const itemCost = Number((baseQty * rate).toFixed(2));
+      totalCost += itemCost;
+
+      const itemResult = {
+        ingredientId: rItem.ingredient_id,
+        name_hi: ing?.name_hi || 'सामग्री',
+        name_en: ing?.name_en || 'Ingredient',
+        recipeQty: rItem.quantity,
+        stdRequired,
+        actualQty,
+        unit: rItem.unit,
+        baseUnit: ing?.base_unit || rItem.unit,
+        baseQty,
+        availStock,
+        isShortage,
+        shortageQty,
+        rate,
+        rateUnit: ing?.rate_unit || rItem.unit,
+        itemCost,
+        varianceReason,
+      };
+
+      if (isShortage) {
+        shortageList.push(itemResult);
+      }
+
+      return itemResult;
     });
-    setItemsState(initial);
-    setProductionDate(getTodayDateString());
-    setTotalIngredientCost('500');
+
+    const lpgCostNum = parseFloat(lpgCost) || 0;
+    const totalBatchCost = totalCost + lpgCostNum;
+    const costPerPiece = (producedQuantity || 0) > 0 ? Number((totalBatchCost / producedQuantity).toFixed(2)) : 0;
+
+    return {
+      items,
+      totalIngredientCost: Number(totalCost.toFixed(2)),
+      totalBatchCost: Number(totalBatchCost.toFixed(2)),
+      costPerPiece,
+      hasShortages: shortageList.length > 0,
+      shortageItems: shortageList,
+      expectedYield,
+    };
+  }, [activeRecipe, producedQuantity, allIngredients, rawMaterialBalances, actualIngredientOverrides, lpgCost]);
+
+  // Open New Production Modal
+  const handleOpenNewModal = () => {
+    setProdDate(getTodayDateString());
+    if (activeProducts.length > 0) {
+      setSelectedProductId(activeProducts[0].id);
+    }
+    setProducedQuantity(100);
+    setDamagedQuantity(0);
+    setLpgCost('0');
     setNotes('');
+    setActualIngredientOverrides({});
+    setIsActualUsageOpen(false);
     setFormError(null);
     setIsNewModalOpen(true);
   };
 
-  // Open Edit Draft Modal
-  const handleOpenEditDraft = (batch: ProductionBatchWithItems) => {
-    const initial: Record<string, { produced: number; damaged: number; notes: string }> = {};
-    products.forEach((p) => {
-      const existing = batch.items.find((it) => it.product_id === p.id);
-      initial[p.id] = {
-        produced: existing ? existing.produced_quantity : 0,
-        damaged: existing ? existing.damaged_quantity : 0,
-        notes: existing?.notes || '',
-      };
-    });
-    setItemsState(initial);
-    setProductionDate(batch.production_date);
-    setTotalIngredientCost(String(batch.total_ingredient_cost));
-    setNotes(batch.notes || '');
-    setFormError(null);
-    setEditingDraftBatch(batch);
-  };
-
-  // Open Correct Completed Batch Modal
-  const handleOpenCorrectModal = (batch: ProductionBatchWithItems) => {
-    const initial: Record<string, { produced: number; damaged: number; notes: string }> = {};
-    products.forEach((p) => {
-      const existing = batch.items.find((it) => it.product_id === p.id);
-      initial[p.id] = {
-        produced: existing ? existing.produced_quantity : 0,
-        damaged: existing ? existing.damaged_quantity : 0,
-        notes: existing?.notes || '',
-      };
-    });
-    setItemsState(initial);
-    setProductionDate(batch.production_date);
-    setTotalIngredientCost(String(batch.total_ingredient_cost));
-    setNotes(batch.notes || '');
-    setCorrectionReason('');
-    setFormError(null);
-    setCorrectingBatch(batch);
-  };
-
-  const handleItemChange = (productId: string, field: 'produced' | 'damaged', value: number) => {
-    setItemsState((prev) => {
-      const current = prev[productId] || { produced: 0, damaged: 0, notes: '' };
+  const handleActualQtyChange = (ingredientId: string, actualQty: number, stdQty: number) => {
+    setActualIngredientOverrides((prev) => {
+      const current = prev[ingredientId] || { actual_quantity: stdQty, reason: '' };
       return {
         ...prev,
-        [productId]: {
+        [ingredientId]: {
           ...current,
-          [field]: Math.max(0, value),
+          actual_quantity: Math.max(0, actualQty),
         },
       };
     });
   };
 
-  // Calculate live total saleable pieces
-  const totalSaleable = products.reduce((sum, p) => {
-    const item = itemsState[p.id] || { produced: 0, damaged: 0 };
-    return sum + Math.max(0, item.produced - item.damaged);
-  }, 0);
-
-  // Submit New Batch
-  const handleCreateBatchSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFormError(null);
-
-    const costNum = parseFloat(totalIngredientCost) || 0;
-    const items = products
-      .map((p) => {
-        const item = itemsState[p.id] || { produced: 0, damaged: 0, notes: '' };
-        return {
-          product_id: p.id,
-          produced_quantity: item.produced,
-          damaged_quantity: item.damaged,
-          notes: item.notes,
-        };
-      })
-      .filter((it) => it.produced_quantity > 0);
-
-    if (items.length === 0) {
-      setFormError('कम से कम एक उत्पाद की उत्पादन मात्रा (Produced Quantity) दर्ज करें।');
-      return;
-    }
-
-    for (const it of items) {
-      if (it.damaged_quantity > it.produced_quantity) {
-        setFormError('खराब मात्रा (Damaged Quantity) उत्पादित मात्रा से अधिक नहीं हो सकती।');
-        return;
-      }
-    }
-
-    try {
-      if (!isOnline) {
-        await saveDraft('production_batch', {
-          production_date: productionDate,
-          total_ingredient_cost: costNum,
-          notes,
-          items,
-        });
-        alert('ऑफ़लाइन ड्राफ्ट सुरक्षित हो गया! इंटरनेट कनेक्ट होने पर यह सिंक हो जाएगा।');
-      } else {
-        await createBatch.mutateAsync({
-          productionDate,
-          totalIngredientCost: costNum,
-          notes,
-          items,
-        });
-      }
-      setIsNewModalOpen(false);
-      setSearchParams({});
-    } catch (err: any) {
-      setFormError(err.message || 'बैच बनाने में त्रुटि हुई');
-    }
+  const handleVarianceReasonChange = (ingredientId: string, reason: string, stdQty: number) => {
+    setActualIngredientOverrides((prev) => {
+      const current = prev[ingredientId] || { actual_quantity: stdQty, reason: '' };
+      return {
+        ...prev,
+        [ingredientId]: {
+          ...current,
+          reason,
+        },
+      };
+    });
   };
 
-  // Submit Edit Draft Batch
-  const handleUpdateDraftSubmit = async (e: React.FormEvent) => {
+  // Submit Simplified New Production Batch
+  const handleCompleteProductionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingDraftBatch) return;
     setFormError(null);
 
-    const costNum = parseFloat(totalIngredientCost) || 0;
-    const items = products
-      .map((p) => {
-        const item = itemsState[p.id] || { produced: 0, damaged: 0, notes: '' };
-        return {
-          product_id: p.id,
-          produced_quantity: item.produced,
-          damaged_quantity: item.damaged,
-          notes: item.notes,
-        };
-      })
-      .filter((it) => it.produced_quantity > 0);
-
-    if (items.length === 0) {
-      setFormError('कम से कम एक उत्पाद की उत्पादन मात्रा दर्ज करें।');
+    if (!currentProductId) {
+      setFormError('कृपया कुल्फी का प्रकार (Product) चुनें।');
       return;
     }
 
-    try {
-      await updateDraftBatch.mutateAsync({
-        batchId: editingDraftBatch.id,
-        productionDate,
-        totalIngredientCost: costNum,
-        notes,
-        items,
-      });
-      setEditingDraftBatch(null);
-    } catch (err: any) {
-      setFormError(err.message || 'ड्राफ्ट बैच अपडेट करने में त्रुटि हुई');
-    }
-  };
-
-  // Submit Correction for Completed Batch
-  const handleCorrectionSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!correctingBatch) return;
-    setFormError(null);
-
-    if (!correctionReason || correctionReason.trim().length < 5) {
-      setFormError('कृपया सुधार का वैध कारण (कम से कम 5 अक्षर) दर्ज करें।');
+    if (!producedQuantity || producedQuantity <= 0) {
+      setFormError('उत्पादित मात्रा (Produced Quantity) शून्य से अधिक होनी चाहिए।');
       return;
     }
 
-    if (isDayClosed(correctingBatch.production_date)) {
-      setFormError(
-        `दिन (${correctingBatch.production_date}) बंद है। सुधार से पहले दैनिक क्लोजिंग को पुनः खोलें।`
-      );
+    if (damagedQuantity < 0) {
+      setFormError('खराब मात्रा ऋणात्मक नहीं हो सकती।');
       return;
     }
 
-    const costNum = parseFloat(totalIngredientCost) || 0;
-    const items = products
-      .map((p) => {
-        const item = itemsState[p.id] || { produced: 0, damaged: 0, notes: '' };
-        return {
-          product_id: p.id,
-          produced_quantity: item.produced,
-          damaged_quantity: item.damaged,
-          notes: item.notes,
-        };
-      })
-      .filter((it) => it.produced_quantity > 0);
-
-    if (items.length === 0) {
-      setFormError('कम से कम एक उत्पाद की उत्पादन मात्रा दर्ज करें।');
+    if (damagedQuantity > producedQuantity) {
+      setFormError(`खराब मात्रा (${damagedQuantity}) उत्पादित मात्रा (${producedQuantity}) से अधिक नहीं हो सकती।`);
       return;
     }
 
-    // Client-side pre-validation: check freezer stock reduction
-    for (const it of items) {
-      const oldItem = correctingBatch.items.find((i) => i.product_id === it.product_id);
-      const oldSaleable = oldItem ? oldItem.saleable_quantity : 0;
-      const newSaleable = it.produced_quantity - (it.damaged_quantity || 0);
-      const netDiff = newSaleable - oldSaleable;
+    if (!activeRecipe) {
+      setFormError(`इस उत्पाद के लिए कोई सक्रिय रेसिपी (Active Recipe) सेट नहीं है। कृपया पहले मास्टर में रेसिपी सक्रिय करें।`);
+      return;
+    }
 
-      if (netDiff < 0) {
-        const prod = products.find((p) => p.id === it.product_id);
-        const avail = prod?.available_quantity || 0;
-        if (avail + netDiff < 0) {
-          setFormError(
-            `${language === 'hi' ? prod?.name_hi : prod?.name_en}: सुधार से फ्रीजर स्टॉक ऋणात्मक (${avail + netDiff}) हो जाएगा। उत्पादन कमी जारी किए गए स्टॉक से अधिक नहीं हो सकती।`
-          );
+    if (calculatedRequirements.hasShortages) {
+      const shortageNames = calculatedRequirements.shortageItems.map((i) => i.name_hi).join(', ');
+      setFormError(`कच्चा माल कम है! निम्नलिखित सामग्री का पर्याप्त स्टॉक नहीं है: ${shortageNames}`);
+      return;
+    }
+
+    // Validate reasons for any actual overrides
+    const actualOverridesPayload: { ingredient_id: string; actual_quantity: number; unit: UnitType; reason?: string }[] = [];
+    for (const item of calculatedRequirements.items) {
+      if (item.actualQty !== item.stdRequired) {
+        if (!item.varianceReason || item.varianceReason.trim().length < 3) {
+          setFormError(`सामग्री "${item.name_hi}" की वास्तविक खपत में अंतर के लिए स्पष्ट कारण अनिवार्य है।`);
           return;
         }
+        actualOverridesPayload.push({
+          ingredient_id: item.ingredientId,
+          actual_quantity: item.actualQty,
+          unit: item.unit,
+          reason: item.varianceReason.trim(),
+        });
       }
     }
 
     try {
-      await correctBatch.mutateAsync({
-        batchId: correctingBatch.id,
-        productionDate,
-        totalIngredientCost: costNum,
+      const idempotencyKey = crypto.randomUUID();
+      const lpgCostNum = parseFloat(lpgCost) || 0;
+
+      const res = await completeWithRecipe.mutateAsync({
+        productionDate: prodDate,
+        productId: currentProductId,
+        producedQuantity,
+        damagedQuantity,
+        recipeId: activeRecipe.id,
+        actualIngredients: actualOverridesPayload.length > 0 ? actualOverridesPayload : undefined,
         notes,
-        items,
-        reason: correctionReason,
+        lpgCost: lpgCostNum,
+        idempotencyKey,
       });
-      setCorrectingBatch(null);
+
+      setIsNewModalOpen(false);
+      setSearchParams({});
+      setSyncMessage(`✅ ${res.message || 'उत्पादन सफलतापूर्वक दर्ज हुआ!'}`);
+      setTimeout(() => setSyncMessage(null), 5000);
     } catch (err: any) {
-      setFormError(err.message || 'बैच सुधारने में त्रुटि हुई');
+      setFormError(err.message || 'उत्पादन बैच पूर्ण करने में त्रुटि हुई');
     }
   };
 
-
+  const isDayClosed = (dateStr: string) =>
+    closings.find((c) => c.business_date === dateStr)?.status === 'closed';
 
   const handleConfirmCancel = async () => {
     if (!batchToCancel) return;
@@ -376,7 +346,7 @@ export const ProductionPage: React.FC = () => {
             {t.productionBatches}
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            कारखाने में दैनिक कुल्फी निर्माण, बैच लागत व सुरक्षित संशोधन प्रबंधन
+            कारखाने में दैनिक कुल्फी निर्माण — सक्रिय रेसिपी से स्वचालित लागत व कच्चा माल कटौती
           </p>
         </div>
 
@@ -393,19 +363,11 @@ export const ProductionPage: React.FC = () => {
               : (language === 'hi' ? '🔄 स्टॉक सिंक करें' : '🔄 Sync Stock')}
           </Button>
 
-          <Link to="/production/cost-calculator">
-            <Button
-              variant="outline"
-              leftIcon={<Calculator className="w-5 h-5 text-maroon-800" />}
-              className="border-maroon-800 text-maroon-900 font-bold"
-            >
-              {language === 'hi' ? 'उत्पादन लागत कैलकुलेटर' : 'Cost Calculator'}
-            </Button>
-          </Link>
           <Button
             variant="primary"
             leftIcon={<Plus className="w-5 h-5" />}
             onClick={handleOpenNewModal}
+            className="shadow-md shadow-maroon-900/20"
           >
             {t.newBatch}
           </Button>
@@ -445,58 +407,55 @@ export const ProductionPage: React.FC = () => {
           {batches.map((batch) => {
             const totalDamaged = batch.items.reduce((s, it) => s + it.damaged_quantity, 0);
             const batchTotalSaleable = batch.items.reduce((s, it) => s + it.saleable_quantity, 0);
+            const totalProduced = batch.items.reduce((s, it) => s + it.produced_quantity, 0);
             const closed = isDayClosed(batch.production_date);
 
             return (
-              <Card key={batch.id} className="overflow-hidden border-cream-300">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-gray-100">
-                  <div className="flex items-center gap-2.5 flex-wrap">
+              <Card key={batch.id} className="space-y-4 border border-cream-300">
+                {/* Batch Top Header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-cream-200 pb-3">
+                  <div className="flex items-center gap-3">
                     <span className="font-mono font-bold text-base text-maroon-950">
                       {batch.batch_number}
                     </span>
-                    {batch.version_number && batch.version_number > 1 && (
-                      <Badge variant="warning">
-                        {t.version} {batch.version_number}
+                    <Badge variant={batch.status === 'completed' ? 'success' : batch.status === 'draft' ? 'warning' : 'danger'}>
+                      {batch.status === 'completed' ? (t.completed || 'पूर्ण') : batch.status === 'draft' ? (t.draft || 'ड्राफ्ट') : (t.cancel || 'रद्द')}
+                    </Badge>
+                    {batch.costing_source === 'recipe_calculated' && (
+                      <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-800 border-emerald-300">
+                        <Sparkles className="w-3 h-3 mr-1" />
+                        रेसिपी आधारित
                       </Badge>
                     )}
-                    <Badge variant={batch.status}>
-                      {batch.status === 'completed'
-                        ? t.completed
-                        : batch.status === 'draft'
-                        ? t.draft
-                        : batch.status === 'superseded'
-                        ? t.superseded
-                        : batch.status}
-                    </Badge>
-                    {batch.status === 'completed' && (
-                      <span className="text-[10px] font-bold text-emerald-900 bg-emerald-100/80 border border-emerald-300 px-2 py-0.5 rounded-lg flex items-center gap-1">
-                        <CheckCircle className="w-3 h-3 text-emerald-700" />
-                        मुख्य फ्रीजर में दर्ज
-                      </span>
+                    {batch.costing_source === 'actual_override' && (
+                      <Badge variant="outline" className="text-xs bg-blue-50 text-blue-800 border-blue-300">
+                        वास्तविक खपत संशोधित
+                      </Badge>
+                    )}
+                    {batch.costing_source === 'legacy_manual' && (
+                      <Badge variant="outline" className="text-xs bg-gray-50 text-gray-700 border-gray-300">
+                        मैनुअल (Legacy)
+                      </Badge>
                     )}
                     {closed && (
-                      <Badge variant="danger">
-                        <Lock className="w-3 h-3 mr-1 inline" />
-                        {language === 'hi' ? 'दिन बंद है' : 'Day Closed'}
+                      <Badge variant="danger" className="text-xs">
+                        <Lock className="w-3 h-3 mr-1" /> {t.closed || 'बंद दिन'}
                       </Badge>
                     )}
                   </div>
-                  <div className="flex items-center gap-4 text-xs font-semibold text-gray-600">
-                    <span>📅 {formatDate(batch.production_date)}</span>
-                    <span>
-                      💰 {t.totalIngredientCost}: {formatCurrency(batch.total_ingredient_cost)}
-                    </span>
+                  <div className="text-xs text-gray-500 font-medium">
+                    {formatDate(batch.production_date)}
                   </div>
                 </div>
 
-                {/* Items Breakdown */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 my-3">
+                {/* Items Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {batch.items.map((it) => (
                     <div
                       key={it.id}
-                      className="p-2.5 rounded-xl bg-cream-50/70 border border-cream-200 text-xs space-y-1"
+                      className="p-3 rounded-xl bg-cream-50/70 border border-cream-200 text-xs space-y-1.5"
                     >
-                      <span className="font-bold text-gray-900 block text-sm mb-0.5">
+                      <span className="font-bold text-gray-900 block text-sm">
                         {language === 'hi' ? it.product?.name_hi : it.product?.name_en}
                       </span>
                       <div className="flex justify-between text-gray-600">
@@ -518,9 +477,9 @@ export const ProductionPage: React.FC = () => {
                         </span>
                       </div>
                       <div className="flex justify-between text-gray-500 text-[10px] pt-0.5 font-mono">
-                        <span>आबंटित लागत:</span>
-                        <span>
-                          {formatCurrency(it.allocated_ingredient_cost || 0)} (₹{(it.unit_production_cost || 0).toFixed(2)}/pc)
+                        <span>लागत / पीस:</span>
+                        <span className="font-bold text-gray-800">
+                          ₹{(it.unit_production_cost || (batch.cost_per_saleable_piece ?? 0)).toFixed(2)}/pc
                         </span>
                       </div>
                     </div>
@@ -531,13 +490,16 @@ export const ProductionPage: React.FC = () => {
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-gray-100 bg-cream-50/30 -mx-4 -mb-4 px-4 py-3">
                   <div className="flex items-center gap-4 text-xs flex-wrap">
                     <span className="font-semibold text-gray-700">
-                      कुल बिक्री योग्य:{' '}
+                      बिक्री योग्य पीस:{' '}
                       <strong className="text-maroon-900 font-mono text-sm">
                         {formatQuantity(batchTotalSaleable)} {t.pieces}
                       </strong>
                     </span>
-                    <span className="text-gray-500 font-mono text-xs">
-                      लागत: <strong>{formatCurrency(batch.total_ingredient_cost)}</strong> (₹{(batch.total_ingredient_cost / (batchTotalSaleable || 1)).toFixed(2)}/pc)
+                    <span className="text-gray-600 font-mono text-xs">
+                      कुल लागत: <strong>{formatCurrency(batch.total_batch_cost || batch.total_ingredient_cost)}</strong>
+                    </span>
+                    <span className="text-emerald-800 font-mono text-xs font-bold">
+                      प्रति पीस: ₹{(batch.cost_per_saleable_piece ?? ((batch.total_ingredient_cost || 0) / (totalProduced || 1))).toFixed(2)}
                     </span>
                     {totalDamaged > 0 && (
                       <span className="text-rose-700 font-medium">
@@ -550,14 +512,6 @@ export const ProductionPage: React.FC = () => {
                     {/* Draft Actions */}
                     {batch.status === 'draft' && (
                       <>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          leftIcon={<Edit3 className="w-3.5 h-3.5" />}
-                          onClick={() => handleOpenEditDraft(batch)}
-                        >
-                          {t.editDraft}
-                        </Button>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -580,16 +534,6 @@ export const ProductionPage: React.FC = () => {
                     {/* Completed Actions */}
                     {batch.status === 'completed' && (
                       <>
-                        {isOwner && (
-                          <Button
-                            variant={closed ? 'outline' : 'secondary'}
-                            size="sm"
-                            leftIcon={closed ? <Lock className="w-3.5 h-3.5 text-rose-600" /> : <Edit3 className="w-3.5 h-3.5" />}
-                            onClick={() => handleOpenCorrectModal(batch)}
-                          >
-                            {t.correctRecord}
-                          </Button>
-                        )}
                         <Button
                           variant="ghost"
                           size="sm"
@@ -625,130 +569,304 @@ export const ProductionPage: React.FC = () => {
         </div>
       )}
 
-      {/* New Batch Modal */}
+      {/* ========================================================================= */}
+      {/* SIMPLIFIED NEW PRODUCTION BATCH MODAL (No Manual Total Cost Field)        */}
+      {/* ========================================================================= */}
       <Modal
         isOpen={isNewModalOpen}
         onClose={() => {
           setIsNewModalOpen(false);
           setSearchParams({});
         }}
-        title="नया दैनिक उत्पादन बैच (New Production Batch)"
-        subtitle="उत्पाद-वार तैयार पीस व कुल सामग्री लागत दर्ज करें — यह सीधे मुख्य फ्रीजर में दर्ज हो जाएगा।"
+        title="नया उत्पादन बैच दर्ज करें (New Production Batch)"
+        subtitle="उत्पाद व मात्रा चुनें — रेसिपी से स्वचालित लागत व कच्चा माल कटौती होगी"
         maxWidth="lg"
       >
-        <form onSubmit={handleCreateBatchSubmit} className="space-y-4">
+        <form onSubmit={handleCompleteProductionSubmit} className="space-y-4">
           {formError && (
-            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-600" />
-              <span>{formError}</span>
+            <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs font-semibold flex items-start gap-2.5">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 text-rose-600 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold">कृपया निम्नलिखित त्रुटि ठीक करें:</p>
+                <p>{formError}</p>
+              </div>
             </div>
           )}
 
+          {/* Form Top Row: Production Date & Product Selection */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input
               type="date"
               label={t.productionDate}
-              value={productionDate}
-              onChange={(e) => setProductionDate(e.target.value)}
+              value={prodDate}
+              onChange={(e) => setProdDate(e.target.value)}
+              required
+            />
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                कुल्फी का प्रकार (Kulfi Variety / Product) *
+              </label>
+              <select
+                value={currentProductId}
+                onChange={(e) => setSelectedProductId(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-white border border-cream-300 rounded-xl text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:border-maroon-800"
+                required
+              >
+                {activeProducts.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name_hi} ({p.name_en}) — दर: ₹{p.current_price}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Active Recipe Banner / Indicator */}
+          <div className="p-3.5 rounded-2xl bg-cream-100/80 border border-cream-300 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-maroon-800 text-white flex items-center justify-center font-bold text-sm shadow-sm">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider block">
+                  सक्रिय रेसिपी (Active Recipe Version)
+                </span>
+                <span className="text-sm font-bold text-maroon-950">
+                  {isRecipeLoading
+                    ? 'रेसिपी लोड हो रही है...'
+                    : activeRecipe
+                    ? `${activeRecipe.name} (v${activeRecipe.version_number})`
+                    : 'कोई सक्रिय रेसिपी नहीं'}
+                </span>
+              </div>
+            </div>
+            {activeRecipe && (
+              <div className="text-right">
+                <span className="text-[11px] text-gray-500 block">मानक उपज (Yield)</span>
+                <span className="text-sm font-black font-mono text-gray-900">
+                  {activeRecipe.expected_yield_pieces || activeRecipe.standard_output_pieces || 100} {t.pieces}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Quantities Row */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Input
+              type="number"
+              label={`${t.producedQty} (पीस) *`}
+              isPieceQuantity
+              value={producedQuantity}
+              onChange={(e) => setProducedQuantity(Math.max(1, parseInt(e.target.value, 10) || 0))}
+              min={1}
               required
             />
 
             <Input
               type="number"
-              step="any"
-              label={t.totalIngredientCost}
-              prefixSymbol="₹"
-              value={totalIngredientCost}
-              onChange={(e) => setTotalIngredientCost(e.target.value)}
-              helperText="दूध, मावा, चीनी, मेवे की कुल लागत (₹)"
-              required
+              label={`${t.damagedQty} (खराब पीस)`}
+              isPieceQuantity
+              value={damagedQuantity}
+              onChange={(e) => setDamagedQuantity(Math.max(0, parseInt(e.target.value, 10) || 0))}
               min={0}
             />
-          </div>
 
-          <div className="space-y-3 pt-2">
-            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
-              उत्पाद-वार उत्पादन विवरण (Pieces)
-            </h4>
-
-            <div className="space-y-3">
-              {products.map((prod) => {
-                const item = itemsState[prod.id] || { produced: 0, damaged: 0, notes: '' };
-                const saleable = Math.max(0, item.produced - item.damaged);
-                const costNum = parseFloat(totalIngredientCost) || 0;
-                const allocatedCost = totalSaleable > 0 ? (costNum * saleable) / totalSaleable : 0;
-                const unitCost = saleable > 0 ? allocatedCost / saleable : 0;
-
-                return (
-                  <div
-                    key={prod.id}
-                    className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 space-y-3"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="font-bold text-sm text-gray-900">
-                          {language === 'hi' ? prod.name_hi : prod.name_en}
-                        </span>
-                        <span className="text-xs text-gray-500 block">
-                          SKU: {prod.sku} | दर: {formatCurrency(prod.current_price)}
-                        </span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-xs font-semibold text-emerald-800 block">
-                          बिक्री योग्य: <strong className="font-mono text-base">{saleable}</strong> {t.pieces}
-                        </span>
-                        {saleable > 0 && costNum > 0 && (
-                          <span className="text-[10px] text-gray-500 font-mono block">
-                            लागत: {formatCurrency(allocatedCost)} (₹{unitCost.toFixed(2)}/pc)
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <Input
-                        type="number"
-                        label={t.producedQty}
-                        isPieceQuantity
-                        value={item.produced}
-                        onChange={(e) =>
-                          handleItemChange(prod.id, 'produced', parseInt(e.target.value, 10) || 0)
-                        }
-                      />
-                      <Input
-                        type="number"
-                        label={t.damagedQty}
-                        isPieceQuantity
-                        value={item.damaged}
-                        onChange={(e) =>
-                          handleItemChange(prod.id, 'damaged', parseInt(e.target.value, 10) || 0)
-                        }
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+            <div>
+              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                {t.saleableQty} (बिक्री योग्य)
+              </label>
+              <div className="px-3.5 py-2.5 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-950 font-mono font-bold text-base flex items-center justify-between">
+                <span>{formatQuantity(saleableQuantity)}</span>
+                <span className="text-xs font-sans font-semibold text-emerald-800">{t.pieces}</span>
+              </div>
             </div>
           </div>
 
-          <Input
-            label="अतिरिक्त टिप्पणी (Notes)"
-            placeholder="जैसे: सुबह की पहली शिफ्ट, विशेष मावा बैच..."
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-          />
-
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-gray-100 bg-cream-50 p-3 rounded-xl border border-cream-200">
-            <div>
-              <span className="text-xs text-gray-500 block">कुल तैयार पीस व लागत</span>
-              <span className="text-lg font-black text-maroon-900 font-mono">
-                {formatQuantity(totalSaleable)} {t.pieces}
+          {/* Read-Only Live Costing & Raw Material Requirement Preview */}
+          <div className="p-4 rounded-2xl bg-cream-50 border border-cream-200 space-y-3">
+            <div className="flex items-center justify-between border-b border-cream-200 pb-2.5">
+              <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider flex items-center gap-2">
+                <Layers className="w-4 h-4 text-maroon-800" />
+                स्वचालित सामग्री आवश्यकता व लागत पूर्वावलोकन (Live Preview)
+              </h4>
+              <span className="text-[11px] font-semibold text-gray-500">
+                {producedQuantity} पीस के आधार पर
               </span>
-              {totalSaleable > 0 && parseFloat(totalIngredientCost) > 0 && (
-                <span className="text-xs text-emerald-800 font-mono block">
-                  कुल लागत: {formatCurrency(parseFloat(totalIngredientCost) || 0)} (₹{((parseFloat(totalIngredientCost) || 0) / totalSaleable).toFixed(2)}/pc)
+            </div>
+
+            {/* Cost Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
+              <div className="p-2.5 bg-white rounded-xl border border-cream-200 shadow-sm">
+                <span className="text-[11px] text-gray-500 block">1 कुल्फी लागत</span>
+                <span className="text-base font-black font-mono text-emerald-900">
+                  ₹{calculatedRequirements.costPerPiece.toFixed(2)}
                 </span>
+              </div>
+              <div className="p-2.5 bg-white rounded-xl border border-cream-200 shadow-sm">
+                <span className="text-[11px] text-gray-500 block">अनुमानित सामग्री लागत</span>
+                <span className="text-base font-black font-mono text-maroon-900">
+                  {formatCurrency(calculatedRequirements.totalIngredientCost)}
+                </span>
+              </div>
+              <div className="p-2.5 bg-white rounded-xl border border-cream-200 shadow-sm">
+                <span className="text-[11px] text-gray-500 block">कुल उत्पादन लागत</span>
+                <span className="text-base font-black font-mono text-maroon-950">
+                  {formatCurrency(calculatedRequirements.totalBatchCost)}
+                </span>
+              </div>
+              <div className="p-2.5 bg-white rounded-xl border border-cream-200 shadow-sm">
+                <span className="text-[11px] text-gray-500 block">स्टॉक स्थिति</span>
+                <span className={`text-xs font-bold block mt-1 ${calculatedRequirements.hasShortages ? 'text-rose-700' : 'text-emerald-700'}`}>
+                  {calculatedRequirements.hasShortages ? '⚠️ सामग्री की कमी' : '✅ पर्याप्त स्टॉक'}
+                </span>
+              </div>
+            </div>
+
+            {/* Ingredients Table */}
+            <div className="space-y-2 pt-1">
+              <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                {calculatedRequirements.items.map((item) => (
+                  <div
+                    key={item.ingredientId}
+                    className={`flex items-center justify-between p-2 rounded-xl text-xs border ${
+                      item.isShortage ? 'bg-rose-50 border-rose-300' : 'bg-white border-cream-200'
+                    }`}
+                  >
+                    <div className="flex-1">
+                      <span className="font-bold text-gray-900 block">{item.name_hi}</span>
+                      <span className="text-[10px] text-gray-500">
+                        आवश्यक: <strong className="text-gray-800">{item.actualQty} {item.unit}</strong> | उपलब्ध: {item.availStock} {item.baseUnit}
+                      </span>
+                    </div>
+
+                    <div className="text-right flex items-center gap-3">
+                      {item.isShortage ? (
+                        <span className="text-xs font-bold text-rose-700 flex items-center gap-1">
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          कमी: {item.shortageQty} {item.baseUnit}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-mono text-emerald-800 font-bold">
+                          {formatCurrency(item.itemCost)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Shortage Warning Box */}
+            {calculatedRequirements.hasShortages && (
+              <div className="p-3 bg-rose-100/90 border border-rose-300 rounded-xl text-xs text-rose-900 font-semibold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-700 shrink-0" />
+                <span>
+                  सावधानी: कुछ सामग्रियों का पर्याप्त स्टॉक नहीं है। उत्पादन दर्ज करने से पहले कृपया स्टॉक दर्ज करें।
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Optional Owner-Only Actual Usage Correction Section */}
+          {isOwner && (
+            <div className="border border-cream-300 rounded-2xl overflow-hidden bg-cream-50/50">
+              <button
+                type="button"
+                onClick={() => setIsActualUsageOpen(!isActualUsageOpen)}
+                className="w-full px-4 py-3 text-left font-bold text-xs text-gray-800 flex items-center justify-between hover:bg-cream-100 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 text-maroon-800" />
+                  <span>वास्तविक खपत संशोधन (Actual Usage Correction — मालिक केवल)</span>
+                </div>
+                {isActualUsageOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+
+              {isActualUsageOpen && (
+                <div className="p-4 border-t border-cream-200 bg-white space-y-3">
+                  <p className="text-xs text-gray-600">
+                    यदि आज सामग्री की वास्तविक खपत रेसिपी मानक से भिन्न रही है, तो मालिक यहाँ संशोधन कर सकते हैं। अंतर होने पर कारण लिखना अनिवार्य है।
+                  </p>
+
+                  <div className="space-y-3">
+                    {calculatedRequirements.items.map((item) => (
+                      <div
+                        key={item.ingredientId}
+                        className="p-3 bg-cream-50 rounded-xl border border-cream-200 space-y-2"
+                      >
+                        <div className="flex items-center justify-between text-xs font-bold text-gray-900">
+                          <span>{item.name_hi}</span>
+                          <span className="text-gray-500 font-normal">मानक: {item.stdRequired} {item.unit}</span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <Input
+                            type="number"
+                            step="any"
+                            label={`वास्तविक खपत (${item.unit})`}
+                            value={item.actualQty}
+                            onChange={(e) =>
+                              handleActualQtyChange(
+                                item.ingredientId,
+                                parseFloat(e.target.value) || 0,
+                                item.stdRequired
+                              )
+                            }
+                          />
+
+                          {item.actualQty !== item.stdRequired && (
+                            <Input
+                              type="text"
+                              label="अंतर का कारण (Mandatory Reason) *"
+                              placeholder="जैसे: दूध ज्यादा उबाला, गाढ़ा किया..."
+                              value={item.varianceReason}
+                              onChange={(e) =>
+                                handleVarianceReasonChange(
+                                  item.ingredientId,
+                                  e.target.value,
+                                  item.stdRequired
+                                )
+                              }
+                              required
+                            />
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
+            </div>
+          )}
+
+          {/* Optional Notes & LPG Cost */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input
+              type="number"
+              step="any"
+              label="LPG गैस लागत (वैकल्पिक ओवरहेड ₹)"
+              prefixSymbol="₹"
+              value={lpgCost}
+              onChange={(e) => setLpgCost(e.target.value)}
+              min={0}
+            />
+
+            <Input
+              label="अतिरिक्त टिप्पणी (Notes)"
+              placeholder="जैसे: सुबह की पहली शिफ्ट..."
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+          </div>
+
+          {/* Submit Action Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-cream-200">
+            <div>
+              <span className="text-xs text-gray-500 block">कुल बिक्री योग्य कुल्फी</span>
+              <span className="text-lg font-black text-maroon-950 font-mono">
+                {formatQuantity(saleableQuantity)} {t.pieces}
+              </span>
             </div>
 
             <div className="flex items-center gap-2">
@@ -766,297 +884,12 @@ export const ProductionPage: React.FC = () => {
                 type="submit"
                 variant="primary"
                 size="md"
-                isLoading={createBatch.isPending}
+                isLoading={completeWithRecipe.isPending}
+                disabled={calculatedRequirements.hasShortages}
                 className="font-bold shadow-md shadow-maroon-900/20"
+                leftIcon={<CheckCircle className="w-4 h-4" />}
               >
-                उत्पादन सुरक्षित करें एवं फ्रीजर में जोड़ें
-              </Button>
-            </div>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Edit Draft Batch Modal */}
-      <Modal
-        isOpen={Boolean(editingDraftBatch)}
-        onClose={() => setEditingDraftBatch(null)}
-        title={`${t.editDraft}: ${editingDraftBatch?.batch_number}`}
-        subtitle="ड्राफ्ट बैच की मात्रा और लागत संशोधित करें"
-        maxWidth="lg"
-      >
-        <form onSubmit={handleUpdateDraftSubmit} className="space-y-4">
-          {formError && (
-            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
-              <span>{formError}</span>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Input
-              type="date"
-              label={t.productionDate}
-              value={productionDate}
-              onChange={(e) => setProductionDate(e.target.value)}
-              required
-            />
-
-            <Input
-              type="number"
-              step="0.01"
-              label={t.totalIngredientCost}
-              prefixSymbol="₹"
-              value={totalIngredientCost}
-              onChange={(e) => setTotalIngredientCost(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="space-y-3 pt-2">
-            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
-              उत्पाद मात्रा संशोधन (Pieces)
-            </h4>
-
-            <div className="space-y-3">
-              {products.map((prod) => {
-                const item = itemsState[prod.id] || { produced: 0, damaged: 0, notes: '' };
-                const saleable = Math.max(0, item.produced - item.damaged);
-
-                return (
-                  <div
-                    key={prod.id}
-                    className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 space-y-3"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-sm text-gray-900">
-                        {language === 'hi' ? prod.name_hi : prod.name_en}
-                      </span>
-                      <span className="text-xs font-semibold text-emerald-800">
-                        बिक्री योग्य: <strong className="font-mono text-base">{saleable}</strong>{' '}
-                        {t.pieces}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <Input
-                        type="number"
-                        label={t.producedQty}
-                        isPieceQuantity
-                        value={item.produced}
-                        onChange={(e) =>
-                          handleItemChange(prod.id, 'produced', parseInt(e.target.value, 10) || 0)
-                        }
-                      />
-                      <Input
-                        type="number"
-                        label={t.damagedQty}
-                        isPieceQuantity
-                        value={item.damaged}
-                        onChange={(e) =>
-                          handleItemChange(prod.id, 'damaged', parseInt(e.target.value, 10) || 0)
-                        }
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <Input
-            label="अतिरिक्त टिप्पणी (Notes)"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-          />
-
-          <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-            <div>
-              <span className="text-xs text-gray-500 block">कुल बिक्री योग्य</span>
-              <span className="text-lg font-black text-maroon-900 font-mono">
-                {formatQuantity(totalSaleable)} {t.pieces}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button type="button" variant="secondary" onClick={() => setEditingDraftBatch(null)}>
-                {t.cancel}
-              </Button>
-              <Button type="submit" variant="primary" isLoading={updateDraftBatch.isPending}>
-                {t.save}
-              </Button>
-            </div>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Correct Completed Batch Modal (Owner Only) */}
-      <Modal
-        isOpen={Boolean(correctingBatch)}
-        onClose={() => setCorrectingBatch(null)}
-        title={`${t.correctRecord}: ${correctingBatch?.batch_number}`}
-        subtitle="पुराना डेटा प्रतिस्थापित होगा और रिवर्सल स्टॉक मूवमेंट स्वतः दर्ज होगी"
-        maxWidth="lg"
-      >
-        <form onSubmit={handleCorrectionSubmit} className="space-y-4">
-          {isDayClosed(correctingBatch?.production_date || '') && (
-            <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs space-y-2">
-              <div className="flex items-center gap-2 font-bold">
-                <Lock className="w-4 h-4 text-amber-700" />
-                <span>{t.closedDayWarning}</span>
-              </div>
-              <p>
-                तारीख {formatDate(correctingBatch?.production_date || '')} का दिन क्लोज हो चुका है।
-                सुधार के लिए पहले क्लोजिंग पेज पर जाकर दिन को पुनः खोलें।
-              </p>
-              <Link to="/closing">
-                <Button size="sm" variant="outline" className="mt-1" rightIcon={<ArrowRight className="w-3.5 h-3.5" />}>
-                  दैनिक क्लोजिंग खोलें (Daily Closing)
-                </Button>
-              </Link>
-            </div>
-          )}
-
-          {formError && (
-            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
-              <span>{formError}</span>
-            </div>
-          )}
-
-          <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-200 text-blue-900 text-xs flex items-start gap-2">
-            <ShieldAlert className="w-4 h-4 text-blue-700 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="font-bold">सुरक्षित सुधार नीति (Safe Correction Policy):</p>
-              <p className="text-blue-800">
-                पुराने स्टॉक मूवमेंट हटाए नहीं जाएंगे। उनकी जगह रिवर्सल मूवमेंट और नए संस्करण (V
-                {(correctingBatch?.version_number || 1) + 1}) के मूवमेंट बनेंगे।
-              </p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Input
-              type="date"
-              label={t.productionDate}
-              value={productionDate}
-              onChange={(e) => setProductionDate(e.target.value)}
-              required
-            />
-
-            <Input
-              type="number"
-              step="0.01"
-              label={`${t.totalIngredientCost} (₹)`}
-              prefixSymbol="₹"
-              value={totalIngredientCost}
-              onChange={(e) => setTotalIngredientCost(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="space-y-3 pt-2">
-            <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
-              उत्पाद मात्रा तुलना व संशोधन (Old vs New)
-            </h4>
-
-            <div className="space-y-3">
-              {products.map((prod) => {
-                const item = itemsState[prod.id] || { produced: 0, damaged: 0, notes: '' };
-                const oldItem = correctingBatch?.items.find((i) => i.product_id === prod.id);
-                const oldSaleable = oldItem ? oldItem.saleable_quantity : 0;
-                const newSaleable = Math.max(0, item.produced - item.damaged);
-                const diff = newSaleable - oldSaleable;
-
-                return (
-                  <div
-                    key={prod.id}
-                    className="p-3.5 rounded-2xl bg-cream-50 border border-cream-200 space-y-3"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="font-bold text-sm text-gray-900">
-                          {language === 'hi' ? prod.name_hi : prod.name_en}
-                        </span>
-                        <span className="text-xs text-gray-500 block">
-                          पुराना बिक्री योग्य: {oldSaleable} pcs
-                        </span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-xs font-semibold text-emerald-800 block">
-                          नया बिक्री योग्य: <strong className="font-mono text-base">{newSaleable}</strong> {t.pieces}
-                        </span>
-                        {diff !== 0 && (
-                          <span
-                            className={`text-xs font-bold ${
-                              diff > 0 ? 'text-emerald-700' : 'text-rose-700'
-                            }`}
-                          >
-                            प्रभाव: {diff > 0 ? `+${diff}` : diff} pcs
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <Input
-                        type="number"
-                        label={t.producedQty}
-                        isPieceQuantity
-                        value={item.produced}
-                        onChange={(e) =>
-                          handleItemChange(prod.id, 'produced', parseInt(e.target.value, 10) || 0)
-                        }
-                      />
-                      <Input
-                        type="number"
-                        label={t.damagedQty}
-                        isPieceQuantity
-                        value={item.damaged}
-                        onChange={(e) =>
-                          handleItemChange(prod.id, 'damaged', parseInt(e.target.value, 10) || 0)
-                        }
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <Input
-            label={`${t.correctionReason} (अनिवार्य)`}
-            placeholder="जैसे: दूध की लागत में भूल सुधार, शाम की अतिरिक्त ट्रे..."
-            value={correctionReason}
-            onChange={(e) => setCorrectionReason(e.target.value)}
-            helperText="कम से कम 5 अक्षर का स्पष्ट कारण दर्ज करें"
-            required
-          />
-
-          <Input
-            label="अतिरिक्त टिप्पणी (Notes)"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-          />
-
-          <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-            <div>
-              <span className="text-xs text-gray-500 block">नया कुल बिक्री योग्य</span>
-              <span className="text-lg font-black text-maroon-900 font-mono">
-                {formatQuantity(totalSaleable)} {t.pieces}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button type="button" variant="secondary" onClick={() => setCorrectingBatch(null)}>
-                {t.cancel}
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                isLoading={correctBatch.isPending}
-                disabled={isDayClosed(correctingBatch?.production_date || '')}
-              >
-                {t.correctRecord}
+                उत्पादन पूर्ण करें एवं फ्रीजर में दर्ज करें
               </Button>
             </div>
           </div>
@@ -1072,7 +905,7 @@ export const ProductionPage: React.FC = () => {
         isLoading={isHistoryLoading}
       />
 
-      {/* Complete Batch with Raw Material Deduction Modal */}
+      {/* Complete Batch with Raw Material Deduction Modal (for Legacy Drafts) */}
       <CompleteBatchWithIngredientsModal
         batch={batchToComplete}
         isOpen={Boolean(batchToComplete)}

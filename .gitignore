@@ -33,3 +33,5 @@ dist-ssr
 vite.config.d.ts
 vite.config.js
 *.zip
+.vercel
+.env*

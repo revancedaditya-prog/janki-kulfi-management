@@ -8,9 +8,10 @@ export const isSupabaseConfigured = Boolean(
   supabaseUrl &&
   supabaseAnonKey &&
   supabaseUrl !== 'https://your-project-id.supabase.co' &&
-  !supabaseUrl.toUpperCase().includes('YOUR-PROJECT-ID') &&
+  !supabaseUrl.toUpperCase().includes('YOUR-PROJECT') &&
   !supabaseUrl.includes('placeholder') &&
   !supabaseAnonKey.toUpperCase().includes('YOUR_PUBLISHABLE_KEY') &&
+  !supabaseAnonKey.toUpperCase().includes('YOUR-ANON-KEY') &&
   !supabaseAnonKey.includes('placeholder')
 );
 

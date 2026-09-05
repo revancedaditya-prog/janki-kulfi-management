@@ -6,6 +6,7 @@ import {
   useRecordLpgReading,
   useRecordLpgRefill,
   useConnectLpgCylinder,
+  useDeleteLpgCylinder,
   useLpgReadings,
 } from '@/hooks/useLpg';
 import { useSuppliers } from '@/hooks/useSuppliers';
@@ -24,6 +25,8 @@ import {
   RefreshCw,
   ArrowLeft,
   History,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 
 export const LpgCylinderPage: React.FC = () => {
@@ -38,11 +41,13 @@ export const LpgCylinderPage: React.FC = () => {
   const recordReadingMutation = useRecordLpgReading();
   const recordRefillMutation = useRecordLpgRefill();
   const connectCylinderMutation = useConnectLpgCylinder();
+  const deleteCylinderMutation = useDeleteLpgCylinder();
 
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [cylinderToWeigh, setCylinderToWeigh] = useState<LpgCylinder | null>(null);
   const [cylinderToRefill, setCylinderToRefill] = useState<LpgCylinder | null>(null);
+  const [cylinderToDelete, setCylinderToDelete] = useState<LpgCylinder | null>(null);
 
   // Form states
   const [weighGross, setWeighGross] = useState<string>('');
@@ -136,6 +141,16 @@ export const LpgCylinderPage: React.FC = () => {
     }
   };
 
+  const handleDeleteSubmit = async () => {
+    if (!cylinderToDelete) return;
+    try {
+      await deleteCylinderMutation.mutateAsync(cylinderToDelete.id);
+      setCylinderToDelete(null);
+    } catch (err: any) {
+      alert(err.message || 'सिलेंडर हटाने में त्रुटि');
+    }
+  };
+
   return (
     <div className="space-y-6 pb-12">
       {/* Header */}
@@ -220,22 +235,35 @@ export const LpgCylinderPage: React.FC = () => {
                 </div>
               )}
 
-              <div className="flex items-center gap-3 mb-4">
-                <div
-                  className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black ${
-                    isConnected
-                      ? 'bg-orange-600 text-white'
-                      : isFull
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-stone-200 text-stone-700'
-                  }`}
-                >
-                  <Flame className="w-6 h-6" />
+              <div className="flex items-center justify-between gap-2 mb-4">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black shrink-0 ${
+                      isConnected
+                        ? 'bg-orange-600 text-white'
+                        : isFull
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-stone-200 text-stone-700'
+                    }`}
+                  >
+                    <Flame className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-stone-900">{cyl.cylinder_code}</h3>
+                    <p className="text-[11px] text-stone-500">{cyl.storage_location || 'Kitchen'}</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="text-base font-black text-stone-900">{cyl.cylinder_code}</h3>
-                  <p className="text-[11px] text-stone-500">{cyl.storage_location || 'Kitchen'}</p>
-                </div>
+
+                {isOwner && (
+                  <button
+                    type="button"
+                    title={language === 'hi' ? 'सिलेंडर हटाएं' : 'Delete Cylinder'}
+                    onClick={() => setCylinderToDelete(cyl)}
+                    className="p-1.5 rounded-lg text-stone-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
               </div>
 
               {/* Gas Gauge */}
@@ -573,6 +601,78 @@ export const LpgCylinderPage: React.FC = () => {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Delete Cylinder Confirmation Modal */}
+      <Modal
+        isOpen={Boolean(cylinderToDelete)}
+        onClose={() => setCylinderToDelete(null)}
+        title={language === 'hi' ? 'सिलेंडर हटाएं (Delete Cylinder)' : 'Delete LPG Cylinder'}
+        maxWidth="md"
+      >
+        <div className="space-y-4">
+          {cylinderToDelete?.status === 'in_use' && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-900">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">
+                  {language === 'hi' ? 'सावधानी: यह सिलेंडर भट्टी पर सक्रिय है' : 'Warning: Cylinder is currently in use'}
+                </p>
+                <p className="text-amber-800 text-[11px] mt-0.5">
+                  {language === 'hi'
+                    ? 'यह सिलेंडर वर्तमान में भट्टी से जुड़ा है। इसे हटाने से इसका कनेक्शन भी समाप्त हो जाएगा।'
+                    : 'This cylinder is currently connected to the burner. Deleting it will clear the active connection.'}
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="p-4 bg-stone-50 rounded-xl text-xs space-y-2 border border-stone-200">
+            <div className="flex justify-between items-center text-stone-700">
+              <span className="font-medium">{language === 'hi' ? 'सिलेंडर कोड:' : 'Cylinder Code:'}</span>
+              <span className="font-black text-stone-900 font-mono text-sm">{cylinderToDelete?.cylinder_code}</span>
+            </div>
+            <div className="flex justify-between items-center text-stone-700">
+              <span className="font-medium">{language === 'hi' ? 'खाली वजन (TW):' : 'Tare Weight (TW):'}</span>
+              <span className="font-semibold text-stone-900">{cylinderToDelete?.tare_weight} kg</span>
+            </div>
+            <div className="flex justify-between items-center text-stone-700">
+              <span className="font-medium">{language === 'hi' ? 'वर्तमान बची गैस:' : 'Remaining Gas:'}</span>
+              <span className="font-bold text-orange-700">{cylinderToDelete?.calculated_remaining_gas} kg</span>
+            </div>
+            <div className="flex justify-between items-center text-stone-700">
+              <span className="font-medium">{language === 'hi' ? 'स्थान:' : 'Storage Location:'}</span>
+              <span className="font-medium text-stone-800">{cylinderToDelete?.storage_location || 'Kitchen'}</span>
+            </div>
+          </div>
+
+          <p className="text-xs text-rose-700 font-medium">
+            {language === 'hi'
+              ? '⚠️ क्या आप वाकई इस सिलेंडर को हटाना चाहते हैं? इससे संबंधित सभी वजन व रिफिल इतिहास रिकॉर्ड भी हटा दिए जाएंगे।'
+              : '⚠️ Are you sure you want to delete this cylinder? All associated weight readings and refill history records will also be removed.'}
+          </p>
+
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-stone-200">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCylinderToDelete(null)}
+              disabled={deleteCylinderMutation.isPending}
+            >
+              {language === 'hi' ? 'रद्द करें' : 'Cancel'}
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              isLoading={deleteCylinderMutation.isPending}
+              onClick={handleDeleteSubmit}
+              className="bg-rose-600 hover:bg-rose-700 text-white font-bold"
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1" />
+              {language === 'hi' ? 'हाँ, सिलेंडर हटाएं' : 'Yes, Delete Cylinder'}
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

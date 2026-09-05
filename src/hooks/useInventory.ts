@@ -76,19 +76,7 @@ export function useReactivateIngredient() {
   });
 }
 
-export function useDeleteIngredient() {
-  const queryClient = useQueryClient();
-  const { user } = useAuth();
 
-  return useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
-      api.deleteIngredient(id, reason, user?.id || 'usr-owner-001'),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['ingredients'] });
-      queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] });
-    },
-  });
-}
 
 // --- Raw Material Ledger Balances & KPIs ---
 export function useRawMaterialBalances() {
@@ -298,23 +286,34 @@ export function useCreateSupplierReturn() {
   });
 }
 
-// --- Reorder Shopping List ---
-export function useReorderList() {
-  return useQuery({
-    queryKey: ['reorder-list'],
-    queryFn: () => api.getReorderList(),
+export function useCorrectRawMaterialStock() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: (params: { ingredientId: string; newQuantity: number; reason: string }) =>
+      api.correctRawMaterialStock({ ...params, userId: user?.id || 'usr-owner-001' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ingredients'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-movements'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] });
+      queryClient.invalidateQueries({ queryKey: ['physical-stock-counts'] });
+    },
   });
 }
 
-export function useUpdateReorderItemStatus() {
+export function useDeleteIngredient() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
 
   return useMutation({
-    mutationFn: ({ ingredientId, status, notes }: { ingredientId: string; status: 'needed' | 'ordered' | 'received'; notes?: string }) =>
-      api.updateReorderItemStatus(ingredientId, status, notes),
+    mutationFn: ({ ingredientId, id, reason }: { ingredientId?: string; id?: string; reason?: string }) =>
+      api.deleteIngredient(ingredientId || id || '', reason, user?.id || 'usr-owner-001'),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['reorder-list'] });
       queryClient.invalidateQueries({ queryKey: ['ingredients'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-movements'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] });
+      queryClient.invalidateQueries({ queryKey: ['recipes'] });
     },
   });
 }

@@ -184,4 +184,47 @@ describe('Transactional Deletions for Production, Stock Issues, and Settlements'
       expect(reopenedIssue?.status).toBe('issued');
     });
   });
+
+  describe('LPG Cylinder Deletion', () => {
+    it('should delete an LPG cylinder and its readings cleanly', () => {
+      const cyl = mockStore.addLpgCylinder(
+        {
+          cylinder_code: 'LPG-DEL-01',
+          supplier_id: null,
+          supplier_name: 'Test Supplier',
+          cylinder_type: 'commercial_19kg',
+          rated_gas_capacity: 19.0,
+          tare_weight: 15.2,
+          full_gross_weight: 34.2,
+          current_gross_weight: 34.2,
+          status: 'full',
+          refill_cost: 1800,
+          storage_location: 'Kitchen Area',
+          is_active: true,
+        },
+        'usr-owner-001'
+      );
+
+      expect(mockStore.getLpgCylinderById(cyl.id)).toBeDefined();
+
+      // Record a reading
+      mockStore.recordLpgReading(cyl.id, 30.0, 'weighed', undefined, 'Test reading', 'usr-owner-001');
+      expect(mockStore.getLpgReadings(cyl.id).length).toBeGreaterThan(0);
+
+      // Delete cylinder
+      const result = mockStore.deleteLpgCylinder(cyl.id, 'usr-owner-001');
+      expect(result.success).toBe(true);
+
+      // Verify cylinder and readings are removed
+      expect(mockStore.getLpgCylinderById(cyl.id)).toBeUndefined();
+      expect(mockStore.getLpgReadings(cyl.id).length).toBe(0);
+    });
+
+    it('should throw error when deleting non-existent cylinder', () => {
+      expect(() => {
+        mockStore.deleteLpgCylinder('cyl-non-existent-999', 'usr-owner-001');
+      }).toThrow(/not found/i);
+    });
+  });
 });
+

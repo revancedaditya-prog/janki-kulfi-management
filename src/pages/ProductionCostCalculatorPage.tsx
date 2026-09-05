@@ -7,6 +7,8 @@ import {
   useRecipeForProduct,
   useRecipeHistory,
   useSaveRecipe,
+  useActivateRecipeVersion,
+  useDeleteRecipeVersion,
 } from '@/hooks/useProductionCosting';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
@@ -15,6 +17,7 @@ import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
 import { Badge } from '@/components/common/Badge';
 import { Modal } from '@/components/common/Modal';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import {
   formatCurrency,
   formatDate,
@@ -29,6 +32,7 @@ import {
   AdditionalOverheads,
   UnitType,
   IngredientCategory,
+  RecipeWithItems,
 } from '@/types';
 import {
   Calculator,
@@ -42,8 +46,9 @@ import {
   Layers,
   Milk,
   AlertCircle,
-  ArrowRight,
   Factory,
+  Trash2,
+  Check,
 } from 'lucide-react';
 
 const UNIT_OPTIONS: { value: UnitType; labelEn: string; labelHi: string }[] = [
@@ -73,17 +78,21 @@ export const ProductionCostCalculatorPage: React.FC = () => {
     [products, selectedProductId]
   );
 
-  // Active Recipe Query
+  // Active Recipe & History Query
   const { data: activeRecipe } = useRecipeForProduct(activeProduct?.id);
   const { data: recipeHistory = [] } = useRecipeHistory(activeProduct?.id);
 
   // Mutations
   const saveRecipeMutation = useSaveRecipe();
+  const activateRecipeMutation = useActivateRecipeVersion();
+  const deleteRecipeMutation = useDeleteRecipeVersion();
   const addIngredientMutation = useAddIngredient();
 
-  // Recipe Modeling Batch Size
+  // Recipe Modeling Batch Size & Yield
   const [standardOutputPieces, setStandardOutputPieces] = useState<number>(100);
+  const [recipeName, setRecipeName] = useState('');
   const [recipeNotes, setRecipeNotes] = useState('');
+  const [saveAsStatus, setSaveAsStatus] = useState<'active' | 'draft'>('active');
 
   // Overheads State
   const [overheads, setOverheads] = useState<AdditionalOverheads>({
@@ -106,6 +115,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
 
   // UI state
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [recipeToDelete, setRecipeToDelete] = useState<RecipeWithItems | null>(null);
   const [isAddIngredientModalOpen, setIsAddIngredientModalOpen] = useState(false);
   const [customIngNameEn, setCustomIngNameEn] = useState('');
   const [customIngNameHi, setCustomIngNameHi] = useState('');
@@ -133,13 +143,15 @@ export const ProductionCostCalculatorPage: React.FC = () => {
       activeRecipe.items.forEach((it) => {
         recipeItemMap.set(it.ingredient_id, { quantity: it.quantity, unit: it.unit });
       });
-      setStandardOutputPieces(activeRecipe.standard_output_pieces || 100);
+      setStandardOutputPieces(activeRecipe.expected_yield_pieces || activeRecipe.standard_output_pieces || 100);
+      setRecipeName(activeRecipe.name || '');
       setRecipeNotes(activeRecipe.notes || '');
       if (activeRecipe.default_overheads) {
         setOverheads({ ...activeRecipe.default_overheads });
       }
     } else {
       setStandardOutputPieces(100);
+      setRecipeName(`${activeProduct?.name_hi || activeProduct?.name_en || 'कुल्फी'} Standard Recipe`);
       setRecipeNotes('');
       setOverheads({
         electricity: 0,
@@ -161,7 +173,6 @@ export const ProductionCostCalculatorPage: React.FC = () => {
       const unit = recItem ? recItem.unit : ing.base_unit;
       const rate = Number(ing.current_rate) || 0;
       
-      // If an ingredient is standard kg/litre (e.g. Cardamom, Sugar, Khoya, Cashew) but was stored as 'g'/'ml', default rate_unit to its master base_unit ('kg'/'litre')
       const isKgBase = (ing.base_unit === 'kg' || ing.base_unit === 'litre') && ing.code !== 'ING-SAFFRON';
       const effectiveRateUnit: UnitType = isKgBase && (ing.rate_unit === 'g' || ing.rate_unit === 'ml')
         ? ing.base_unit
@@ -185,7 +196,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
 
     setIngredientRows(rows);
     setFormError(null);
-  }, [activeRecipe, allIngredients, selectedProductId]);
+  }, [activeRecipe, allIngredients, selectedProductId, activeProduct]);
 
   // Product Switch Handler
   const handleProductSelect = (productId: string) => {
@@ -193,6 +204,52 @@ export const ProductionCostCalculatorPage: React.FC = () => {
     setSearchParams({ product: productId });
     setShowScalingDrawer(false);
     setRequiredQuantity('');
+  };
+
+  // Load a specific historical recipe version into editor
+  const handleLoadRecipeVersion = (recipe: RecipeWithItems) => {
+    const recipeItemMap = new Map<string, { quantity: number; unit: UnitType }>();
+    if (recipe.items) {
+      recipe.items.forEach((it) => {
+        recipeItemMap.set(it.ingredient_id, { quantity: it.quantity, unit: it.unit });
+      });
+    }
+
+    setStandardOutputPieces(recipe.expected_yield_pieces || recipe.standard_output_pieces || 100);
+    setRecipeName(recipe.name || '');
+    setRecipeNotes(recipe.notes || '');
+    if (recipe.default_overheads) {
+      setOverheads({ ...recipe.default_overheads });
+    }
+
+    const rows: CostingIngredientRow[] = allIngredients.map((ing) => {
+      const recItem = recipeItemMap.get(ing.id);
+      const isSelected = !!recItem;
+      const qty = recItem ? recItem.quantity : 0;
+      const unit = recItem ? recItem.unit : ing.base_unit;
+      const rate = Number(ing.current_rate) || 0;
+      const effectiveRateUnit = ing.rate_unit || ing.base_unit || 'kg';
+      const calculated_cost = calculateIngredientRowCost(qty, unit, rate, effectiveRateUnit);
+
+      return {
+        ingredient_id: ing.id,
+        name_en: ing.name_en,
+        name_hi: ing.name_hi,
+        category: ing.category,
+        is_selected: isSelected,
+        quantity: qty,
+        unit,
+        rate,
+        rate_unit: effectiveRateUnit,
+        calculated_cost,
+        save_rate_to_master: false,
+      };
+    });
+
+    setIngredientRows(rows);
+    setIsHistoryModalOpen(false);
+    setSuccessMessage(`संस्करण v${recipe.version_number} संपादक में लोड किया गया!`);
+    setTimeout(() => setSuccessMessage(null), 4000);
   };
 
   // Row change handlers
@@ -251,19 +308,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
     });
   };
 
-  const handleRowRateUnitChange = (index: number, rateUnit: UnitType) => {
-    setIngredientRows((prev) => {
-      const copy = [...prev];
-      copy[index].rate_unit = rateUnit;
-      copy[index].calculated_cost = calculateIngredientRowCost(
-        copy[index].quantity,
-        copy[index].unit,
-        copy[index].rate,
-        copy[index].rate_unit
-      );
-      return copy;
-    });
-  };
+
 
   // Overhead change handler
   const handleOverheadChange = (field: keyof AdditionalOverheads, val: number) => {
@@ -281,7 +326,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
         ingredientRows,
         overheads,
         standardOutputPieces || 100,
-        0, // No damaged for standard recipe modeling
+        0,
         activeProduct.current_price || 0
       );
     } catch {
@@ -295,13 +340,18 @@ export const ProductionCostCalculatorPage: React.FC = () => {
     return scaleProductionRecipe(activeRecipe, Number(requiredQuantity));
   }, [requiredQuantity, activeRecipe]);
 
-  // Save Default Recipe (Owner only)
-  const handleSaveDefaultRecipe = async () => {
+  // Save Recipe Version (Owner only)
+  const handleSaveRecipe = async () => {
     setFormError(null);
     setSuccessMessage(null);
 
     if (!isOwner) {
-      setFormError('केवल मालिक ही डिफ़ॉल्ट रेसिपी सुरक्षित कर सकते हैं।');
+      setFormError('केवल मालिक ही रेसिपी सुरक्षित कर सकते हैं।');
+      return;
+    }
+
+    if (!standardOutputPieces || standardOutputPieces <= 0) {
+      setFormError('मानक उत्पादन (Expected Yield) शून्य से अधिक होना चाहिए।');
       return;
     }
 
@@ -311,7 +361,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
         ingredient_id: r.ingredient_id,
         quantity: r.quantity,
         unit: r.unit,
-        save_rate_to_master: false, // Do not mutate master ingredient rate unit!
+        save_rate_to_master: false,
         rate: r.rate,
       }));
 
@@ -323,24 +373,54 @@ export const ProductionCostCalculatorPage: React.FC = () => {
     try {
       await saveRecipeMutation.mutateAsync({
         product_id: selectedProductId,
-        name: `${activeProduct?.name_hi || activeProduct?.name_en} Standard Recipe`,
+        name: recipeName.trim() || `${activeProduct?.name_hi || activeProduct?.name_en} Standard Recipe`,
         standard_output_pieces: standardOutputPieces || 100,
+        expected_yield_pieces: standardOutputPieces || 100,
         default_overheads: overheads,
         notes: recipeNotes,
+        status: saveAsStatus,
         items: selectedItems,
       });
 
-      setSuccessMessage('मानक रेसिपी सफलतापूर्वक सुरक्षित हो गई! नया संस्करण सक्रिय है।');
+      setSuccessMessage(`रेसिपी संस्करण सफलतापूर्वक सुरक्षित हो गया! (${saveAsStatus === 'active' ? 'सक्रिय' : 'ड्राफ्ट'})`);
       setTimeout(() => setSuccessMessage(null), 5000);
     } catch (err: any) {
       setFormError(err.message || 'रेसिपी सुरक्षित करने में त्रुटि हुई');
     }
   };
 
+  // Activate Recipe Version Handler
+  const handleActivateRecipe = async (recipeId: string) => {
+    setFormError(null);
+    try {
+      const res = await activateRecipeMutation.mutateAsync(recipeId);
+      setSuccessMessage(res.message || 'रेसिपी संस्करण सक्रिय किया गया!');
+      setTimeout(() => setSuccessMessage(null), 4000);
+    } catch (err: any) {
+      setFormError(err.message || 'रेसिपी सक्रिय करने में त्रुटि हुई');
+    }
+  };
+
+  // Delete / Archive Recipe Handler
+  const handleConfirmDeleteRecipe = async () => {
+    if (!recipeToDelete) return;
+    setFormError(null);
+    try {
+      const res = await deleteRecipeMutation.mutateAsync(recipeToDelete.id);
+      setRecipeToDelete(null);
+      setSuccessMessage(res.message || 'रेसिपी संस्करण हटा दिया गया!');
+      setTimeout(() => setSuccessMessage(null), 4000);
+    } catch (err: any) {
+      setFormError(err.message || 'रेसिपी हटाने में त्रुटि हुई');
+      setRecipeToDelete(null);
+    }
+  };
+
   // Reset Form to Default Recipe
   const handleResetForm = () => {
     if (activeRecipe) {
-      setStandardOutputPieces(activeRecipe.standard_output_pieces || 100);
+      setStandardOutputPieces(activeRecipe.expected_yield_pieces || activeRecipe.standard_output_pieces || 100);
+      setRecipeName(activeRecipe.name || '');
       setRecipeNotes(activeRecipe.notes || '');
       setOverheads(activeRecipe.default_overheads || {
         electricity: 0,
@@ -393,12 +473,17 @@ export const ProductionCostCalculatorPage: React.FC = () => {
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
+          <div className="flex items-center gap-1 text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">
+            <span>मास्टर डेटा (Master Data)</span>
+            <span>/</span>
+            <span className="text-maroon-800">रेसिपी व लागत कैलकुलेटर</span>
+          </div>
           <h1 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight flex items-center gap-2">
             <Calculator className="w-6 h-6 text-maroon-800" />
-            <span>{t.productionCostCalculator}</span>
+            <span>रेसिपी मास्टर और उत्पादन लागत कैलकुलेटर</span>
           </h1>
           <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
-            मानक कुल्फी रेसिपी लागत, सामग्री अनुपात और ग्रॉस मार्जिन (Gross Margin) मॉडलिंग टूल
+            उत्पाद-वार मानक सामग्री अनुपात, संस्करण प्रबंधन (Versions) और प्रति-पीस लागत मॉडलिंग
           </p>
         </div>
 
@@ -410,7 +495,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
               leftIcon={<History className="w-4 h-4 text-gray-600" />}
               onClick={() => setIsHistoryModalOpen(true)}
             >
-              {t.recipeHistory}
+              रेसिपी संस्करण इतिहास ({recipeHistory.length})
             </Button>
           )}
 
@@ -420,42 +505,22 @@ export const ProductionCostCalculatorPage: React.FC = () => {
               size="sm"
               leftIcon={<Factory className="w-4 h-4" />}
             >
-              दैनिक उत्पादन दर्ज करें (New Batch)
+              दैनिक उत्पादन दर्ज करें
             </Button>
           </Link>
         </div>
       </div>
 
-      {/* Quick Navigation Alert Banner */}
-      <div className="p-3.5 bg-gradient-to-r from-cream-100 via-amber-50 to-cream-100 border border-amber-300/80 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-        <div className="flex items-center gap-2.5 text-xs text-maroon-950">
-          <Factory className="w-5 h-5 text-maroon-800 flex-shrink-0" />
-          <span>
-            <strong>दैनिक उत्पादन प्रविष्टि (Daily Production):</strong> कारखाने में तैयार कुल्फी को फ्रीजर में दर्ज करने और स्टॉक निकासी के लिए उपलब्ध कराने हेतु <strong>उत्पादन (Production) पेज</strong> पर नया बैच बनाएं।
-          </span>
-        </div>
-        <Link to="/production?new=true" className="self-end sm:self-auto">
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-xs border-maroon-800 text-maroon-900 font-bold bg-white hover:bg-cream-50"
-            rightIcon={<ArrowRight className="w-3.5 h-3.5" />}
-          >
-            उत्पादन बैच बनाएं
-          </Button>
-        </Link>
-      </div>
-
       {/* Messages */}
       {formError && (
-        <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs font-semibold flex items-center gap-2">
+        <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs font-semibold flex items-center gap-2">
           <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-600" />
           <span>{formError}</span>
         </div>
       )}
 
       {successMessage && (
-        <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center gap-2">
+        <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-600" />
           <span>{successMessage}</span>
         </div>
@@ -488,16 +553,23 @@ export const ProductionCostCalculatorPage: React.FC = () => {
         })}
       </div>
 
-      {/* 2. Recipe Batch Size & Scaling Card */}
+      {/* 2. Recipe Version & Batch Size Card */}
       <Card className="border-cream-300 shadow-sm space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-gray-100">
           <div>
-            <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-amber-600" />
-              <span>मानक रेसिपी विवरण (Standard Recipe Template)</span>
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-amber-600" />
+                <span>मानक रेसिपी विवरण (Recipe Template)</span>
+              </h2>
+              {activeRecipe && (
+                <Badge variant="success" className="text-xs">
+                  सक्रिय: v{activeRecipe.version_number}
+                </Badge>
+              )}
+            </div>
             <p className="text-xs text-gray-500 mt-0.5">
-              उत्पाद: <strong>{language === 'hi' ? activeProduct?.name_hi : activeProduct?.name_en}</strong> | दर: <strong>{formatCurrency(activeProduct?.current_price)}</strong> / piece
+              उत्पाद: <strong>{language === 'hi' ? activeProduct?.name_hi : activeProduct?.name_en}</strong> | विक्रय मूल्य: <strong>{formatCurrency(activeProduct?.current_price)}</strong> / piece
             </p>
           </div>
 
@@ -508,31 +580,51 @@ export const ProductionCostCalculatorPage: React.FC = () => {
               leftIcon={<Scale className="w-4 h-4 text-indigo-700" />}
               onClick={() => setShowScalingDrawer(!showScalingDrawer)}
             >
-              {showScalingDrawer ? 'स्केलिंग कैलकुलेटर छिपाएं' : 'बैच स्केलिंग (Scaling)'}
+              {showScalingDrawer ? 'स्केलिंग छिपाएं' : 'बैच स्केलिंग (Scaler)'}
             </Button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
           <Input
-            label="मानक बैच साइज (Standard Output Pieces)"
+            label="रेसिपी का नाम (Recipe Name) *"
+            placeholder="जैसे: ₹10 सादा कुल्फी मानक रेसिपी"
+            value={recipeName}
+            onChange={(e) => setRecipeName(e.target.value)}
+            required
+          />
+
+          <Input
+            label="मानक उत्पादन उपज (Expected Yield Pieces) *"
             type="number"
             inputMode="numeric"
             value={standardOutputPieces}
-            onChange={(e) => setStandardOutputPieces(Math.max(1, parseInt(e.target.value) || 0))}
-            helperText="उदा. 100 पीस के लिए आवश्यक सामग्री का अनुपात"
+            onChange={(e) => setStandardOutputPieces(Math.max(1, parseInt(e.target.value, 10) || 0))}
+            helperText="उदा. 100 पीस के लिए आवश्यक सामग्री"
             min={1}
             required
           />
 
-          <div className="md:col-span-2">
-            <Input
-              label="रेसिपी विवरण / नोट्स (Recipe Notes)"
-              placeholder="उदा. इलायची युक्त मानक खोया कुल्फी रेसिपी"
-              value={recipeNotes}
-              onChange={(e) => setRecipeNotes(e.target.value)}
-            />
+          <div>
+            <label className="text-xs font-bold text-gray-700 block mb-1.5">
+              स्थिति (Save Status)
+            </label>
+            <select
+              value={saveAsStatus}
+              onChange={(e) => setSaveAsStatus(e.target.value as 'active' | 'draft')}
+              className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2.5 text-xs font-bold text-gray-900 focus:ring-2 focus:ring-maroon-800"
+            >
+              <option value="active">सक्रिय (Active — उत्पादन में उपयोग होगा)</option>
+              <option value="draft">ड्राफ्ट (Draft — परीक्षण हेतु)</option>
+            </select>
           </div>
+
+          <Input
+            label="रेसिपी नोट्स (Notes)"
+            placeholder="विशेष सामग्री या विधि..."
+            value={recipeNotes}
+            onChange={(e) => setRecipeNotes(e.target.value)}
+          />
         </div>
 
         {/* Scaling Drawer */}
@@ -541,7 +633,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
                 <Scale className="w-4 h-4 text-indigo-700" />
-                <span>आवश्यक उत्पादन के अनुसार सामग्री की गणना (Recipe Scaler)</span>
+                <span>वांछित उत्पादन के अनुसार सामग्री की गणना (Recipe Scaler)</span>
               </h3>
             </div>
 
@@ -553,7 +645,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
                 placeholder="उदा. 500 पीस"
                 value={requiredQuantity}
                 onChange={(e) =>
-                  setRequiredQuantity(e.target.value === '' ? '' : parseInt(e.target.value) || 0)
+                  setRequiredQuantity(e.target.value === '' ? '' : parseInt(e.target.value, 10) || 0)
                 }
                 min={1}
               />
@@ -609,292 +701,145 @@ export const ProductionCostCalculatorPage: React.FC = () => {
             </Button>
           </div>
 
-          <div className="space-y-3">
-            {ingredientRows.map((row, idx) => {
-              const isMissingRate = row.is_selected && row.rate <= 0;
-
-              return (
-                <div
-                  key={row.ingredient_id}
-                  className={`p-3.5 rounded-2xl border transition-all duration-150 ${
-                    row.is_selected
-                      ? 'bg-cream-50/80 border-cream-300 shadow-xs'
-                      : 'bg-white/60 border-gray-100 opacity-65'
-                  }`}
-                >
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                    {/* Left: Checkbox & Ingredient Name */}
-                    <div className="flex items-center gap-3 min-w-[200px]">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-cream-300 bg-cream-100/50 text-gray-700 uppercase font-bold">
+                  <th className="py-2.5 px-3 w-10">चुनें</th>
+                  <th className="py-2.5 px-3">सामग्री (Ingredient)</th>
+                  <th className="py-2.5 px-3 w-32">मात्रा (Qty)</th>
+                  <th className="py-2.5 px-3 w-32">इकाई (Unit)</th>
+                  <th className="py-2.5 px-3 w-32">दर (₹/Unit)</th>
+                  <th className="py-2.5 px-3 w-28 text-right">लागत (₹)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {ingredientRows.map((row, idx) => (
+                  <tr
+                    key={row.ingredient_id}
+                    className={`hover:bg-cream-50/50 transition-colors ${
+                      row.is_selected ? 'bg-cream-50/30' : 'opacity-60'
+                    }`}
+                  >
+                    <td className="py-2 px-3">
                       <input
                         type="checkbox"
                         checked={row.is_selected}
                         onChange={(e) => handleRowCheckbox(idx, e.target.checked)}
-                        className="w-4 h-4 text-maroon-800 rounded focus:ring-maroon-800 border-gray-300"
+                        className="w-4 h-4 rounded text-maroon-800 focus:ring-maroon-800 border-gray-300"
                       />
-                      <div>
-                        <span className="font-bold text-sm text-gray-900 block">
-                          {language === 'hi' ? row.name_hi : row.name_en}
-                        </span>
-                        <span className="text-[11px] text-gray-500 block">
-                          {language === 'hi' ? row.name_en : row.name_hi}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Middle: Quantity, Unit, Rate, Rate Unit */}
-                    {row.is_selected ? (
-                      <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                        {/* Quantity */}
-                        <div>
-                          <label className="text-[10px] font-bold text-gray-500 block mb-0.5">
-                            {t.quantityUsed}
-                          </label>
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            step="any"
-                            value={row.quantity || ''}
-                            onChange={(e) => handleRowQuantityChange(idx, parseFloat(e.target.value) || 0)}
-                            className="w-full bg-cream-50 border border-cream-300 rounded-xl px-2.5 py-1.5 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
-                            placeholder="0"
-                            min={0}
-                          />
-                        </div>
-
-                        {/* Unit */}
-                        <div>
-                          <label className="text-[10px] font-bold text-gray-500 block mb-0.5">
-                            {t.unit}
-                          </label>
-                          <select
-                            value={row.unit}
-                            onChange={(e) => handleRowUnitChange(idx, e.target.value as UnitType)}
-                            className="w-full bg-cream-50 border border-cream-300 rounded-xl px-2 py-1.5 text-xs font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
-                          >
-                            {UNIT_OPTIONS.map((u) => (
-                              <option key={u.value} value={u.value}>
-                                {language === 'hi' ? u.labelHi : u.labelEn}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        {/* Rate */}
-                        <div>
-                          <label className="text-[10px] font-bold text-gray-500 block mb-0.5">
-                            {t.purchaseRate}
-                          </label>
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            step="any"
-                            value={row.rate || ''}
-                            onChange={(e) => handleRowRateChange(idx, parseFloat(e.target.value) || 0)}
-                            className={`w-full rounded-xl px-2.5 py-1.5 text-sm font-bold focus:ring-2 focus:outline-none ${
-                              isMissingRate
-                                ? 'bg-rose-100 border-2 border-rose-500 text-rose-950 focus:ring-rose-600'
-                                : 'bg-cream-50 border border-cream-300 text-gray-900 focus:ring-maroon-800'
-                            }`}
-                            placeholder="₹ 0.00"
-                            min={0}
-                          />
-                        </div>
-
-                        {/* Rate Unit */}
-                        <div>
-                          <label className="text-[10px] font-bold text-gray-500 block mb-0.5">
-                            {t.rateUnit}
-                          </label>
-                          <select
-                            value={row.rate_unit}
-                            onChange={(e) => handleRowRateUnitChange(idx, e.target.value as UnitType)}
-                            className="w-full bg-cream-50 border border-cream-300 rounded-xl px-2 py-1.5 text-xs font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
-                          >
-                            {UNIT_OPTIONS.map((u) => (
-                              <option key={u.value} value={u.value}>
-                                {language === 'hi' ? `प्रति ${u.labelHi}` : `per ${u.labelEn}`}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex-1 text-xs text-gray-400 italic py-2">
-                        {language === 'hi' ? 'यह सामग्री इस रेसिपी में शामिल नहीं है' : 'Unchecked (not included in costing)'}
-                      </div>
-                    )}
-
-                    {/* Right: Calculated Cost */}
-                    {row.is_selected && (
-                      <div className="flex flex-col md:items-end justify-center min-w-[140px] pt-1 md:pt-0 border-t md:border-t-0 border-cream-100 text-right">
-                        <span className="text-[11px] font-bold text-gray-500">{t.ingredientCost}</span>
-                        <span className="font-mono font-extrabold text-base text-maroon-900">
-                          {formatCurrency(row.calculated_cost)}
-                        </span>
-                        {row.quantity > 0 && row.rate > 0 && row.unit !== row.rate_unit && (
-                          <span className="text-[10px] text-gray-500 font-mono">
-                            {row.unit === 'g' && row.rate_unit === 'kg'
-                              ? `${row.quantity / 1000} kg × ₹${row.rate}`
-                              : `${row.quantity} ${row.unit} @ ₹${row.rate}/${row.rate_unit}`}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Warning and Quick-Fix if Rate is high and Rate Unit is erroneously set to 'per g' */}
-                  {row.is_selected && row.rate > 400 && row.rate_unit === 'g' && (row.unit === 'g' || row.unit === 'kg') && (
-                    <div className="mt-2 p-2.5 bg-amber-50 border border-amber-300 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-amber-950">
-                      <div className="flex items-center gap-1.5">
-                        <AlertCircle className="w-4 h-4 text-amber-700 flex-shrink-0" />
-                        <span>
-                          दर <strong>₹{row.rate}/g (प्रति ग्राम)</strong> चयनित है, जिससे 1 किलो की दर ₹{(row.rate * 1000).toLocaleString()} हो जाएगी। क्या यह दर <strong>प्रति किलो (per kg)</strong> है?
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleRowRateUnitChange(idx, 'kg')}
-                        className="px-2.5 py-1 bg-amber-700 hover:bg-amber-800 text-white rounded-lg text-xs font-bold shadow-sm whitespace-nowrap self-end sm:self-auto"
+                    </td>
+                    <td className="py-2 px-3">
+                      <span className="font-bold text-gray-900 block">
+                        {language === 'hi' ? row.name_hi : row.name_en}
+                      </span>
+                      <span className="text-[10px] text-gray-500 capitalize">{row.category}</span>
+                    </td>
+                    <td className="py-2 px-3">
+                      <input
+                        type="number"
+                        step="any"
+                        disabled={!row.is_selected}
+                        value={row.quantity || ''}
+                        placeholder="0"
+                        onChange={(e) =>
+                          handleRowQuantityChange(idx, parseFloat(e.target.value) || 0)
+                        }
+                        className="w-full px-2 py-1.5 text-xs font-mono font-bold bg-white border border-gray-200 rounded-lg focus:ring-1 focus:ring-maroon-800 disabled:bg-gray-100"
+                      />
+                    </td>
+                    <td className="py-2 px-3">
+                      <select
+                        disabled={!row.is_selected}
+                        value={row.unit}
+                        onChange={(e) => handleRowUnitChange(idx, e.target.value as UnitType)}
+                        className="w-full px-2 py-1.5 text-xs bg-white border border-gray-200 rounded-lg focus:ring-1 focus:ring-maroon-800 disabled:bg-gray-100"
                       >
-                        दर को प्रति किलो (per kg) करें (लागत {formatCurrency(calculateIngredientRowCost(row.quantity, row.unit, row.rate, 'kg'))})
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                        {UNIT_OPTIONS.map((u) => (
+                          <option key={u.value} value={u.value}>
+                            {u.value}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="py-2 px-3">
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-400 text-xs">₹</span>
+                        <input
+                          type="number"
+                          step="any"
+                          disabled={!row.is_selected}
+                          value={row.rate || ''}
+                          onChange={(e) =>
+                            handleRowRateChange(idx, parseFloat(e.target.value) || 0)
+                          }
+                          className="w-20 px-2 py-1.5 text-xs font-mono bg-white border border-gray-200 rounded-lg focus:ring-1 focus:ring-maroon-800 disabled:bg-gray-100"
+                        />
+                        <span className="text-[10px] text-gray-500">/{row.rate_unit}</span>
+                      </div>
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono font-black text-gray-900">
+                      {row.is_selected ? formatCurrency(row.calculated_cost) : '₹0.00'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
 
-        {/* 4. Additional Recipe Overheads */}
-        <div className="py-5 space-y-3">
+        {/* 4. Overheads Section */}
+        <div className="py-4 space-y-3">
+          <h2 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+            <Layers className="w-4 h-4 text-maroon-800" />
+            <span>4. अतिरिक्त ओवरहेड खर्च (Additional Overheads for {standardOutputPieces} pcs)</span>
+          </h2>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <Input
+              label="बिजली (Electricity ₹)"
+              type="number"
+              prefixSymbol="₹"
+              value={overheads.electricity}
+              onChange={(e) => handleOverheadChange('electricity', parseFloat(e.target.value) || 0)}
+            />
+            <Input
+              label="LPG गैस (Gas ₹)"
+              type="number"
+              prefixSymbol="₹"
+              value={overheads.gas}
+              onChange={(e) => handleOverheadChange('gas', parseFloat(e.target.value) || 0)}
+            />
+            <Input
+              label="मजदूरी (Labour ₹)"
+              type="number"
+              prefixSymbol="₹"
+              value={overheads.direct_labour}
+              onChange={(e) => handleOverheadChange('direct_labour', parseFloat(e.target.value) || 0)}
+            />
+            <Input
+              label="परिवहन व अन्य (Other ₹)"
+              type="number"
+              prefixSymbol="₹"
+              value={overheads.transport + overheads.other}
+              onChange={(e) => handleOverheadChange('other', parseFloat(e.target.value) || 0)}
+            />
+          </div>
+        </div>
+
+        {/* 5. Summary & Cost Per Kulfi */}
+        <div className="pt-4 flex flex-col sm:flex-row items-center justify-between gap-4 bg-cream-50/60 -mx-6 -mb-6 p-6 rounded-b-2xl border-t border-cream-200">
           <div>
-            <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
-              <Layers className="w-5 h-5 text-indigo-700" />
-              <span>4. अतिरिक्त खर्चे (Overheads per Batch)</span>
-            </h2>
-            <p className="text-xs text-gray-500">
-              मानक बैच के लिए ईंधन, मजदूरी व अन्य खर्चे (वैकल्पिक, डिफ़ॉल्ट ₹0)।
-            </p>
+            <span className="text-xs text-gray-500 block">कुल रेसिपी लागत ({standardOutputPieces} पीस)</span>
+            <span className="text-2xl font-black text-maroon-950 font-mono">
+              {formatCurrency(costingBreakdown?.total_batch_cost || 0)}
+            </span>
+            <span className="text-xs text-emerald-800 font-bold block mt-0.5">
+              प्रति कुल्फी लागत: ₹{costingBreakdown?.cost_per_saleable_kulfi?.toFixed(2) || '0.00'} / piece
+            </span>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
-            <div>
-              <label className="text-xs font-semibold text-gray-700 block mb-1">{t.gas}</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={overheads.gas || ''}
-                onChange={(e) => handleOverheadChange('gas', parseFloat(e.target.value) || 0)}
-                className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
-                placeholder="₹ 0"
-                min={0}
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-gray-700 block mb-1">{t.directLabour}</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={overheads.direct_labour || ''}
-                onChange={(e) => handleOverheadChange('direct_labour', parseFloat(e.target.value) || 0)}
-                className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
-                placeholder="₹ 0"
-                min={0}
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-gray-700 block mb-1">{t.electricity}</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={overheads.electricity || ''}
-                onChange={(e) => handleOverheadChange('electricity', parseFloat(e.target.value) || 0)}
-                className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
-                placeholder="₹ 0"
-                min={0}
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-semibold text-gray-700 block mb-1">{t.transportExpense}</label>
-              <input
-                type="number"
-                inputMode="decimal"
-                value={overheads.transport || ''}
-                onChange={(e) => handleOverheadChange('transport', parseFloat(e.target.value) || 0)}
-                className="w-full bg-cream-50 border border-cream-300 rounded-xl px-3 py-2 text-sm font-bold text-gray-900 focus:ring-2 focus:ring-maroon-800 focus:outline-none"
-                placeholder="₹ 0"
-                min={0}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* 5. Live Costing & Profit Result Card */}
-        {costingBreakdown && (
-          <div className="pt-6 space-y-4">
-            <div className="p-5 rounded-3xl bg-gradient-to-br from-maroon-950 via-maroon-900 to-amber-950 text-white shadow-xl">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-white/15">
-                <div>
-                  <span className="text-xs font-bold uppercase tracking-wider text-amber-300">
-                    रेसिपी परिणाम ({standardOutputPieces} पीस बैच)
-                  </span>
-                  <h3 className="text-lg font-black text-white">
-                    {t.estimatedProductionCostAndProfit}
-                  </h3>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="warning" className="bg-amber-400 text-maroon-950 font-bold">
-                    {activeProduct?.name_hi || activeProduct?.name_en}
-                  </Badge>
-                  <span className="text-xs font-bold text-amber-200">
-                    बिक्री मूल्य: ₹{activeProduct?.current_price}
-                  </span>
-                </div>
-              </div>
-
-              {/* Summary KPIs */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 pt-4">
-                <div className="p-3.5 rounded-2xl bg-white/10 backdrop-blur-sm">
-                  <span className="text-xs text-gray-300 font-semibold block">प्रति पीस लागत</span>
-                  <span className="text-2xl sm:text-3xl font-black font-mono text-amber-300 block mt-0.5">
-                    ₹{costingBreakdown.cost_per_saleable_kulfi.toFixed(2)}
-                  </span>
-                  <span className="text-[11px] text-gray-300 mt-1 block">
-                    कुल बैच लागत: {formatCurrency(costingBreakdown.total_batch_cost)}
-                  </span>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-white/10 backdrop-blur-sm">
-                  <span className="text-xs text-gray-300 font-semibold block">प्रति पीस मुनाफा</span>
-                  <span className="text-2xl sm:text-3xl font-black font-mono text-emerald-300 block mt-0.5">
-                    ₹{costingBreakdown.estimated_profit_per_kulfi.toFixed(2)}
-                  </span>
-                  <span className="text-[11px] text-emerald-200 mt-1 block">
-                    ग्रॉस मार्जिन: <strong>{costingBreakdown.gross_margin_percentage}%</strong>
-                  </span>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-white/15 backdrop-blur-sm">
-                  <span className="text-xs text-emerald-300 font-semibold block">कुल अनुमानित मुनाफा</span>
-                  <span className="text-xl sm:text-2xl font-black font-mono text-emerald-300 block mt-0.5">
-                    {formatCurrency(costingBreakdown.estimated_total_gross_profit)}
-                  </span>
-                  <span className="text-[11px] text-gray-300 mt-1 block">
-                    कुल बिक्री मूल्य: {formatCurrency(costingBreakdown.expected_total_sales)}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 6. Form Action Bar */}
-        <div className="pt-6">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-cream-50 p-4 rounded-2xl border border-cream-200">
+          <div className="flex items-center gap-2 w-full sm:w-auto">
             <Button
               variant="outline"
               size="md"
@@ -902,30 +847,30 @@ export const ProductionCostCalculatorPage: React.FC = () => {
               onClick={handleResetForm}
               className="w-full sm:w-auto"
             >
-              {t.resetForm}
+              रीसेट (Reset)
             </Button>
 
             {isOwner && (
               <Button
                 variant="primary"
-                size="lg"
+                size="md"
                 leftIcon={<Save className="w-4 h-4" />}
-                onClick={handleSaveDefaultRecipe}
+                onClick={handleSaveRecipe}
                 isLoading={saveRecipeMutation.isPending}
                 className="w-full sm:w-auto font-extrabold shadow-md shadow-maroon-900/20"
               >
-                {t.saveDefaultRecipe}
+                रेसिपी संस्करण सुरक्षित करें (Save Version)
               </Button>
             )}
           </div>
         </div>
       </Card>
 
-      {/* Recipe History Modal */}
+      {/* Recipe Version History Modal */}
       <Modal
         isOpen={isHistoryModalOpen}
         onClose={() => setIsHistoryModalOpen(false)}
-        title={`${activeProduct?.name_hi || activeProduct?.name_en} - ${t.recipeHistory}`}
+        title={`${activeProduct?.name_hi || activeProduct?.name_en} - रेसिपी संस्करण इतिहास (Recipe Versions)`}
         maxWidth="lg"
       >
         <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
@@ -935,29 +880,88 @@ export const ProductionCostCalculatorPage: React.FC = () => {
             recipeHistory.map((rec) => (
               <div
                 key={rec.id}
-                className="p-4 rounded-2xl border border-cream-200 bg-cream-50/70 space-y-2 text-xs"
+                className={`p-4 rounded-2xl border transition-all space-y-3 text-xs ${
+                  rec.status === 'active' || rec.is_default
+                    ? 'border-emerald-300 bg-emerald-50/40 shadow-xs'
+                    : 'border-cream-200 bg-cream-50/70'
+                }`}
               >
                 <div className="flex items-center justify-between border-b border-cream-200 pb-2">
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-sm text-gray-900">
-                      संस्करण v{rec.version_number}
+                      {rec.name || `संस्करण v${rec.version_number}`}
                     </span>
-                    {rec.is_default && <Badge variant="success">डिफ़ॉल्ट</Badge>}
+                    {rec.status === 'active' || rec.is_default ? (
+                      <Badge variant="success">सक्रिय (Active)</Badge>
+                    ) : rec.status === 'draft' ? (
+                      <Badge variant="warning">ड्राफ्ट (Draft)</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-gray-500">संग्रहीत (Archived)</Badge>
+                    )}
                   </div>
                   <span className="text-gray-500">{formatDate(rec.created_at)}</span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 text-gray-700">
-                  <div>मानक उत्पादन: <strong>{rec.standard_output_pieces} pcs</strong></div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-gray-700">
+                  <div>मानक उपज: <strong>{rec.expected_yield_pieces || rec.standard_output_pieces} pcs</strong></div>
                   <div>सामग्री प्रकार: <strong>{rec.items?.length || 0} आइटम्स</strong></div>
+                  <div>संस्करण: <strong>v{rec.version_number}</strong></div>
                 </div>
 
                 {rec.notes && <p className="text-gray-500 italic mt-1">{rec.notes}</p>}
+
+                {/* Actions */}
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-cream-200">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleLoadRecipeVersion(rec)}
+                  >
+                    संपादक में लोड करें
+                  </Button>
+
+                  {isOwner && rec.status !== 'active' && !rec.is_default && (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      leftIcon={<Check className="w-3.5 h-3.5" />}
+                      onClick={() => handleActivateRecipe(rec.id)}
+                      isLoading={activateRecipeMutation.isPending}
+                    >
+                      सक्रिय करें (Activate)
+                    </Button>
+                  )}
+
+                  {isOwner && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-rose-600 hover:bg-rose-50"
+                      leftIcon={<Trash2 className="w-3.5 h-3.5" />}
+                      onClick={() => setRecipeToDelete(rec)}
+                    >
+                      हटाएं / आर्काइव
+                    </Button>
+                  )}
+                </div>
               </div>
             ))
           )}
         </div>
       </Modal>
+
+      {/* Delete / Archive Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={Boolean(recipeToDelete)}
+        onClose={() => setRecipeToDelete(null)}
+        onConfirm={handleConfirmDeleteRecipe}
+        title="रेसिपी संस्करण हटाएं (Delete Recipe Version)"
+        description={`क्या आप वाकई रेसिपी संस्करण v${recipeToDelete?.version_number} को हटाना चाहते हैं? यदि यह उत्पादन इतिहास में प्रयुक्त है, तो डेटा सुरक्षा नियमों के तहत इसे स्थायी रूप से हटाने के बजाय स्वतः संग्रहीत (Archived) कर दिया जाएगा।`}
+        confirmText="हाँ, हटाएं"
+        cancelText="रद्द करें"
+        variant="danger"
+        isLoading={deleteRecipeMutation.isPending}
+      />
 
       {/* Add Custom Ingredient Modal */}
       <Modal
@@ -967,7 +971,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
       >
         <form onSubmit={handleAddCustomIngredientSubmit} className="space-y-4">
           <Input
-            label="सामग्री का नाम (हिंदी)"
+            label="सामग्री का नाम (हिंदी) *"
             placeholder="उदा. पिस्ता कतरन, बादाम गिरी"
             value={customIngNameHi}
             onChange={(e) => setCustomIngNameHi(e.target.value)}
@@ -1020,7 +1024,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
           </div>
 
           <Input
-            label={t.purchaseRate}
+            label={`${t.purchaseRate} (₹)`}
             type="number"
             inputMode="decimal"
             step="any"

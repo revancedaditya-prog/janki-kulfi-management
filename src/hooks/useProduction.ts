@@ -54,6 +54,39 @@ export function useCompleteProductionBatch() {
   });
 }
 
+export function useCompleteProductionWithRecipeTransaction() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async (params: {
+      productionDate: string;
+      productId: string;
+      producedQuantity: number;
+      damagedQuantity?: number;
+      recipeId?: string;
+      actualIngredients?: { ingredient_id: string; actual_quantity: number; unit: any; reason?: string }[];
+      notes?: string;
+      lpgCost?: number;
+      overheadCosts?: any;
+      idempotencyKey?: string;
+    }) => {
+      return api.completeProductionWithRecipeTransaction({
+        ...params,
+        userId: user?.id || 'usr-owner-001',
+      });
+    },
+    onSuccess: async () => {
+      queryClient.invalidateQueries({ queryKey: ['production_batches'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['ingredients'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-movements'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['stock-locations'], exact: false });
+      await invalidateAndRefetchStockQueries(queryClient);
+    },
+  });
+}
+
 export function useCompleteProductionWithRawMaterials() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
@@ -82,7 +115,7 @@ export function useCompleteProductionWithRawMaterials() {
       queryClient.invalidateQueries({ queryKey: ['ingredients'], exact: false });
       queryClient.invalidateQueries({ queryKey: ['raw-material-movements'], exact: false });
       queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'], exact: false });
-      queryClient.invalidateQueries({ queryKey: ['reorder-list'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['stock-locations'], exact: false });
       await invalidateAndRefetchStockQueries(queryClient);
     },
   });
