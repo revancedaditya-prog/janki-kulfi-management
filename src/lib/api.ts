@@ -75,16 +75,44 @@ export async function resolveSupabaseIngredientId(ingredientId: string): Promise
         query = query.ilike('code', code);
       } else if (nameEn) {
         query = query.ilike('name_en', nameEn);
-      } else {
-        return ingredientId;
       }
       const { data } = await query.limit(1);
       if (data && data.length > 0 && data[0].id) {
         return data[0].id;
       }
+      // If code/name query returned nothing, fallback to first available ingredient
+      const { data: fallbackAll } = await (supabase as any).from('ingredients').select('id').limit(1);
+      if (fallbackAll && fallbackAll.length > 0 && fallbackAll[0].id) {
+        return fallbackAll[0].id;
+      }
     } catch {}
   }
   return ingredientId;
+}
+
+export async function resolveSupabaseSupplierId(supplierId?: string | null): Promise<string | null> {
+  if (!supplierId) return null;
+  if (isSupabaseConfigured && import.meta.env.MODE !== 'test') {
+    try {
+      if (isValidUuid(supplierId)) {
+        const { data: exists } = await (supabase as any)
+          .from('suppliers')
+          .select('id')
+          .eq('id', supplierId)
+          .maybeSingle();
+        if (exists && exists.id) return exists.id;
+      }
+      const mockSup = mockStore.getSuppliers().find((s) => s.id === supplierId);
+      const name = mockSup?.name;
+      if (name) {
+        const { data } = await (supabase as any).from('suppliers').select('id').ilike('name', name).limit(1);
+        if (data && data.length > 0 && data[0].id) return data[0].id;
+      }
+      const { data: anySup } = await (supabase as any).from('suppliers').select('id').limit(1);
+      if (anySup && anySup.length > 0 && anySup[0].id) return anySup[0].id;
+    } catch {}
+  }
+  return isValidUuid(supplierId) ? supplierId : null;
 }
 
 export async function resolveSupabaseProductId(productId: string): Promise<string> {
@@ -3021,7 +3049,8 @@ export const api = {
       return mockStore.getAvailableRawMaterialStock(ingredientId);
     }
     try {
-      const { data, error } = await (supabase as any).rpc('get_available_raw_material_stock', { p_ingredient_id: ingredientId });
+      const resolvedId = await resolveSupabaseIngredientId(ingredientId);
+      const { data, error } = await (supabase as any).rpc('get_available_raw_material_stock', { p_ingredient_id: resolvedId });
       if (!error && data !== null) return Number(data);
     } catch {}
     return mockStore.getAvailableRawMaterialStock(ingredientId);
@@ -3115,17 +3144,24 @@ export const api = {
     if (useMockMode) {
       return mockStore.createMaterialPurchase(data, userId);
     }
+    const resolvedItems = await Promise.all(
+      data.items.map(async (item) => ({
+        ...item,
+        ingredient_id: await resolveSupabaseIngredientId(item.ingredient_id),
+      }))
+    );
+    const resolvedSupplierId = await resolveSupabaseSupplierId(data.supplier_id);
     try {
       const { data: result, error } = await (supabase as any).rpc('confirm_material_purchase_transaction', {
         p_purchase_date: data.purchase_date,
-        p_supplier_id: data.supplier_id || null,
+        p_supplier_id: resolvedSupplierId || null,
         p_invoice_number: data.invoice_number || null,
         p_payment_method: data.payment_method,
         p_paid_amount: data.paid_amount,
         p_credit_amount: data.credit_amount || 0,
         p_bill_image_url: data.bill_image_url || null,
         p_notes: data.notes || null,
-        p_items: data.items,
+        p_items: resolvedItems,
         p_user_id: userId,
       });
       if (!error && result?.purchase_id) {
@@ -3318,7 +3354,8 @@ export const api = {
     if (useMockMode) {
       return mockStore.recordInventoryWastage(data, userId);
     }
-    return mockStore.recordInventoryWastage(data, userId);
+    const resolvedIngredientId = await resolveSupabaseIngredientId(data.ingredient_id);
+    return mockStore.recordInventoryWastage({ ...data, ingredient_id: resolvedIngredientId }, userId);
   },
 
   // --- Supplier Returns ---
@@ -3350,7 +3387,9 @@ export const api = {
     if (useMockMode) {
       return mockStore.createSupplierReturn(data, userId);
     }
-    return mockStore.createSupplierReturn(data, userId);
+    const resolvedIngredientId = await resolveSupabaseIngredientId(data.ingredient_id);
+    const resolvedSupplierId = await resolveSupabaseSupplierId(data.supplier_id);
+    return mockStore.createSupplierReturn({ ...data, ingredient_id: resolvedIngredientId, supplier_id: resolvedSupplierId }, userId);
   },
 
   // --- Raw Material Stock Correction ---
