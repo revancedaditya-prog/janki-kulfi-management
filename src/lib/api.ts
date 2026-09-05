@@ -48,13 +48,24 @@ export function isValidUuid(id?: string | null): boolean {
 
 export async function resolveSupabaseIngredientId(ingredientId: string): Promise<string> {
   if (!ingredientId) return ingredientId;
-  if (isValidUuid(ingredientId)) return ingredientId;
 
-  // Resolve mock ID (e.g. 'ing-milk-01') or code (e.g. 'ING-MILK') to real Supabase UUID
+  // Resolve mock ID (e.g. 'ing-milk-01'), code (e.g. 'ING-MILK'), or stale UUID to active Supabase UUID
   if (isSupabaseConfigured && import.meta.env.MODE !== 'test') {
     try {
+      if (isValidUuid(ingredientId)) {
+        const { data: exists } = await (supabase as any)
+          .from('ingredients')
+          .select('id')
+          .eq('id', ingredientId)
+          .maybeSingle();
+
+        if (exists && exists.id) {
+          return exists.id;
+        }
+      }
+
       const mockIng = mockStore.getIngredientById(ingredientId);
-      const code = mockIng?.code || ingredientId.toUpperCase();
+      const code = mockIng?.code || (isValidUuid(ingredientId) ? null : ingredientId.toUpperCase());
       const nameEn = mockIng?.name_en;
 
       let query = (supabase as any).from('ingredients').select('id');
@@ -62,6 +73,10 @@ export async function resolveSupabaseIngredientId(ingredientId: string): Promise
         query = query.or(`code.ilike.${code},name_en.ilike.${nameEn}`);
       } else if (code) {
         query = query.ilike('code', code);
+      } else if (nameEn) {
+        query = query.ilike('name_en', nameEn);
+      } else {
+        return ingredientId;
       }
       const { data } = await query.limit(1);
       if (data && data.length > 0 && data[0].id) {
@@ -2952,7 +2967,8 @@ export const api = {
       return mockStore.updateIngredient(id, updates, reason, userId);
     }
     try {
-      const { data, error } = await (supabase as any).from('ingredients').update(updates).eq('id', id).select().single();
+      const resolvedId = await resolveSupabaseIngredientId(id);
+      const { data, error } = await (supabase as any).from('ingredients').update(updates).eq('id', resolvedId).select().single();
       if (!error && data) return data;
     } catch {}
     return mockStore.updateIngredient(id, updates, reason, userId);
@@ -2963,7 +2979,8 @@ export const api = {
       return mockStore.deactivateIngredient(id, reason, userId);
     }
     try {
-      const { error } = await (supabase as any).from('ingredients').update({ is_active: false }).eq('id', id);
+      const resolvedId = await resolveSupabaseIngredientId(id);
+      const { error } = await (supabase as any).from('ingredients').update({ is_active: false }).eq('id', resolvedId);
       if (!error) return true;
     } catch {}
     return mockStore.deactivateIngredient(id, reason, userId);
@@ -2974,7 +2991,8 @@ export const api = {
       return mockStore.reactivateIngredient(id, userId);
     }
     try {
-      const { error } = await (supabase as any).from('ingredients').update({ is_active: true }).eq('id', id);
+      const resolvedId = await resolveSupabaseIngredientId(id);
+      const { error } = await (supabase as any).from('ingredients').update({ is_active: true }).eq('id', resolvedId);
       if (!error) return true;
     } catch {}
     return mockStore.reactivateIngredient(id, userId);
@@ -2985,8 +3003,9 @@ export const api = {
       const deleted = mockStore.deleteIngredient(id, reason, userId);
       return { success: true, deleted, message: 'सामग्री स्थायी रूप से हटा दी गई' };
     }
+    const resolvedId = await resolveSupabaseIngredientId(id);
     const { data, error } = await (supabase as any).rpc('delete_ingredient_transaction', {
-      p_ingredient_id: id,
+      p_ingredient_id: resolvedId,
       p_reason: reason || null,
       p_user_id: userId || null,
     });
@@ -3344,8 +3363,9 @@ export const api = {
     if (useMockMode) {
       return mockStore.correctRawMaterialStock(params);
     }
+    const resolvedId = await resolveSupabaseIngredientId(params.ingredientId);
     const { data, error } = await (supabase as any).rpc('correct_raw_material_stock_transaction', {
-      p_ingredient_id: params.ingredientId,
+      p_ingredient_id: resolvedId,
       p_new_quantity: params.newQuantity,
       p_reason: params.reason,
       p_user_id: params.userId || null,

@@ -937,7 +937,11 @@ DECLARE
 BEGIN
   SELECT * INTO v_recipe FROM recipes WHERE id = p_recipe_id;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Recipe % not found', p_recipe_id;
+    RETURN jsonb_build_object(
+      'success', true,
+      'deleted', true,
+      'message', 'Recipe version does not exist or has already been removed.'
+    );
   END IF;
 
   SELECT COUNT(*) INTO v_batch_count FROM production_batches WHERE recipe_id = p_recipe_id;
@@ -1024,7 +1028,7 @@ DECLARE
 BEGIN
   SELECT * INTO v_ing FROM ingredients WHERE id = p_ingredient_id;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Ingredient % not found', p_ingredient_id;
+    RETURN jsonb_build_object('success', true, 'deleted', true, 'message', 'Ingredient does not exist or has already been removed.');
   END IF;
 
   SELECT COUNT(*) INTO v_recipe_usage FROM recipe_items WHERE ingredient_id = p_ingredient_id;
