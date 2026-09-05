@@ -1236,6 +1236,11 @@ DECLARE
 BEGIN
   -- 1. Sada Kulfi Standard Recipe (100 pcs)
   SELECT id INTO v_sada_rec FROM recipes WHERE product_id = v_sada_prod AND version_number = 1 LIMIT 1;
+  
+  -- Archive all recipes for this product first to prevent unique active recipe conflicts
+  UPDATE recipes SET status = 'archived', is_default = false 
+  WHERE product_id = v_sada_prod;
+
   IF v_sada_rec IS NULL THEN
     v_sada_rec := '20000000-0000-0000-0000-000000000001';
     INSERT INTO recipes (id, product_id, version_number, name, standard_output_pieces, expected_yield_pieces, status, is_default, default_overheads)
@@ -1251,9 +1256,6 @@ BEGIN
     WHERE id = v_sada_rec;
   END IF;
 
-  UPDATE recipes SET status = 'archived', is_default = false 
-  WHERE product_id = v_sada_prod AND id <> v_sada_rec;
-
   DELETE FROM recipe_items WHERE recipe_id = v_sada_rec;
 
   INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES
@@ -1267,6 +1269,11 @@ BEGIN
 
   -- 2. Rabri Kulfi Standard Recipe (100 pcs)
   SELECT id INTO v_rabri_rec FROM recipes WHERE product_id = v_rabri_prod AND version_number = 1 LIMIT 1;
+  
+  -- Archive all recipes for this product first to prevent unique active recipe conflicts
+  UPDATE recipes SET status = 'archived', is_default = false 
+  WHERE product_id = v_rabri_prod;
+
   IF v_rabri_rec IS NULL THEN
     v_rabri_rec := '20000000-0000-0000-0000-000000000002';
     INSERT INTO recipes (id, product_id, version_number, name, standard_output_pieces, expected_yield_pieces, status, is_default, default_overheads)
@@ -1282,9 +1289,6 @@ BEGIN
     WHERE id = v_rabri_rec;
   END IF;
 
-  UPDATE recipes SET status = 'archived', is_default = false 
-  WHERE product_id = v_rabri_prod AND id <> v_rabri_rec;
-
   DELETE FROM recipe_items WHERE recipe_id = v_rabri_rec;
 
   INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES
@@ -1299,6 +1303,11 @@ BEGIN
 
   -- 3. Premium Kulfi Standard Recipe (100 pcs)
   SELECT id INTO v_prem_rec FROM recipes WHERE product_id = v_prem_prod AND version_number = 1 LIMIT 1;
+  
+  -- Archive all recipes for this product first to prevent unique active recipe conflicts
+  UPDATE recipes SET status = 'archived', is_default = false 
+  WHERE product_id = v_prem_prod;
+
   IF v_prem_rec IS NULL THEN
     v_prem_rec := '20000000-0000-0000-0000-000000000003';
     INSERT INTO recipes (id, product_id, version_number, name, standard_output_pieces, expected_yield_pieces, status, is_default, default_overheads)
@@ -1313,9 +1322,6 @@ BEGIN
       default_overheads = '{"gas":90,"direct_labour":100,"electricity":40,"transport":15,"other":15}'::jsonb
     WHERE id = v_prem_rec;
   END IF;
-
-  UPDATE recipes SET status = 'archived', is_default = false 
-  WHERE product_id = v_prem_prod AND id <> v_prem_rec;
 
   DELETE FROM recipe_items WHERE recipe_id = v_prem_rec;
 
