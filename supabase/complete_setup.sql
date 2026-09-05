@@ -1157,12 +1157,21 @@ ON CONFLICT (sku) DO UPDATE SET
   description = EXCLUDED.description;
 
 -- 8.3 Standard Prices & Commissions
-INSERT INTO product_prices (id, product_id, selling_price, commission_type, commission_value, effective_from) VALUES
-  ('c0000000-0000-0000-0000-000000000001', 'b0000000-0000-0000-0000-000000000001', 10.00, 'fixed', 2.00, NOW()),
-  ('c0000000-0000-0000-0000-000000000002', 'b0000000-0000-0000-0000-000000000002', 20.00, 'fixed', 4.00, NOW()),
-  ('c0000000-0000-0000-0000-000000000003', 'b0000000-0000-0000-0000-000000000003', 30.00, 'fixed', 6.00, NOW()),
-  ('c0000000-0000-0000-0000-000000000004', 'b0000000-0000-0000-0000-000000000004', 50.00, 'fixed', 10.00, NOW())
-ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_prices (product_id, selling_price, commission_type, commission_value, effective_from)
+SELECT id, 10.00, 'fixed', 2.00, NOW() FROM products WHERE sku = 'JK-SADA-01'
+AND NOT EXISTS (SELECT 1 FROM product_prices WHERE product_id = products.id);
+
+INSERT INTO product_prices (product_id, selling_price, commission_type, commission_value, effective_from)
+SELECT id, 20.00, 'fixed', 4.00, NOW() FROM products WHERE sku = 'JK-RABRI-02'
+AND NOT EXISTS (SELECT 1 FROM product_prices WHERE product_id = products.id);
+
+INSERT INTO product_prices (product_id, selling_price, commission_type, commission_value, effective_from)
+SELECT id, 30.00, 'fixed', 6.00, NOW() FROM products WHERE sku = 'JK-PREM-03'
+AND NOT EXISTS (SELECT 1 FROM product_prices WHERE product_id = products.id);
+
+INSERT INTO product_prices (product_id, selling_price, commission_type, commission_value, effective_from)
+SELECT id, 50.00, 'fixed', 10.00, NOW() FROM products WHERE sku = 'JK-MATKA-04'
+AND NOT EXISTS (SELECT 1 FROM product_prices WHERE product_id = products.id);
 
 -- 8.4 Standard Carts
 INSERT INTO carts (id, cart_code, cart_name, location, is_active) VALUES
@@ -1172,16 +1181,24 @@ INSERT INTO carts (id, cart_code, cart_name, location, is_active) VALUES
 ON CONFLICT (cart_code) DO NOTHING;
 
 -- 8.5 Standard Sellers
-INSERT INTO sellers (id, seller_code, full_name, phone, address, default_cart_id, is_active, opening_balance) VALUES
-  ('e0000000-0000-0000-0000-000000000001', 'SLR-001', 'Ramesh Kumar (रमेश कुमार)', '9876543210', 'Ward 4, Mirehchi, Etah', 'd0000000-0000-0000-0000-000000000001', true, 0.00),
-  ('e0000000-0000-0000-0000-000000000002', 'SLR-002', 'Suresh Chandra (सुरेश चन्द्र)', '9876543211', 'Station Road, Mirehchi, Etah', 'd0000000-0000-0000-0000-000000000002', true, 0.00)
+INSERT INTO sellers (seller_code, full_name, phone, address, default_cart_id, is_active, opening_balance)
+VALUES
+  ('SLR-001', 'Ramesh Kumar (रमेश कुमार)', '9876543210', 'Ward 4, Mirehchi, Etah', (SELECT id FROM carts WHERE cart_code = 'CART-01' LIMIT 1), true, 0.00),
+  ('SLR-002', 'Suresh Chandra (सुरेश चन्द्र)', '9876543211', 'Station Road, Mirehchi, Etah', (SELECT id FROM carts WHERE cart_code = 'CART-02' LIMIT 1), true, 0.00)
 ON CONFLICT (seller_code) DO NOTHING;
 
 -- 8.6 Seller Stock Holding Locations
-INSERT INTO stock_locations (id, location_type, name, seller_id, cart_id, is_active) VALUES
-  ('f0000000-0000-0000-0000-000000000001', 'seller', 'Ramesh Kumar Cart Stock', 'e0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000001', true),
-  ('f0000000-0000-0000-0000-000000000002', 'seller', 'Suresh Chandra Cart Stock', 'e0000000-0000-0000-0000-000000000002', 'd0000000-0000-0000-0000-000000000002', true)
-ON CONFLICT (id) DO NOTHING;
+INSERT INTO stock_locations (location_type, name, seller_id, cart_id, is_active)
+SELECT 'seller', 'Ramesh Kumar Cart Stock', s.id, c.id, true
+FROM sellers s CROSS JOIN carts c
+WHERE s.seller_code = 'SLR-001' AND c.cart_code = 'CART-01'
+AND NOT EXISTS (SELECT 1 FROM stock_locations WHERE seller_id = s.id);
+
+INSERT INTO stock_locations (location_type, name, seller_id, cart_id, is_active)
+SELECT 'seller', 'Suresh Chandra Cart Stock', s.id, c.id, true
+FROM sellers s CROSS JOIN carts c
+WHERE s.seller_code = 'SLR-002' AND c.cart_code = 'CART-02'
+AND NOT EXISTS (SELECT 1 FROM stock_locations WHERE seller_id = s.id);
 
 -- 8.7 Standard Ingredients
 INSERT INTO ingredients (id, code, name_en, name_hi, category, base_unit, current_rate, rate_unit, is_active)
@@ -1227,115 +1244,139 @@ AND NOT EXISTS (
 -- 8.9 Default Standard Recipes
 DO $$
 DECLARE
-  v_sada_prod UUID := 'b0000000-0000-0000-0000-000000000001';
-  v_rabri_prod UUID := 'b0000000-0000-0000-0000-000000000002';
-  v_prem_prod UUID := 'b0000000-0000-0000-0000-000000000003';
+  v_sada_prod UUID;
+  v_rabri_prod UUID;
+  v_prem_prod UUID;
   v_sada_rec UUID;
   v_rabri_rec UUID;
   v_prem_rec UUID;
+  v_milk_id UUID;
+  v_sugar_id UUID;
+  v_khoya_id UUID;
+  v_cashew_id UUID;
+  v_pista_id UUID;
+  v_almond_id UUID;
+  v_cardamom_id UUID;
+  v_saffron_id UUID;
+  v_stick_id UUID;
+  v_wrapper_id UUID;
 BEGIN
+  -- Resolve Product IDs
+  SELECT id INTO v_sada_prod FROM products WHERE sku = 'JK-SADA-01' LIMIT 1;
+  SELECT id INTO v_rabri_prod FROM products WHERE sku = 'JK-RABRI-02' LIMIT 1;
+  SELECT id INTO v_prem_prod FROM products WHERE sku = 'JK-PREM-03' LIMIT 1;
+
+  -- Resolve Ingredient IDs dynamically by code
+  SELECT id INTO v_milk_id FROM ingredients WHERE code = 'ING-MILK' LIMIT 1;
+  SELECT id INTO v_sugar_id FROM ingredients WHERE code = 'ING-SUGAR' LIMIT 1;
+  SELECT id INTO v_khoya_id FROM ingredients WHERE code = 'ING-KHOYA' LIMIT 1;
+  SELECT id INTO v_cashew_id FROM ingredients WHERE code = 'ING-CASHEW' LIMIT 1;
+  SELECT id INTO v_pista_id FROM ingredients WHERE code = 'ING-PISTA' LIMIT 1;
+  SELECT id INTO v_almond_id FROM ingredients WHERE code = 'ING-ALMOND' LIMIT 1;
+  SELECT id INTO v_cardamom_id FROM ingredients WHERE code = 'ING-CARDAMOM' LIMIT 1;
+  SELECT id INTO v_saffron_id FROM ingredients WHERE code = 'ING-SAFFRON' LIMIT 1;
+  SELECT id INTO v_stick_id FROM ingredients WHERE code = 'ING-STICK' LIMIT 1;
+  SELECT id INTO v_wrapper_id FROM ingredients WHERE code = 'ING-WRAPPER' LIMIT 1;
+
   -- 1. Sada Kulfi Standard Recipe (100 pcs)
-  SELECT id INTO v_sada_rec FROM recipes WHERE product_id = v_sada_prod AND version_number = 1 LIMIT 1;
-  
-  -- Archive all recipes for this product first to prevent unique active recipe conflicts
-  UPDATE recipes SET status = 'archived', is_default = false 
-  WHERE product_id = v_sada_prod;
+  IF v_sada_prod IS NOT NULL THEN
+    SELECT id INTO v_sada_rec FROM recipes WHERE product_id = v_sada_prod AND version_number = 1 LIMIT 1;
+    
+    UPDATE recipes SET status = 'archived', is_default = false 
+    WHERE product_id = v_sada_prod;
 
-  IF v_sada_rec IS NULL THEN
-    v_sada_rec := '20000000-0000-0000-0000-000000000001';
-    INSERT INTO recipes (id, product_id, version_number, name, standard_output_pieces, expected_yield_pieces, status, is_default, default_overheads)
-    VALUES (v_sada_rec, v_sada_prod, 1, 'Standard Sada 100 pcs', 100, 100, 'active', true, '{"gas":50,"direct_labour":60,"electricity":20,"transport":10,"other":10}'::jsonb);
-  ELSE
-    UPDATE recipes SET 
-      name = 'Standard Sada 100 pcs',
-      standard_output_pieces = 100,
-      expected_yield_pieces = 100,
-      status = 'active',
-      is_default = true,
-      default_overheads = '{"gas":50,"direct_labour":60,"electricity":20,"transport":10,"other":10}'::jsonb
-    WHERE id = v_sada_rec;
+    IF v_sada_rec IS NULL THEN
+      INSERT INTO recipes (product_id, version_number, name, standard_output_pieces, expected_yield_pieces, status, is_default, default_overheads)
+      VALUES (v_sada_prod, 1, 'Standard Sada 100 pcs', 100, 100, 'active', true, '{"gas":50,"direct_labour":60,"electricity":20,"transport":10,"other":10}'::jsonb)
+      RETURNING id INTO v_sada_rec;
+    ELSE
+      UPDATE recipes SET 
+        name = 'Standard Sada 100 pcs',
+        standard_output_pieces = 100,
+        expected_yield_pieces = 100,
+        status = 'active',
+        is_default = true,
+        default_overheads = '{"gas":50,"direct_labour":60,"electricity":20,"transport":10,"other":10}'::jsonb
+      WHERE id = v_sada_rec;
+    END IF;
+
+    DELETE FROM recipe_items WHERE recipe_id = v_sada_rec;
+
+    IF v_milk_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_sada_rec, v_milk_id, 10, 'litre', 1); END IF;
+    IF v_sugar_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_sada_rec, v_sugar_id, 1.2, 'kg', 2); END IF;
+    IF v_khoya_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_sada_rec, v_khoya_id, 0.5, 'kg', 3); END IF;
+    IF v_cardamom_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_sada_rec, v_cardamom_id, 0.015, 'kg', 4); END IF;
+    IF v_stick_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_sada_rec, v_stick_id, 100, 'piece', 5); END IF;
+    IF v_wrapper_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_sada_rec, v_wrapper_id, 100, 'piece', 6); END IF;
   END IF;
-
-  DELETE FROM recipe_items WHERE recipe_id = v_sada_rec;
-
-  INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES
-    (v_sada_rec, '10000000-0000-0000-0000-000000000001', 10, 'litre', 1),
-    (v_sada_rec, '10000000-0000-0000-0000-000000000002', 1.2, 'kg', 2),
-    (v_sada_rec, '10000000-0000-0000-0000-000000000003', 0.5, 'kg', 3),
-    (v_sada_rec, '10000000-0000-0000-0000-000000000008', 0.015, 'kg', 4),
-    (v_sada_rec, '10000000-0000-0000-0000-000000000011', 100, 'piece', 5),
-    (v_sada_rec, '10000000-0000-0000-0000-000000000012', 100, 'piece', 6)
-  ON CONFLICT DO NOTHING;
 
   -- 2. Rabri Kulfi Standard Recipe (100 pcs)
-  SELECT id INTO v_rabri_rec FROM recipes WHERE product_id = v_rabri_prod AND version_number = 1 LIMIT 1;
-  
-  -- Archive all recipes for this product first to prevent unique active recipe conflicts
-  UPDATE recipes SET status = 'archived', is_default = false 
-  WHERE product_id = v_rabri_prod;
+  IF v_rabri_prod IS NOT NULL THEN
+    SELECT id INTO v_rabri_rec FROM recipes WHERE product_id = v_rabri_prod AND version_number = 1 LIMIT 1;
+    
+    UPDATE recipes SET status = 'archived', is_default = false 
+    WHERE product_id = v_rabri_prod;
 
-  IF v_rabri_rec IS NULL THEN
-    v_rabri_rec := '20000000-0000-0000-0000-000000000002';
-    INSERT INTO recipes (id, product_id, version_number, name, standard_output_pieces, expected_yield_pieces, status, is_default, default_overheads)
-    VALUES (v_rabri_rec, v_rabri_prod, 1, 'Standard Rabri 100 pcs', 100, 100, 'active', true, '{"gas":70,"direct_labour":80,"electricity":30,"transport":10,"other":10}'::jsonb);
-  ELSE
-    UPDATE recipes SET 
-      name = 'Standard Rabri 100 pcs',
-      standard_output_pieces = 100,
-      expected_yield_pieces = 100,
-      status = 'active',
-      is_default = true,
-      default_overheads = '{"gas":70,"direct_labour":80,"electricity":30,"transport":10,"other":10}'::jsonb
-    WHERE id = v_rabri_rec;
+    IF v_rabri_rec IS NULL THEN
+      INSERT INTO recipes (product_id, version_number, name, standard_output_pieces, expected_yield_pieces, status, is_default, default_overheads)
+      VALUES (v_rabri_prod, 1, 'Standard Rabri 100 pcs', 100, 100, 'active', true, '{"gas":70,"direct_labour":80,"electricity":30,"transport":10,"other":10}'::jsonb)
+      RETURNING id INTO v_rabri_rec;
+    ELSE
+      UPDATE recipes SET 
+        name = 'Standard Rabri 100 pcs',
+        standard_output_pieces = 100,
+        expected_yield_pieces = 100,
+        status = 'active',
+        is_default = true,
+        default_overheads = '{"gas":70,"direct_labour":80,"electricity":30,"transport":10,"other":10}'::jsonb
+      WHERE id = v_rabri_rec;
+    END IF;
+
+    DELETE FROM recipe_items WHERE recipe_id = v_rabri_rec;
+
+    IF v_milk_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rabri_rec, v_milk_id, 15, 'litre', 1); END IF;
+    IF v_sugar_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rabri_rec, v_sugar_id, 1.5, 'kg', 2); END IF;
+    IF v_khoya_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rabri_rec, v_khoya_id, 1.0, 'kg', 3); END IF;
+    IF v_cashew_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rabri_rec, v_cashew_id, 0.2, 'kg', 4); END IF;
+    IF v_pista_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rabri_rec, v_pista_id, 0.1, 'kg', 5); END IF;
+    IF v_stick_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rabri_rec, v_stick_id, 100, 'piece', 6); END IF;
+    IF v_wrapper_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_rabri_rec, v_wrapper_id, 100, 'piece', 7); END IF;
   END IF;
-
-  DELETE FROM recipe_items WHERE recipe_id = v_rabri_rec;
-
-  INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES
-    (v_rabri_rec, '10000000-0000-0000-0000-000000000001', 15, 'litre', 1),
-    (v_rabri_rec, '10000000-0000-0000-0000-000000000002', 1.5, 'kg', 2),
-    (v_rabri_rec, '10000000-0000-0000-0000-000000000003', 1.0, 'kg', 3),
-    (v_rabri_rec, '10000000-0000-0000-0000-000000000004', 0.2, 'kg', 4),
-    (v_rabri_rec, '10000000-0000-0000-0000-000000000005', 0.1, 'kg', 5),
-    (v_rabri_rec, '10000000-0000-0000-0000-000000000011', 100, 'piece', 6),
-    (v_rabri_rec, '10000000-0000-0000-0000-000000000012', 100, 'piece', 7)
-  ON CONFLICT DO NOTHING;
 
   -- 3. Premium Kulfi Standard Recipe (100 pcs)
-  SELECT id INTO v_prem_rec FROM recipes WHERE product_id = v_prem_prod AND version_number = 1 LIMIT 1;
-  
-  -- Archive all recipes for this product first to prevent unique active recipe conflicts
-  UPDATE recipes SET status = 'archived', is_default = false 
-  WHERE product_id = v_prem_prod;
+  IF v_prem_prod IS NOT NULL THEN
+    SELECT id INTO v_prem_rec FROM recipes WHERE product_id = v_prem_prod AND version_number = 1 LIMIT 1;
+    
+    UPDATE recipes SET status = 'archived', is_default = false 
+    WHERE product_id = v_prem_prod;
 
-  IF v_prem_rec IS NULL THEN
-    v_prem_rec := '20000000-0000-0000-0000-000000000003';
-    INSERT INTO recipes (id, product_id, version_number, name, standard_output_pieces, expected_yield_pieces, status, is_default, default_overheads)
-    VALUES (v_prem_rec, v_prem_prod, 1, 'Standard Premium 100 pcs', 100, 100, 'active', true, '{"gas":90,"direct_labour":100,"electricity":40,"transport":15,"other":15}'::jsonb);
-  ELSE
-    UPDATE recipes SET 
-      name = 'Standard Premium 100 pcs',
-      standard_output_pieces = 100,
-      expected_yield_pieces = 100,
-      status = 'active',
-      is_default = true,
-      default_overheads = '{"gas":90,"direct_labour":100,"electricity":40,"transport":15,"other":15}'::jsonb
-    WHERE id = v_prem_rec;
+    IF v_prem_rec IS NULL THEN
+      INSERT INTO recipes (product_id, version_number, name, standard_output_pieces, expected_yield_pieces, status, is_default, default_overheads)
+      VALUES (v_prem_prod, 1, 'Standard Premium 100 pcs', 100, 100, 'active', true, '{"gas":90,"direct_labour":100,"electricity":40,"transport":15,"other":15}'::jsonb)
+      RETURNING id INTO v_prem_rec;
+    ELSE
+      UPDATE recipes SET 
+        name = 'Standard Premium 100 pcs',
+        standard_output_pieces = 100,
+        expected_yield_pieces = 100,
+        status = 'active',
+        is_default = true,
+        default_overheads = '{"gas":90,"direct_labour":100,"electricity":40,"transport":15,"other":15}'::jsonb
+      WHERE id = v_prem_rec;
+    END IF;
+
+    DELETE FROM recipe_items WHERE recipe_id = v_prem_rec;
+
+    IF v_milk_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_prem_rec, v_milk_id, 20, 'litre', 1); END IF;
+    IF v_sugar_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_prem_rec, v_sugar_id, 2.0, 'kg', 2); END IF;
+    IF v_khoya_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_prem_rec, v_khoya_id, 1.5, 'kg', 3); END IF;
+    IF v_cashew_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_prem_rec, v_cashew_id, 0.3, 'kg', 4); END IF;
+    IF v_pista_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_prem_rec, v_pista_id, 0.2, 'kg', 5); END IF;
+    IF v_almond_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_prem_rec, v_almond_id, 0.3, 'kg', 6); END IF;
+    IF v_saffron_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_prem_rec, v_saffron_id, 2, 'g', 7); END IF;
+    IF v_stick_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_prem_rec, v_stick_id, 100, 'piece', 8); END IF;
+    IF v_wrapper_id IS NOT NULL THEN INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES (v_prem_rec, v_wrapper_id, 100, 'piece', 9); END IF;
   END IF;
-
-  DELETE FROM recipe_items WHERE recipe_id = v_prem_rec;
-
-  INSERT INTO recipe_items (recipe_id, ingredient_id, quantity, unit, sort_order) VALUES
-    (v_prem_rec, '10000000-0000-0000-0000-000000000001', 20, 'litre', 1),
-    (v_prem_rec, '10000000-0000-0000-0000-000000000002', 2.0, 'kg', 2),
-    (v_prem_rec, '10000000-0000-0000-0000-000000000003', 1.5, 'kg', 3),
-    (v_prem_rec, '10000000-0000-0000-0000-000000000004', 0.3, 'kg', 4),
-    (v_prem_rec, '10000000-0000-0000-0000-000000000005', 0.2, 'kg', 5),
-    (v_prem_rec, '10000000-0000-0000-0000-000000000006', 0.3, 'kg', 6),
-    (v_prem_rec, '10000000-0000-0000-0000-000000000009', 2, 'g', 7),
-    (v_prem_rec, '10000000-0000-0000-0000-000000000011', 100, 'piece', 8),
-    (v_prem_rec, '10000000-0000-0000-0000-000000000012', 100, 'piece', 9)
-  ON CONFLICT DO NOTHING;
 END $$;
 
 -- 8.10 Standard Commercial LPG Cylinders
