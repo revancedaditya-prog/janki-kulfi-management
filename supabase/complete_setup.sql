@@ -982,12 +982,20 @@ DECLARE
 BEGIN
   SELECT * INTO v_ing FROM ingredients WHERE id = p_ingredient_id;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Ingredient % not found', p_ingredient_id;
+    SELECT * INTO v_ing FROM ingredients WHERE code ILIKE p_ingredient_id::TEXT LIMIT 1;
+  END IF;
+
+  IF NOT FOUND OR v_ing.id IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'ingredient_not_found',
+      'message', 'Ingredient not found in database. Please refresh your inventory list.'
+    );
   END IF;
 
   SELECT COALESCE(SUM(quantity), 0) INTO v_current_stock 
   FROM raw_material_movements 
-  WHERE ingredient_id = p_ingredient_id;
+  WHERE ingredient_id = v_ing.id;
 
   v_diff := p_new_quantity - v_current_stock;
   IF v_diff = 0 THEN
@@ -999,7 +1007,7 @@ BEGIN
     quantity, base_unit, movement_type, unit_cost_snapshot, total_value_snapshot,
     reason, performed_by
   ) VALUES (
-    p_ingredient_id, NOW(), 'Physical Stock Count', COALESCE(v_ing.storage_location, 'Kitchen Area'),
+    v_ing.id, NOW(), 'Physical Stock Count', COALESCE(v_ing.storage_location, 'Kitchen Area'),
     v_diff, v_ing.base_unit, 'physical_count_correction', v_ing.current_rate,
     ABS(v_diff) * v_ing.current_rate, p_reason, p_user_id
   );
@@ -1041,6 +1049,85 @@ BEGIN
 
   DELETE FROM ingredients WHERE id = p_ingredient_id;
   RETURN jsonb_build_object('success', true, 'deleted', true, 'message', 'Ingredient deleted successfully.');
+END;
+$$;
+
+-- 6.5b Backward Compatible Production Completion with Raw Materials
+CREATE OR REPLACE FUNCTION complete_production_with_raw_materials_transaction(
+  p_batch_id UUID,
+  p_raw_materials JSONB,
+  p_allow_emergency_override BOOLEAN DEFAULT false,
+  p_override_reason TEXT DEFAULT NULL,
+  p_user_id UUID DEFAULT NULL
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_batch RECORD;
+  v_mat JSONB;
+  v_ing RECORD;
+  v_used_qty NUMERIC(12,3);
+  v_base_qty NUMERIC(12,3);
+  v_avail_qty NUMERIC(12,3);
+  v_unit_rate NUMERIC(12,4);
+  v_item_cost NUMERIC(12,2);
+  v_total_raw_cost NUMERIC(12,2) := 0.00;
+  v_freezer_loc_id UUID := 'a0000000-0000-0000-0000-000000000002';
+BEGIN
+  SELECT * INTO v_batch FROM production_batches WHERE id = p_batch_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Production batch not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  IF v_batch.status = 'completed' THEN
+    RETURN jsonb_build_object('success', true, 'message', 'Batch already completed.');
+  END IF;
+
+  -- Process Raw Material Deductions
+  FOR v_mat IN SELECT * FROM jsonb_array_elements(p_raw_materials) LOOP
+    IF (v_mat->>'ingredient_id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+      SELECT * INTO v_ing FROM ingredients WHERE id = (v_mat->>'ingredient_id')::UUID;
+    ELSE
+      SELECT * INTO v_ing FROM ingredients WHERE code ILIKE (v_mat->>'ingredient_id') LIMIT 1;
+    END IF;
+
+    IF NOT FOUND OR v_ing.id IS NULL THEN
+      CONTINUE;
+    END IF;
+
+    v_used_qty := COALESCE((v_mat->>'quantity_used')::NUMERIC, 0);
+    v_base_qty := v_used_qty * COALESCE(v_ing.conversion_factor, 1.0000);
+    v_unit_rate := COALESCE(v_ing.current_rate, 0.00);
+    v_item_cost := ROUND(v_base_qty * v_unit_rate, 2);
+    v_total_raw_cost := v_total_raw_cost + v_item_cost;
+
+    INSERT INTO raw_material_movements (
+      ingredient_id, movement_date, source_location, destination_location,
+      quantity, base_unit, movement_type, reference_id, reference_type,
+      unit_cost_snapshot, total_value_snapshot, reason, performed_by
+    ) VALUES (
+      v_ing.id, NOW(), COALESCE(v_ing.storage_location, 'Kitchen Area'),
+      'Production Batch ' || v_batch.batch_number,
+      -v_base_qty, v_ing.base_unit, 'production_consumption',
+      p_batch_id, 'production_batches', v_unit_rate, v_item_cost,
+      'Batch ' || v_batch.batch_number || ' raw material consumption', p_user_id
+    );
+  END LOOP;
+
+  UPDATE production_batches
+  SET status = 'completed',
+      total_ingredient_cost = CASE WHEN total_ingredient_cost > 0 THEN total_ingredient_cost ELSE v_total_raw_cost END,
+      completed_at = NOW(),
+      updated_at = NOW()
+  WHERE id = p_batch_id;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'batch_id', p_batch_id,
+    'total_ingredient_cost', v_total_raw_cost,
+    'message', 'Production completed and raw materials deducted successfully.'
+  );
 END;
 $$;
 

@@ -3460,9 +3460,15 @@ export const api = {
     if (useMockMode) {
       return mockStore.completeProductionWithRawMaterials(batchId, rawMaterials, allowEmergencyOverride, overrideReason, userId);
     }
+    const resolvedRawMaterials = await Promise.all(
+      rawMaterials.map(async (rm) => ({
+        ...rm,
+        ingredient_id: await resolveSupabaseIngredientId(rm.ingredient_id),
+      }))
+    );
     const { error } = await (supabase as any).rpc('complete_production_with_raw_materials_transaction', {
       p_batch_id: batchId,
-      p_raw_materials: rawMaterials,
+      p_raw_materials: resolvedRawMaterials,
       p_allow_emergency_override: allowEmergencyOverride,
       p_override_reason: overrideReason || null,
       p_user_id: userId,
