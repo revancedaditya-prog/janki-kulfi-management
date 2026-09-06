@@ -1291,18 +1291,18 @@ BEGIN
 END;
 $$;
 
--- 6.5.1 Confirm Material Purchase Transaction (Resilient)
+-- 6.5.1 Confirm Material Purchase Transaction (Resilient & Schema-Safe)
 CREATE OR REPLACE FUNCTION confirm_material_purchase_transaction(
   p_purchase_date DATE,
-  p_supplier_id UUID,
+  p_supplier_id TEXT,
   p_invoice_number TEXT,
   p_payment_method TEXT,
-  p_paid_amount NUMERIC(12,2),
-  p_credit_amount NUMERIC(12,2),
+  p_paid_amount NUMERIC,
+  p_credit_amount NUMERIC,
   p_bill_image_url TEXT,
   p_notes TEXT,
   p_items JSONB,
-  p_user_id UUID DEFAULT NULL
+  p_user_id TEXT DEFAULT NULL
 ) RETURNS JSONB AS $$
 DECLARE
   v_purchase_id UUID;
@@ -1327,11 +1327,19 @@ DECLARE
   v_curr_qty NUMERIC(12,3);
   v_curr_rate NUMERIC(12,4);
   v_new_wac NUMERIC(12,4);
-  v_effective_supplier_id UUID := p_supplier_id;
+  v_effective_supplier_id UUID := NULL;
+  v_effective_user_id UUID := NULL;
 BEGIN
-  -- Validate supplier ID
-  IF v_effective_supplier_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM suppliers WHERE id = v_effective_supplier_id) THEN
-    v_effective_supplier_id := NULL;
+  -- Safe UUID conversions
+  IF p_supplier_id IS NOT NULL AND p_supplier_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_effective_supplier_id := p_supplier_id::UUID;
+    IF NOT EXISTS (SELECT 1 FROM suppliers WHERE id = v_effective_supplier_id) THEN
+      v_effective_supplier_id := NULL;
+    END IF;
+  END IF;
+
+  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_effective_user_id := p_user_id::UUID;
   END IF;
 
   v_purchase_number := 'PUR-' || TO_CHAR(COALESCE(p_purchase_date, CURRENT_DATE), 'YYYYMMDD') || '-' || LPAD(FLOOR(RANDOM() * 9000 + 1000)::TEXT, 4, '0');
