@@ -3355,7 +3355,11 @@ export const api = {
       .neq('status', 'cancelled');
 
     if (purchaseError) {
-      throw new Error(`[Dashboard KPIs Purchases ${purchaseError.code || ''}]: ${purchaseError.message}`);
+      if (purchaseError.code === 'PGRST205' || purchaseError.code === '42P01') {
+        console.warn('[Supabase] Table material_purchases not found in schema cache. Please run migration 025 in Supabase SQL editor.');
+      } else {
+        throw new Error(`[Dashboard KPIs Purchases ${purchaseError.code || ''}]: ${purchaseError.message}`);
+      }
     }
 
     const purchasesThisMonth = (purchaseData || []).reduce((sum: number, p: any) => sum + Number(p.grand_total || 0), 0);
@@ -3368,7 +3372,11 @@ export const api = {
       .gte('movement_date', startOfMonth);
 
     if (consumError) {
-      throw new Error(`[Dashboard KPIs Consumption ${consumError.code || ''}]: ${consumError.message}`);
+      if (consumError.code === 'PGRST205' || consumError.code === '42P01') {
+        console.warn('[Supabase] Table raw_material_movements not found in schema cache. Please run migration 025 in Supabase SQL editor.');
+      } else {
+        throw new Error(`[Dashboard KPIs Consumption ${consumError.code || ''}]: ${consumError.message}`);
+      }
     }
 
     const productionConsumptionThisMonth = (consumptionData || []).reduce((sum: number, c: any) => {
@@ -3413,6 +3421,10 @@ export const api = {
       .order('purchase_date', { ascending: false });
 
     if (error) {
+      if (error.code === 'PGRST205' || error.code === '42P01') {
+        console.warn('[Supabase] Table material_purchases not found in schema cache. Please run migration 025 in Supabase SQL editor.');
+        return [];
+      }
       throw new Error(`[Material Purchases ${error.code || ''}]: ${error.message}`);
     }
     return data || [];
@@ -3430,6 +3442,10 @@ export const api = {
       .maybeSingle();
 
     if (error) {
+      if (error.code === 'PGRST205' || error.code === '42P01') {
+        console.warn('[Supabase] Table material_purchases not found in schema cache. Please run migration 025 in Supabase SQL editor.');
+        return undefined;
+      }
       throw new Error(`[Material Purchase ${error.code || ''}]: ${error.message}`);
     }
     return data || undefined;
@@ -3541,6 +3557,12 @@ export const api = {
       .single();
 
     if (purchaseErr) {
+      if (purchaseErr.code === 'PGRST205' || purchaseErr.code === '42P01') {
+        throw new Error(
+          `[Supabase Purchase PGRST205]: Table 'public.material_purchases' is not yet present in your Supabase database schema cache. ` +
+          `Please open your Supabase SQL Editor and execute 'supabase/migrations/025_ensure_material_purchases_tables_and_cache.sql' or 'supabase/complete_setup.sql'.`
+        );
+      }
       throw new Error(`[Supabase Purchase ${purchaseErr.code || ''}]: ${purchaseErr.message}`);
     }
 

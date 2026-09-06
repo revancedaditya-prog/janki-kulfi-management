@@ -1589,13 +1589,21 @@ ALTER TABLE seller_settlements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE settlement_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_movements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE raw_material_movements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE material_purchases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE material_purchase_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory_lots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE physical_stock_counts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE physical_stock_count_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE lpg_cylinders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE lpg_cylinder_readings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory_wastage ENABLE ROW LEVEL SECURITY;
+ALTER TABLE supplier_returns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reorder_list ENABLE ROW LEVEL SECURITY;
 ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_closings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
 
--- Permissive authenticated read and manage policies
+-- Permissive read and manage policies for all public tables
 DO $$
 DECLARE
   tbl TEXT;
@@ -1605,11 +1613,16 @@ BEGIN
     EXECUTE format('CREATE POLICY "Authenticated users full access" ON %I FOR ALL TO authenticated USING (true) WITH CHECK (true);', tbl);
     EXECUTE format('DROP POLICY IF EXISTS "Public read access" ON %I;', tbl);
     EXECUTE format('CREATE POLICY "Public read access" ON %I FOR SELECT TO anon USING (true);', tbl);
+    EXECUTE format('DROP POLICY IF EXISTS "Public full access" ON %I;', tbl);
+    EXECUTE format('CREATE POLICY "Public full access" ON %I FOR ALL TO anon USING (true) WITH CHECK (true);', tbl);
   END LOOP;
 END $$;
 
--- Grant EXECUTE on all RPCs
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO authenticated, anon;
+-- Grant ALL privileges to authenticated, anon, service_role
+GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, anon, authenticated, service_role;
 
 -- ============================================================================
 -- 8. AUTHORITATIVE MASTER & SEED DATA
