@@ -762,6 +762,7 @@ WHERE p.is_active = true;
 CREATE OR REPLACE VIEW v_raw_material_stock AS
 SELECT 
   i.id,
+  i.id AS ingredient_id,
   i.code,
   i.name_en,
   i.name_hi,
@@ -772,6 +773,7 @@ SELECT
   i.min_stock_level,
   i.reorder_quantity,
   i.current_rate,
+  i.current_rate AS latest_purchase_rate,
   i.rate_unit,
   i.preferred_supplier_id,
   i.preferred_supplier_name,
@@ -780,6 +782,7 @@ SELECT
   i.track_lots,
   i.is_active,
   COALESCE(SUM(rmm.quantity), 0) AS current_stock,
+  COALESCE(SUM(rmm.quantity), 0) AS available_base_quantity,
   (COALESCE(SUM(rmm.quantity), 0) * i.current_rate) AS total_value,
   CASE 
     WHEN COALESCE(SUM(rmm.quantity), 0) <= 0 THEN 'out_of_stock'

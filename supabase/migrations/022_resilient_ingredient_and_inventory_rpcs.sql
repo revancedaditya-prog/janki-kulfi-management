@@ -78,6 +78,41 @@ ALTER TABLE raw_material_movements ADD COLUMN IF NOT EXISTS reversal_of_movement
 ALTER TABLE raw_material_movements ADD COLUMN IF NOT EXISTS performed_by UUID REFERENCES profiles(id) ON DELETE SET NULL;
 ALTER TABLE raw_material_movements ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES profiles(id) ON DELETE SET NULL;
 
+-- 1.1 Dual-Compatible Raw Material Stock View
+CREATE OR REPLACE VIEW v_raw_material_stock AS
+SELECT 
+  i.id,
+  i.id AS ingredient_id,
+  i.code,
+  i.name_en,
+  i.name_hi,
+  i.category,
+  i.base_unit,
+  i.purchase_unit,
+  i.conversion_factor,
+  i.min_stock_level,
+  i.reorder_quantity,
+  i.current_rate,
+  i.current_rate AS latest_purchase_rate,
+  i.rate_unit,
+  i.preferred_supplier_id,
+  i.preferred_supplier_name,
+  i.storage_location,
+  i.track_expiry,
+  i.track_lots,
+  i.is_active,
+  COALESCE(SUM(rmm.quantity), 0) AS current_stock,
+  COALESCE(SUM(rmm.quantity), 0) AS available_base_quantity,
+  (COALESCE(SUM(rmm.quantity), 0) * i.current_rate) AS total_value,
+  CASE 
+    WHEN COALESCE(SUM(rmm.quantity), 0) <= 0 THEN 'out_of_stock'
+    WHEN COALESCE(SUM(rmm.quantity), 0) <= i.min_stock_level THEN 'low_stock'
+    ELSE 'adequate'
+  END AS stock_status
+FROM ingredients i
+LEFT JOIN raw_material_movements rmm ON i.id = rmm.ingredient_id
+GROUP BY i.id;
+
 -- 2. Resilient confirm_material_purchase_transaction
 CREATE OR REPLACE FUNCTION confirm_material_purchase_transaction(
   p_purchase_date DATE,

@@ -2945,7 +2945,14 @@ export const api = {
         query = query.eq('is_active', true);
       }
       const { data, error } = await query;
-      if (!error && data && data.length > 0) return data;
+      if (!error && data && data.length > 0) {
+        return data.map((ing: any) => ({
+          ...ing,
+          id: ing.id || ing.ingredient_id,
+          current_stock: Number(ing.current_stock ?? ing.available_base_quantity) || 0,
+          current_rate: Number(ing.current_rate ?? ing.latest_purchase_rate) || 0,
+        }));
+      }
 
       // Fallback: query ingredients table directly
       let rawQuery = (supabase as any).from('ingredients').select('*').order('name_hi');
@@ -2956,8 +2963,9 @@ export const api = {
       if (!rawError && rawData && rawData.length > 0) {
         return rawData.map((ing: any) => ({
           ...ing,
-          current_stock: Number(ing.current_stock) || 0,
-          current_rate: Number(ing.current_rate) || 0,
+          id: ing.id || ing.ingredient_id,
+          current_stock: Number(ing.current_stock ?? ing.available_base_quantity) || 0,
+          current_rate: Number(ing.current_rate ?? ing.latest_purchase_rate) || 0,
         }));
       }
     } catch {}
@@ -2970,16 +2978,58 @@ export const api = {
     }
     try {
       const resolvedId = await resolveSupabaseIngredientId(id);
-      const { data, error } = await (supabase as any).from('v_raw_material_stock').select('*').eq('id', resolvedId).maybeSingle();
-      if (!error && data) return data;
 
-      const { data: rawData, error: rawError } = await (supabase as any).from('ingredients').select('*').eq('id', resolvedId).maybeSingle();
-      if (!rawError && rawData) return rawData;
+      // 1. Direct query on ingredients table
+      const { data: rawData, error: rawError } = await (supabase as any)
+        .from('ingredients')
+        .select('*')
+        .eq('id', resolvedId)
+        .maybeSingle();
 
-      // Fallback search by code or name in Supabase
+      if (!rawError && rawData) {
+        const { data: stockData } = await (supabase as any)
+          .from('raw_material_movements')
+          .select('quantity')
+          .eq('ingredient_id', rawData.id);
+        const currentStock = stockData ? stockData.reduce((sum: number, m: any) => sum + (Number(m.quantity) || 0), 0) : 0;
+        return {
+          ...rawData,
+          id: rawData.id,
+          current_stock: currentStock,
+          current_rate: Number(rawData.current_rate) || 0,
+        };
+      }
+
+      // 2. Query view with fallback
+      const { data, error } = await (supabase as any)
+        .from('v_raw_material_stock')
+        .select('*')
+        .or(`id.eq.${resolvedId},ingredient_id.eq.${resolvedId}`)
+        .maybeSingle();
+      if (!error && data) {
+        return {
+          ...data,
+          id: data.id || data.ingredient_id,
+          current_stock: Number(data.current_stock ?? data.available_base_quantity) || 0,
+          current_rate: Number(data.current_rate ?? data.latest_purchase_rate) || 0,
+        };
+      }
+
+      // 3. Fallback search by code or name in Supabase
       if (id && !isValidUuid(id)) {
-        const { data: byCode } = await (supabase as any).from('ingredients').select('*').or(`code.ilike.${id},name_en.ilike.${id}`).limit(1);
-        if (byCode && byCode.length > 0) return byCode[0];
+        const { data: byCode } = await (supabase as any)
+          .from('ingredients')
+          .select('*')
+          .or(`code.ilike.${id},name_en.ilike.${id}`)
+          .limit(1);
+        if (byCode && byCode.length > 0) {
+          return {
+            ...byCode[0],
+            id: byCode[0].id,
+            current_stock: Number(byCode[0].current_stock) || 0,
+            current_rate: Number(byCode[0].current_rate) || 0,
+          };
+        }
       }
     } catch {}
     return mockStore.getIngredientById(id);
