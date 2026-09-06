@@ -27,7 +27,6 @@ import { IngredientDetailPage } from './pages/inventory/IngredientDetailPage';
 import { MaterialPurchasesPage } from './pages/inventory/MaterialPurchasesPage';
 import { AddMaterialPurchasePage } from './pages/inventory/AddMaterialPurchasePage';
 import { PhysicalStockCheckPage } from './pages/inventory/PhysicalStockCheckPage';
-import { LpgCylinderPage } from './pages/inventory/LpgCylinderPage';
 import { WastagePage } from './pages/inventory/WastagePage';
 import { ExpenseMasterPage } from './pages/master/ExpenseMasterPage';
 import { MonthlyExpensesPage } from './pages/expenses/MonthlyExpensesPage';
@@ -95,7 +94,6 @@ export function App() {
                   <Route path="inventory/purchases/new" element={<AddMaterialPurchasePage />} />
                   <Route path="inventory/check" element={<PhysicalStockCheckPage />} />
                   <Route path="inventory/stock-check" element={<PhysicalStockCheckPage />} />
-                  <Route path="inventory/lpg" element={<LpgCylinderPage />} />
                   <Route path="inventory/wastage" element={<WastagePage />} />
                   <Route path="issues" element={<StockIssuesPage />} />
                   <Route path="settlements" element={<SettlementsPage />} />

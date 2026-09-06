@@ -17,7 +17,6 @@ import {
   Settings,
   Boxes,
   ShieldCheck,
-  Flame,
   Layers,
   FolderLock,
 } from 'lucide-react';
@@ -43,7 +42,6 @@ export const DesktopSidebar: React.FC = () => {
         { to: '/inventory', label: 'कच्चा माल प्रबंधन (Raw Materials)', icon: Layers, show: isProduction || isOwner },
         { to: '/inventory/check', label: 'स्टॉक सत्यापन (Physical Check)', icon: CalendarCheck, show: isOwner },
         { to: '/inventory/wastage', label: 'खराबी / वेस्टेज (Wastage)', icon: Boxes, show: isOwner },
-        { to: '/inventory/lpg', label: 'LPG गैस सिलेंडर', icon: Flame, show: isProduction || isOwner },
       ],
     },
     {

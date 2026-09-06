@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
 import { useIngredients, useUpdateIngredient } from '@/hooks/useInventory';
 import { useSuppliers } from '@/hooks/useSuppliers';
-import { useLpgCylinders, useRecordLpgReading } from '@/hooks/useLpg';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { Modal } from '@/components/common/Modal';
 import { Button } from '@/components/common/Button';
-import { CheckCircle2, Flame, Truck, ArrowRight, ArrowLeft } from 'lucide-react';
+import { CheckCircle2, Truck, ArrowRight, ArrowLeft } from 'lucide-react';
 
 interface Props {
   isOpen: boolean;
@@ -16,14 +15,11 @@ export const InventorySetupWizardModal: React.FC<Props> = ({ isOpen, onClose }) 
   const { t, language } = useLanguage();
   const { data: ingredients = [] } = useIngredients();
   const { data: suppliers = [] } = useSuppliers();
-  const { data: cylinders = [] } = useLpgCylinders();
 
   const updateIngredient = useUpdateIngredient();
-  const recordLpg = useRecordLpgReading();
 
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [step, setStep] = useState<1 | 2>(1);
   const [openingRates, setOpeningRates] = useState<Record<string, { rate: number; stock: number }>>({});
-  const [cylinderGross, setCylinderGross] = useState<Record<string, number>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -38,16 +34,10 @@ export const InventorySetupWizardModal: React.FC<Props> = ({ isOpen, onClose }) 
         };
       });
       setOpeningRates(rates);
-
-      const cyls: Record<string, number> = {};
-      cylinders.forEach((c) => {
-        cyls[c.id] = c.current_gross_weight;
-      });
-      setCylinderGross(cyls);
       setStep(1);
       setSuccessMsg(null);
     }
-  }, [isOpen, ingredients, cylinders]);
+  }, [isOpen, ingredients]);
 
   const handleRateChange = (id: string, field: 'rate' | 'stock', val: number) => {
     setOpeningRates((prev) => ({
@@ -70,19 +60,6 @@ export const InventorySetupWizardModal: React.FC<Props> = ({ isOpen, onClose }) 
             id: ing.id,
             updates: { current_rate: row.rate },
             reason: 'Setup Wizard Master Rate Calibration',
-          });
-        }
-      }
-
-      // 2. Update LPG cylinder gross weights
-      for (const c of cylinders) {
-        const gross = cylinderGross[c.id];
-        if (gross && gross !== c.current_gross_weight) {
-          await recordLpg.mutateAsync({
-            cylinderId: c.id,
-            grossWeight: gross,
-            readingType: 'weighed',
-            notes: 'Setup Wizard Initial Calibration',
           });
         }
       }
@@ -129,7 +106,7 @@ export const InventorySetupWizardModal: React.FC<Props> = ({ isOpen, onClose }) 
             </span>
           </div>
 
-          <div className="h-0.5 w-12 bg-stone-200" />
+          <div className="h-0.5 w-16 bg-stone-200" />
 
           <div className="flex items-center gap-2">
             <span
@@ -141,21 +118,6 @@ export const InventorySetupWizardModal: React.FC<Props> = ({ isOpen, onClose }) 
             </span>
             <span className="text-xs font-bold text-stone-900">
               {language === 'hi' ? 'सप्लायर जांच' : 'Suppliers'}
-            </span>
-          </div>
-
-          <div className="h-0.5 w-12 bg-stone-200" />
-
-          <div className="flex items-center gap-2">
-            <span
-              className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-                step === 3 ? 'bg-amber-600 text-white' : 'bg-stone-200 text-stone-700'
-              }`}
-            >
-              3
-            </span>
-            <span className="text-xs font-bold text-stone-900">
-              {language === 'hi' ? 'गैस सिलेंडर' : 'LPG Cylinders'}
             </span>
           </div>
         </div>
@@ -248,70 +210,6 @@ export const InventorySetupWizardModal: React.FC<Props> = ({ isOpen, onClose }) 
           </div>
         )}
 
-        {/* Step 3: LPG Cylinders Calibration */}
-        {step === 3 && (
-          <div className="space-y-4">
-            <div className="p-3 bg-orange-50 border border-orange-200 rounded-xl text-xs text-orange-950">
-              <p className="font-bold">
-                {language === 'hi'
-                  ? 'वर्तमान LPG सिलेंडर वजन (Cylinder Weighing Calibration):'
-                  : 'Enter current cylinder gross weight for accurate gas calculation:'}
-              </p>
-              <p className="text-[11px] text-orange-800 mt-1">
-                {language === 'hi'
-                  ? 'बची हुई गैस = वर्तमान कुल वजन (Gross) - खाली सिलेंडर वजन (Tare Weight)'
-                  : 'Remaining Gas = Gross Weight - Tare Weight printed on cylinder'}
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              {cylinders.map((cyl) => {
-                const currentGross = cylinderGross[cyl.id] || cyl.current_gross_weight;
-                const remaining = Math.max(0, currentGross - cyl.tare_weight);
-                return (
-                  <div key={cyl.id} className="p-3 border border-stone-200 rounded-xl space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Flame className="w-4 h-4 text-orange-600" />
-                        <span className="text-xs font-bold text-stone-900">{cyl.cylinder_code}</span>
-                        <span className="text-[11px] text-stone-500">
-                          (खाली वजन TW: {cyl.tare_weight} kg)
-                        </span>
-                      </div>
-                      <span className="text-xs font-bold text-orange-700">
-                        {remaining.toFixed(2)} kg गैस शेष
-                      </span>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-4 pt-1">
-                      <label className="text-[11px] text-stone-600 font-medium">
-                        {language === 'hi' ? 'कांटे पर कुल वजन (Gross Weight kg):' : 'Current Gross Weight (kg):'}
-                      </label>
-                      <div className="flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          step="0.1"
-                          min={cyl.tare_weight}
-                          max={cyl.tare_weight + cyl.rated_gas_capacity + 5}
-                          value={currentGross}
-                          onChange={(e) =>
-                            setCylinderGross((prev) => ({
-                              ...prev,
-                              [cyl.id]: parseFloat(e.target.value) || cyl.tare_weight,
-                            }))
-                          }
-                          className="w-24 px-2 py-1 text-xs font-bold text-stone-900 border border-stone-300 rounded text-right focus:ring-1 focus:ring-amber-500"
-                        />
-                        <span className="text-xs text-stone-500">kg</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
         {/* Modal Bottom Actions */}
         <div className="flex items-center justify-between pt-3 border-t border-stone-200">
           {step > 1 ? (
@@ -332,7 +230,7 @@ export const InventorySetupWizardModal: React.FC<Props> = ({ isOpen, onClose }) 
               {t.cancel}
             </Button>
 
-            {step < 3 ? (
+            {step < 2 ? (
               <Button
                 variant="primary"
                 size="sm"
