@@ -2162,15 +2162,21 @@ class MockStore {
   }
 
   public addIngredient(
-    ingredient: Omit<Ingredient, 'id' | 'created_at' | 'updated_at'>,
+    ingredient: Omit<Ingredient, 'id' | 'created_at' | 'updated_at'> & {
+      opening_stock?: number;
+      opening_stock_rate?: number;
+      opening_stock_date?: string;
+      opening_stock_reason?: string;
+    },
     userId: string = 'usr-owner-001'
   ): Ingredient {
     const id = `ing-${generateId().slice(0, 8)}`;
     const now = new Date().toISOString();
+    const { opening_stock, opening_stock_rate, opening_stock_date, opening_stock_reason, ...ingData } = ingredient;
 
     const newIng: Ingredient = {
       id,
-      ...ingredient,
+      ...ingData,
       created_at: now,
       updated_at: now,
     };
@@ -2189,6 +2195,29 @@ class MockStore {
       created_by: userId,
       created_at: now,
     });
+
+    if (Number(opening_stock) > 0) {
+      const qty = Number(opening_stock);
+      const rate = Number(opening_stock_rate ?? ingredient.current_rate ?? 0);
+      if (!this.state.raw_material_movements) this.state.raw_material_movements = [];
+      this.state.raw_material_movements.push({
+        id: `rmm-${generateId().slice(0, 8)}`,
+        ingredient_id: id,
+        movement_date: opening_stock_date || now,
+        source_location: 'Opening Stock',
+        destination_location: ingredient.storage_location || 'Main Raw Material Store',
+        quantity: qty,
+        base_unit: ingredient.base_unit,
+        movement_type: 'opening_stock' as any,
+        reference_table: 'ingredients',
+        reference_id: id,
+        unit_cost_snapshot: rate,
+        total_value_snapshot: Number((qty * rate).toFixed(2)),
+        reason: opening_stock_reason || 'Initial Opening Stock Entry',
+        created_by: userId,
+        created_at: now,
+      });
+    }
 
     this.logAudit('ingredients', id, 'CREATE_INGREDIENT', null, newIng, `Added ingredient ${newIng.name_en}`, userId);
     this.saveState();

@@ -204,3 +204,24 @@ export function allocateFefoLots(
     unallocatedQuantity: remainingNeeded,
   };
 }
+
+/**
+ * Compute running balances for a list of movements for a specific ingredient
+ */
+export function computeMovementRunningBalances<T extends { movement_date: string; quantity: number }>(
+  movements: T[]
+): (T & { running_balance: number })[] {
+  // Sort oldest first to compute cumulative running balance
+  const sorted = [...movements].sort((a, b) => new Date(a.movement_date).getTime() - new Date(b.movement_date).getTime());
+  let running = 0;
+  const withBalance = sorted.map((m) => {
+    running += Number(m.quantity) || 0;
+    return {
+      ...m,
+      running_balance: Number(running.toFixed(3)),
+    };
+  });
+  // Return sorted newest first for ledger display
+  return withBalance.sort((a, b) => new Date(b.movement_date).getTime() - new Date(a.movement_date).getTime());
+}
+

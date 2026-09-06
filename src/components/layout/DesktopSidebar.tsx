@@ -39,11 +39,9 @@ export const DesktopSidebar: React.FC = () => {
     {
       title: 'Raw Materials / कच्चा माल',
       items: [
-        { to: '/inventory', label: 'कच्चा माल स्टॉक (Stock)', icon: Layers, show: isProduction || isOwner },
-        { to: '/inventory/purchases', label: 'सामग्री खरीद (Stock-In)', icon: Truck, show: isOwner },
+        { to: '/inventory', label: 'कच्चा माल प्रबंधन (Raw Materials)', icon: Layers, show: isProduction || isOwner },
         { to: '/inventory/check', label: 'स्टॉक सत्यापन (Physical Check)', icon: CalendarCheck, show: isOwner },
         { to: '/inventory/wastage', label: 'खराबी / वेस्टेज (Wastage)', icon: Boxes, show: isOwner },
-        { to: '/inventory/returns', label: 'सप्लायर वापसी (Returns)', icon: Truck, show: isOwner },
         { to: '/inventory/lpg', label: 'LPG गैस सिलेंडर', icon: Flame, show: isProduction || isOwner },
       ],
     },
@@ -60,7 +58,6 @@ export const DesktopSidebar: React.FC = () => {
       items: [
         { to: '/products', label: 'उत्पाद व मूल्य (Products & Prices)', icon: Package, show: isOwner },
         { to: '/production/cost-calculator', label: 'रेसिपी और लागत कैलकुलेटर', icon: Calculator, show: isOwner || isProduction },
-        { to: '/inventory/items', label: 'कच्चा माल मास्टर (Raw Materials)', icon: Package, show: isOwner },
         { to: '/sellers', label: t.navSellers, icon: Users, show: isOwner },
         { to: '/audit', label: t.navAudit, icon: History, show: isOwner },
         { to: '/settings/backup', label: 'बैकअप केंद्र (Backup)', icon: ShieldCheck, show: isOwner },

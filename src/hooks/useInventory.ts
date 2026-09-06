@@ -24,11 +24,17 @@ export function useCreateIngredient() {
   const { user } = useAuth();
 
   return useMutation({
-    mutationFn: (ingredient: Omit<Ingredient, 'id' | 'created_at' | 'updated_at'>) =>
+    mutationFn: (ingredient: Omit<Ingredient, 'id' | 'created_at' | 'updated_at'> & {
+      opening_stock?: number;
+      opening_stock_rate?: number;
+      opening_stock_date?: string;
+      opening_stock_reason?: string;
+    }) =>
       api.createIngredient(ingredient, user?.id || 'usr-owner-001'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ingredients'] });
       queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-movements'] });
     },
   });
 }

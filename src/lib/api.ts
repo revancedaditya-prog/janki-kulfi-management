@@ -3035,13 +3035,41 @@ export const api = {
     return mockStore.getIngredientById(id);
   },
 
-  async createIngredient(ingredient: Omit<Ingredient, 'id' | 'created_at' | 'updated_at'>, userId: string): Promise<Ingredient> {
+  async createIngredient(
+    ingredient: Omit<Ingredient, 'id' | 'created_at' | 'updated_at'> & {
+      opening_stock?: number;
+      opening_stock_rate?: number;
+      opening_stock_date?: string;
+      opening_stock_reason?: string;
+    },
+    userId: string
+  ): Promise<Ingredient> {
     if (useMockMode) {
       return mockStore.addIngredient(ingredient, userId);
     }
     try {
-      const { data, error } = await (supabase as any).from('ingredients').insert(ingredient).select().single();
-      if (!error && data) return data;
+      const { opening_stock, opening_stock_rate, opening_stock_date, opening_stock_reason, ...ingData } = ingredient;
+      const { data, error } = await (supabase as any).from('ingredients').insert(ingData).select().single();
+      if (!error && data) {
+        if (Number(opening_stock) > 0) {
+          const qty = Number(opening_stock);
+          const rate = Number(opening_stock_rate ?? data.current_rate ?? 0);
+          await (supabase as any).from('raw_material_movements').insert({
+            ingredient_id: data.id,
+            movement_type: 'opening_stock',
+            quantity: qty,
+            base_unit: data.base_unit,
+            unit_cost_snapshot: rate,
+            total_value_snapshot: Number((qty * rate).toFixed(2)),
+            movement_date: opening_stock_date || new Date().toISOString(),
+            source_location: 'Opening Balance',
+            destination_location: data.storage_location || 'Main Store',
+            reason: opening_stock_reason || 'Initial opening stock entry',
+            created_by: userId,
+          });
+        }
+        return data;
+      }
     } catch {}
     return mockStore.addIngredient(ingredient, userId);
   },
