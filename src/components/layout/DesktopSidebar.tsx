@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Flame,
   Layers,
+  FolderLock,
 } from 'lucide-react';
 
 export const DesktopSidebar: React.FC = () => {
@@ -48,7 +49,8 @@ export const DesktopSidebar: React.FC = () => {
     {
       title: 'Financials & Control / हिसाब व नियंत्रण',
       items: [
-        { to: '/expenses', label: t.navExpenses, icon: Wallet, show: isOwner },
+        { to: '/expenses', label: 'दैनिक खर्च (Daily Expenses)', icon: Wallet, show: isOwner },
+        { to: '/expenses/monthly', label: 'मासिक खर्च (Monthly Expenses)', icon: CalendarCheck, show: isOwner },
         { to: '/closing', label: t.navClosing, icon: CalendarCheck, show: isOwner },
         { to: '/reports', label: t.navReports, icon: BarChart3, show: isOwner },
       ],
@@ -56,6 +58,7 @@ export const DesktopSidebar: React.FC = () => {
     {
       title: 'Master Data / मास्टर डेटा',
       items: [
+        { to: '/master/expenses', label: 'खर्च मास्टर (Expense Master)', icon: FolderLock, show: isOwner },
         { to: '/products', label: 'उत्पाद व मूल्य (Products & Prices)', icon: Package, show: isOwner },
         { to: '/production/cost-calculator', label: 'रेसिपी और लागत कैलकुलेटर', icon: Calculator, show: isOwner || isProduction },
         { to: '/sellers', label: t.navSellers, icon: Users, show: isOwner },

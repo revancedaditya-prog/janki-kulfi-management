@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   useExpenses,
   useCreateExpense,
@@ -34,6 +35,8 @@ import {
   Building2,
   FileText,
   Image as ImageIcon,
+  FolderLock,
+  CalendarCheck,
 } from 'lucide-react';
 import { Expense, ExpenseCategory, PaymentMethod } from '@/types';
 
@@ -260,7 +263,19 @@ export const ExpensesPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link to="/expenses/monthly">
+            <Button variant="outline" size="sm" leftIcon={<CalendarCheck className="w-4 h-4 text-amber-600" />}>
+              मासिक खर्च (Monthly)
+            </Button>
+          </Link>
+
+          <Link to="/master/expenses">
+            <Button variant="outline" size="sm" leftIcon={<FolderLock className="w-4 h-4 text-sky-600" />}>
+              खर्च मास्टर (Master)
+            </Button>
+          </Link>
+
           <div className="bg-white px-3.5 py-1.5 rounded-2xl border border-cream-300 shadow-sm text-right">
             <span className="text-[10px] font-bold text-gray-500 block">कुल सक्रिय खर्चे (Active)</span>
             <span className="text-base font-black text-rose-800 font-mono">

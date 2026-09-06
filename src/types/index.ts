@@ -14,6 +14,54 @@ export type SellerIssueItem = Database['public']['Tables']['seller_issue_items']
 export type SellerSettlement = Database['public']['Tables']['seller_settlements']['Row'];
 export type SettlementItem = Database['public']['Tables']['settlement_items']['Row'];
 export type Expense = Database['public']['Tables']['expenses']['Row'];
+export type ExpenseHead = Database['public']['Tables']['expense_heads']['Row'];
+export type ExpenseGroup = 'monthly_fixed' | 'variable_production';
+export type CalculationMode = 'manual' | 'automatic';
+export type MonthlyExpenseStatus = 'pending' | 'paid' | 'voided';
+
+export interface MonthlyExpenseItem {
+  head: ExpenseHead;
+  month: string; // 'YYYY-MM'
+  expected_amount: number;
+  actual_amount: number;
+  due_date: string;
+  status: MonthlyExpenseStatus;
+  expense?: Expense | null;
+  paid_date?: string | null;
+  payment_method?: PaymentMethod | null;
+  notes?: string | null;
+}
+
+export interface MonthlyExpenseSummary {
+  month: string;
+  expected_total: number;
+  paid_total: number;
+  pending_total: number;
+  items: MonthlyExpenseItem[];
+}
+
+export interface ProfitLossReport {
+  from_date: string;
+  to_date: string;
+  month: string;
+  days_in_month: number;
+  gross_sales: number;
+  net_received_sales: number;
+  total_commission: number;
+  production_ingredient_cost: number;
+  packaging_cost: number;
+  lpg_energy_cost: number;
+  total_production_cost: number;
+  confirmed_monthly_fixed_expenses: number;
+  pending_monthly_fixed_templates: number;
+  other_manual_expenses: number;
+  total_operating_expenses: number;
+  daily_allocated_fixed_cost: number;
+  gross_profit: number;
+  net_operating_profit: number;
+  profit_margin_percentage: number;
+}
+
 export type StockMovement = Database['public']['Tables']['stock_movements']['Row'];
 export type DailyClosing = Database['public']['Tables']['daily_closings']['Row'];
 export type AuditLog = Database['public']['Tables']['audit_logs']['Row'];

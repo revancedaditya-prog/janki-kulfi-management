@@ -40,6 +40,10 @@ import {
   SupplierReturn,
   ReorderItem,
   RawMaterialDashboardKPIs,
+  ExpenseHead,
+  MonthlyExpenseItem,
+  MonthlyExpenseSummary,
+  ProfitLossReport,
 } from '@/types';
 import {
   calculateSaleableProduction,
@@ -89,6 +93,7 @@ interface LocalStoreState {
   inventory_wastage?: InventoryWastage[];
   supplier_returns?: SupplierReturn[];
   reorder_list?: ReorderItem[];
+  expense_heads?: ExpenseHead[];
 }
 
 const DEFAULT_STATE: LocalStoreState = {
@@ -469,6 +474,141 @@ const DEFAULT_STATE: LocalStoreState = {
   inventory_wastage: [],
   supplier_returns: [],
   reorder_list: [],
+  expense_heads: [
+    {
+      id: 'e1000000-0000-0000-0000-000000000001',
+      code: 'EXP-RENT-01',
+      name_en: 'Shop/Factory/Warehouse Rent',
+      name_hi: 'दुकान/कारखाना/गोदाम का किराया',
+      expense_group: 'monthly_fixed',
+      calculation_mode: 'manual',
+      default_amount: 15000,
+      due_day: 5,
+      start_date: '2026-01-01',
+      end_date: null,
+      notes: 'Monthly lease for factory and warehouse',
+      is_active: true,
+      is_archived: false,
+      sort_order: 1,
+      created_by: 'usr-owner-001',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'e1000000-0000-0000-0000-000000000002',
+      code: 'EXP-PERM-SAL-02',
+      name_en: 'Permanent Employee Salary',
+      name_hi: 'स्थायी कर्मचारियों की salary',
+      expense_group: 'monthly_fixed',
+      calculation_mode: 'manual',
+      default_amount: 25000,
+      due_day: 7,
+      start_date: '2026-01-01',
+      end_date: null,
+      notes: 'Monthly wages for permanent factory workers',
+      is_active: true,
+      is_archived: false,
+      sort_order: 2,
+      created_by: 'usr-owner-001',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'e1000000-0000-0000-0000-000000000003',
+      code: 'EXP-OWNER-SAL-03',
+      name_en: 'Owner/Manager Salary',
+      name_hi: 'Owner/Manager salary',
+      expense_group: 'monthly_fixed',
+      calculation_mode: 'manual',
+      default_amount: 20000,
+      due_day: 10,
+      start_date: '2026-01-01',
+      end_date: null,
+      notes: 'Managerial compensation',
+      is_active: true,
+      is_archived: false,
+      sort_order: 3,
+      created_by: 'usr-owner-001',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'e1000000-0000-0000-0000-000000000004',
+      code: 'EXP-INGR-PKG-04',
+      name_en: 'Ingredients & Packaging',
+      name_hi: 'कच्चा माल व पैकेजिंग',
+      expense_group: 'variable_production',
+      calculation_mode: 'automatic',
+      default_amount: 0,
+      due_day: 1,
+      start_date: '2026-01-01',
+      end_date: null,
+      notes: 'Auto-calculated from batch recipe consumption',
+      is_active: true,
+      is_archived: false,
+      sort_order: 4,
+      created_by: 'usr-owner-001',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'e1000000-0000-0000-0000-000000000005',
+      code: 'EXP-LPG-ENERGY-05',
+      name_en: 'LPG & Energy Consumption',
+      name_hi: 'LPG गैस व ऊर्जा',
+      expense_group: 'variable_production',
+      calculation_mode: 'automatic',
+      default_amount: 0,
+      due_day: 1,
+      start_date: '2026-01-01',
+      end_date: null,
+      notes: 'Auto-calculated from cylinder readings and production',
+      is_active: true,
+      is_archived: false,
+      sort_order: 5,
+      created_by: 'usr-owner-001',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'e1000000-0000-0000-0000-000000000006',
+      code: 'EXP-WATER-CLEAN-06',
+      name_en: 'Water & Cleaning',
+      name_hi: 'पानी व सफाई',
+      expense_group: 'variable_production',
+      calculation_mode: 'manual',
+      default_amount: 1000,
+      due_day: 15,
+      start_date: '2026-01-01',
+      end_date: null,
+      notes: 'Water supply and cleaning supplies',
+      is_active: true,
+      is_archived: false,
+      sort_order: 6,
+      created_by: 'usr-owner-001',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 'e1000000-0000-0000-0000-000000000007',
+      code: 'EXP-TEMP-LAB-07',
+      name_en: 'Temporary Labour',
+      name_hi: 'अस्थायी मजदूरी',
+      expense_group: 'variable_production',
+      calculation_mode: 'manual',
+      default_amount: 0,
+      due_day: 1,
+      start_date: '2026-01-01',
+      end_date: null,
+      notes: 'Daily / temporary packaging & helper wages',
+      is_active: true,
+      is_archived: false,
+      sort_order: 7,
+      created_by: 'usr-owner-001',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    },
+  ],
   ingredient_prices: [
     { id: 'ip-01', ingredient_id: 'ing-milk-01', rate: 60.0, unit: 'litre', effective_from: '2026-01-01T00:00:00.000Z' },
     { id: 'ip-02', ingredient_id: 'ing-sug-02', rate: 48.0, unit: 'kg', effective_from: '2026-01-01T00:00:00.000Z' },
@@ -658,6 +798,9 @@ class MockStore {
         if (!parsed.inventory_wastage) parsed.inventory_wastage = [];
         if (!parsed.supplier_returns) parsed.supplier_returns = [];
         if (!parsed.reorder_list) parsed.reorder_list = [];
+        if (!parsed.expense_heads || parsed.expense_heads.length === 0) {
+          parsed.expense_heads = JSON.parse(JSON.stringify(DEFAULT_STATE.expense_heads || []));
+        }
         return parsed;
       }
     } catch {
@@ -2578,6 +2721,12 @@ class MockStore {
         bill_image_path: data.bill_image_url || null,
         status: 'active' as any,
         void_reason: null,
+        expense_head_id: null,
+        expense_month: null,
+        due_date: null,
+        corrected_from_expense_id: null,
+        idempotency_key: null,
+        is_monthly_fixed: false,
         created_by: userId,
         created_at: now,
         updated_at: now,
@@ -2982,6 +3131,12 @@ class MockStore {
         bill_image_path: null,
         status: 'active' as any,
         void_reason: null,
+        expense_head_id: null,
+        expense_month: null,
+        due_date: null,
+        corrected_from_expense_id: null,
+        idempotency_key: null,
+        is_monthly_fixed: false,
         created_by: userId,
         created_at: now,
         updated_at: now,
@@ -5520,12 +5675,18 @@ class MockStore {
   }
 
   public addExpense(
-    expense: Omit<Expense, 'id' | 'status' | 'void_reason' | 'created_at' | 'updated_at' | 'created_by'>,
+    expense: Omit<Expense, 'id' | 'status' | 'void_reason' | 'created_at' | 'updated_at' | 'created_by'> | (Omit<Expense, 'id' | 'status' | 'void_reason' | 'created_at' | 'updated_at' | 'created_by' | 'expense_head_id' | 'expense_month' | 'due_date' | 'corrected_from_expense_id' | 'is_monthly_fixed' | 'idempotency_key'> & Partial<Pick<Expense, 'expense_head_id' | 'expense_month' | 'due_date' | 'corrected_from_expense_id' | 'is_monthly_fixed' | 'idempotency_key'>>),
     userId: string
   ): Expense {
     const id = `exp-${generateId().slice(0, 8)}`;
     const now = new Date().toISOString();
     const newExpense: Expense = {
+      expense_head_id: null,
+      expense_month: null,
+      due_date: null,
+      corrected_from_expense_id: null,
+      is_monthly_fixed: false,
+      idempotency_key: null,
       ...expense,
       id,
       status: 'active',
@@ -6061,6 +6222,394 @@ class MockStore {
     );
 
     this.saveState();
+  }
+
+  // --- Expense Master & Monthly Expenses ---
+  public getExpenseHeads(includeArchived = false): ExpenseHead[] {
+    const list = this.state.expense_heads || [];
+    if (includeArchived) return [...list].sort((a, b) => a.sort_order - b.sort_order);
+    return list.filter((h) => !h.is_archived).sort((a, b) => a.sort_order - b.sort_order);
+  }
+
+  public getExpenseHeadById(id: string): ExpenseHead | undefined {
+    return (this.state.expense_heads || []).find((h) => h.id === id);
+  }
+
+  public addExpenseHead(head: Partial<ExpenseHead>, userId: string = 'usr-owner-001'): ExpenseHead {
+    if (!head.name_en || !head.name_hi || !head.code) {
+      throw new Error('Name (EN), Name (HI) and Code are required');
+    }
+    const exists = (this.state.expense_heads || []).some((h) => h.code.toLowerCase() === head.code!.toLowerCase());
+    if (exists) {
+      throw new Error(`Expense head with code '${head.code}' already exists`);
+    }
+    const id = `head-${generateId().slice(0, 8)}`;
+    const now = new Date().toISOString();
+    const newHead: ExpenseHead = {
+      id,
+      code: head.code.toUpperCase(),
+      name_en: head.name_en,
+      name_hi: head.name_hi,
+      expense_group: head.expense_group || 'monthly_fixed',
+      calculation_mode: head.calculation_mode || 'manual',
+      default_amount: Number(head.default_amount || 0),
+      due_day: Number(head.due_day || 5),
+      start_date: head.start_date || getTodayDateString(),
+      end_date: head.end_date || null,
+      notes: head.notes || null,
+      is_active: head.is_active !== false,
+      is_archived: false,
+      sort_order: (this.state.expense_heads || []).length + 1,
+      created_by: userId,
+      created_at: now,
+      updated_at: now,
+    };
+    if (!this.state.expense_heads) this.state.expense_heads = [];
+    this.state.expense_heads.push(newHead);
+    this.logAudit('expense_heads', id, 'CREATE_EXPENSE_HEAD', null, newHead, `Created expense head ${newHead.name_en}`, userId);
+    this.saveState();
+    return newHead;
+  }
+
+  public updateExpenseHead(headId: string, updates: Partial<ExpenseHead>, userId: string = 'usr-owner-001'): ExpenseHead {
+    const head = (this.state.expense_heads || []).find((h) => h.id === headId);
+    if (!head) throw new Error('Expense head not found');
+    const old = { ...head };
+    Object.assign(head, updates, { updated_at: new Date().toISOString() });
+    this.logAudit('expense_heads', headId, 'UPDATE_EXPENSE_HEAD', old, head, `Updated expense head ${head.name_en}`, userId);
+    this.saveState();
+    return head;
+  }
+
+  public deleteOrArchiveExpenseHead(headId: string, userId: string = 'usr-owner-001'): { success: boolean; action: 'deleted' | 'archived'; message: string } {
+    const head = (this.state.expense_heads || []).find((h) => h.id === headId);
+    if (!head) throw new Error('Expense head not found');
+    const hasExpenses = (this.state.expenses || []).some((e) => e.expense_head_id === headId);
+    if (hasExpenses) {
+      head.is_archived = true;
+      head.is_active = false;
+      head.updated_at = new Date().toISOString();
+      this.logAudit('expense_heads', headId, 'ARCHIVE_EXPENSE_HEAD', null, head, 'Archived expense head with historical transactions', userId);
+      this.saveState();
+      return { success: true, action: 'archived', message: 'Expense head has past expenses and was archived' };
+    } else {
+      this.state.expense_heads = (this.state.expense_heads || []).filter((h) => h.id !== headId);
+      this.logAudit('expense_heads', headId, 'DELETE_EXPENSE_HEAD', head, null, 'Permanently deleted unused expense head', userId);
+      this.saveState();
+      return { success: true, action: 'deleted', message: 'Expense head permanently deleted' };
+    }
+  }
+
+  public restoreExpenseHead(headId: string, userId: string = 'usr-owner-001'): ExpenseHead {
+    const head = (this.state.expense_heads || []).find((h) => h.id === headId);
+    if (!head) throw new Error('Expense head not found');
+    head.is_archived = false;
+    head.is_active = true;
+    head.updated_at = new Date().toISOString();
+    this.logAudit('expense_heads', headId, 'RESTORE_EXPENSE_HEAD', null, head, 'Restored archived expense head', userId);
+    this.saveState();
+    return head;
+  }
+
+  public getMonthlyExpenses(month: string): MonthlyExpenseSummary {
+    const activeHeads = (this.state.expense_heads || []).filter(
+      (h) => h.expense_group === 'monthly_fixed' && h.is_active && !h.is_archived
+    );
+
+    const monthExpenses = (this.state.expenses || []).filter(
+      (e) => (e.expense_month === month || e.expense_date.startsWith(month)) && e.is_monthly_fixed
+    );
+
+    const items: MonthlyExpenseItem[] = activeHeads.map((head) => {
+      const dayStr = String(head.due_day).padStart(2, '0');
+      const dueDate = `${month}-${dayStr}`;
+
+      const activeExp = monthExpenses.find((e) => e.expense_head_id === head.id && e.status === 'active');
+      const voidedExp = monthExpenses.find((e) => e.expense_head_id === head.id && e.status === 'voided');
+
+      if (activeExp) {
+        return {
+          head,
+          month,
+          expected_amount: head.default_amount,
+          actual_amount: activeExp.amount,
+          due_date: activeExp.due_date || dueDate,
+          status: 'paid',
+          expense: activeExp,
+          paid_date: activeExp.expense_date,
+          payment_method: activeExp.payment_method,
+          notes: activeExp.description,
+        };
+      } else if (voidedExp) {
+        return {
+          head,
+          month,
+          expected_amount: head.default_amount,
+          actual_amount: 0,
+          due_date: dueDate,
+          status: 'voided',
+          expense: voidedExp,
+          notes: voidedExp.void_reason,
+        };
+      } else {
+        return {
+          head,
+          month,
+          expected_amount: head.default_amount,
+          actual_amount: 0,
+          due_date: dueDate,
+          status: 'pending',
+          expense: null,
+        };
+      }
+    });
+
+    const expected_total = items.reduce((sum, it) => sum + it.expected_amount, 0);
+    const paid_total = items.filter((it) => it.status === 'paid').reduce((sum, it) => sum + it.actual_amount, 0);
+    const pending_total = items.filter((it) => it.status === 'pending').reduce((sum, it) => sum + it.expected_amount, 0);
+
+    return {
+      month,
+      expected_total,
+      paid_total,
+      pending_total,
+      items,
+    };
+  }
+
+  public confirmOrPayMonthlyExpense(
+    data: {
+      expense_head_id: string;
+      month: string;
+      amount: number;
+      payment_method: any;
+      paid_date?: string;
+      description?: string;
+      vendor_name?: string;
+      bill_image_path?: string;
+    },
+    userId: string = 'usr-owner-001'
+  ): Expense {
+    const head = this.getExpenseHeadById(data.expense_head_id);
+    const id = `exp-${generateId().slice(0, 8)}`;
+    const now = new Date().toISOString();
+    const paidDate = data.paid_date || getTodayDateString();
+    const dueDay = head ? String(head.due_day).padStart(2, '0') : '05';
+
+    const newExpense: Expense = {
+      id,
+      expense_date: paidDate,
+      category: 'other',
+      amount: Number(data.amount),
+      payment_method: data.payment_method || 'cash',
+      description: data.description || (head ? `${head.name_hi} (${data.month})` : `Monthly Expense ${data.month}`),
+      vendor_name: data.vendor_name || head?.name_en || null,
+      bill_image_path: data.bill_image_path || null,
+      status: 'active',
+      void_reason: null,
+      expense_head_id: data.expense_head_id,
+      expense_month: data.month,
+      due_date: `${data.month}-${dueDay}`,
+      corrected_from_expense_id: null,
+      idempotency_key: `${data.expense_head_id}_${data.month}_${Date.now()}`,
+      is_monthly_fixed: true,
+      created_by: userId,
+      created_at: now,
+      updated_at: now,
+    };
+
+    this.state.expenses.push(newExpense);
+    this.logAudit('expenses', id, 'CONFIRM_MONTHLY_EXPENSE', null, newExpense, `Confirmed monthly expense ₹${data.amount} for ${head?.name_en || data.expense_head_id}`, userId);
+    this.saveState();
+    return newExpense;
+  }
+
+  public correctPaidExpense(
+    expenseId: string,
+    updates: {
+      amount: number;
+      payment_method?: any;
+      expense_date?: string;
+      description?: string;
+    },
+    reason: string,
+    userId: string = 'usr-owner-001'
+  ): { success: boolean; old_expense_id: string; new_expense_id: string; amount: number; message: string } {
+    if (!reason || reason.trim().length < 3) {
+      throw new Error('A valid correction reason is required');
+    }
+    const oldExpense = this.state.expenses.find((e) => e.id === expenseId);
+    if (!oldExpense) throw new Error('Expense not found');
+
+    // Void old
+    oldExpense.status = 'voided';
+    oldExpense.void_reason = `Correction: ${reason}`;
+    oldExpense.updated_at = new Date().toISOString();
+
+    // Create new
+    const newId = `exp-${generateId().slice(0, 8)}`;
+    const now = new Date().toISOString();
+    const newExpense: Expense = {
+      ...oldExpense,
+      id: newId,
+      amount: Number(updates.amount),
+      payment_method: updates.payment_method || oldExpense.payment_method,
+      expense_date: updates.expense_date || oldExpense.expense_date,
+      description: updates.description || oldExpense.description,
+      status: 'active',
+      void_reason: null,
+      corrected_from_expense_id: expenseId,
+      created_by: userId,
+      created_at: now,
+      updated_at: now,
+    };
+
+    this.state.expenses.push(newExpense);
+    this.logAudit('expenses', newId, 'CORRECT_EXPENSE', oldExpense, newExpense, reason, userId);
+    this.saveState();
+
+    return {
+      success: true,
+      old_expense_id: expenseId,
+      new_expense_id: newId,
+      amount: Number(updates.amount),
+      message: 'Expense corrected and replacement recorded',
+    };
+  }
+
+  public copyPreviousMonthFixedExpenses(
+    sourceMonth: string,
+    targetMonth: string,
+    userId: string = 'usr-owner-001'
+  ): { success: boolean; copied_count: number; target_month: string } {
+    const activeHeads = (this.state.expense_heads || []).filter(
+      (h) => h.expense_group === 'monthly_fixed' && h.is_active && !h.is_archived
+    );
+
+    let copied_count = 0;
+    for (const head of activeHeads) {
+      const alreadyConfirmed = this.state.expenses.some(
+        (e) => e.expense_head_id === head.id && e.expense_month === targetMonth && e.status === 'active'
+      );
+      if (!alreadyConfirmed) {
+        const prevExp = this.state.expenses.find(
+          (e) => e.expense_head_id === head.id && e.expense_month === sourceMonth && e.status === 'active'
+        );
+        const amount = prevExp ? prevExp.amount : head.default_amount;
+        const payment_method = prevExp ? prevExp.payment_method : 'cash';
+
+        this.confirmOrPayMonthlyExpense(
+          {
+            expense_head_id: head.id,
+            month: targetMonth,
+            amount,
+            payment_method,
+            paid_date: `${targetMonth}-${String(head.due_day).padStart(2, '0')}`,
+            description: `${head.name_hi} (${targetMonth})`,
+            vendor_name: prevExp?.vendor_name || head.name_en,
+          },
+          userId
+        );
+        copied_count++;
+      }
+    }
+
+    return {
+      success: true,
+      copied_count,
+      target_month: targetMonth,
+    };
+  }
+
+  public getProfitLossReport(fromDate: string, toDate: string): ProfitLossReport {
+    // 1. Sales & Revenue
+    const settlements = (this.state.seller_settlements || []).filter(
+      (s) => s.settlement_date >= fromDate && s.settlement_date <= toDate && s.status === 'approved'
+    );
+    const gross_sales = settlements.reduce((sum, s) => sum + Number(s.gross_sales || 0), 0);
+    const total_commission = settlements.reduce((sum, s) => sum + Number(s.total_commission || 0), 0);
+    const net_received_sales = settlements.reduce((sum, s) => sum + Number(s.total_received || 0), 0);
+
+    // 2. Recipe Consumption Costs (Never count purchase and consumption twice)
+    const movements = (this.state.raw_material_movements || []).filter((m) => {
+      const mDate = m.movement_date ? m.movement_date.split('T')[0] : '';
+      return (
+        mDate >= fromDate &&
+        mDate <= toDate &&
+        (m.movement_type as string) === 'production_consumption' || (m.movement_type as string) === 'production'
+      );
+    });
+
+    let production_ingredient_cost = 0;
+    let packaging_cost = 0;
+    for (const m of movements) {
+      const ing = (this.state.ingredients || []).find((i) => i.id === m.ingredient_id);
+      const val = Math.abs(Number(m.total_value_snapshot || (m.quantity * (m.unit_cost_snapshot || 0))));
+      if (ing?.category === 'packaging') {
+        packaging_cost += val;
+      } else {
+        production_ingredient_cost += val;
+      }
+    }
+
+    // 3. LPG Energy Cost
+    const lpgReadings = (this.state.lpg_cylinder_readings || []).filter((r) => {
+      const rDate = r.reading_date ? r.reading_date.split('T')[0] : '';
+      return rDate >= fromDate && rDate <= toDate;
+    });
+    const lpg_energy_cost = lpgReadings.reduce((sum, r) => sum + Number(r.gas_consumed_kg || 0) * 95, 0);
+    const total_production_cost = Number((production_ingredient_cost + packaging_cost + lpg_energy_cost).toFixed(2));
+
+    // 4. Confirmed Monthly Fixed Expenses (DO NOT deduct pending templates or voided records)
+    const month = fromDate.slice(0, 7);
+    const activeExpenses = (this.state.expenses || []).filter(
+      (e) => e.expense_date >= fromDate && e.expense_date <= toDate && e.status === 'active'
+    );
+
+    const confirmed_monthly_fixed_expenses = activeExpenses
+      .filter((e) => e.is_monthly_fixed || (e.expense_head_id && this.getExpenseHeadById(e.expense_head_id)?.expense_group === 'monthly_fixed'))
+      .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+
+    const other_manual_expenses = activeExpenses
+      .filter((e) => !e.is_monthly_fixed && (!e.expense_head_id || this.getExpenseHeadById(e.expense_head_id)?.expense_group !== 'monthly_fixed'))
+      .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+
+    const total_operating_expenses = Number((confirmed_monthly_fixed_expenses + other_manual_expenses).toFixed(2));
+
+    // Pending templates in that month (for information only, NOT deducted)
+    const monthlySummary = this.getMonthlyExpenses(month);
+    const pending_monthly_fixed_templates = monthlySummary.pending_total;
+
+    // Days in month calculation
+    const [yr, mo] = month.split('-').map(Number);
+    const days_in_month = new Date(yr, mo, 0).getDate();
+    const daily_allocated_fixed_cost = Number((confirmed_monthly_fixed_expenses / (days_in_month || 30)).toFixed(2));
+
+    const gross_profit = Number((gross_sales - total_production_cost).toFixed(2));
+    const net_operating_profit = Number((gross_profit - total_operating_expenses).toFixed(2));
+    const profit_margin_percentage = gross_sales > 0 ? Number(((net_operating_profit / gross_sales) * 100).toFixed(2)) : 0;
+
+    return {
+      from_date: fromDate,
+      to_date: toDate,
+      month,
+      days_in_month,
+      gross_sales: Number(gross_sales.toFixed(2)),
+      net_received_sales: Number(net_received_sales.toFixed(2)),
+      total_commission: Number(total_commission.toFixed(2)),
+      production_ingredient_cost: Number(production_ingredient_cost.toFixed(2)),
+      packaging_cost: Number(packaging_cost.toFixed(2)),
+      lpg_energy_cost: Number(lpg_energy_cost.toFixed(2)),
+      total_production_cost,
+      confirmed_monthly_fixed_expenses: Number(confirmed_monthly_fixed_expenses.toFixed(2)),
+      pending_monthly_fixed_templates: Number(pending_monthly_fixed_templates.toFixed(2)),
+      other_manual_expenses: Number(other_manual_expenses.toFixed(2)),
+      total_operating_expenses,
+      daily_allocated_fixed_cost,
+      gross_profit,
+      net_operating_profit,
+      profit_margin_percentage,
+    };
   }
 }
 

@@ -1879,6 +1879,24 @@ VALUES
   ('30000000-0000-0000-0000-000000000003', 'LPG-03', 'commercial_19kg', 19.00, 15.10, 34.10, 34.10, 19.00, 100.00, 'full', true)
 ON CONFLICT (cylinder_code) DO NOTHING;
 
+-- 8.11 Default Authoritative Expense Heads
+INSERT INTO expense_heads (
+  id, code, name_en, name_hi, expense_group, calculation_mode, default_amount, due_day, start_date, notes, is_active, is_archived, sort_order
+) VALUES
+  ('e1000000-0000-0000-0000-000000000001', 'EXP-RENT-01', 'Shop/Factory/Warehouse Rent', 'दुकान/कारखाना/गोदाम का किराया', 'monthly_fixed', 'manual', 15000.00, 5, CURRENT_DATE, 'Monthly lease for factory and warehouse', true, false, 1),
+  ('e1000000-0000-0000-0000-000000000002', 'EXP-PERM-SAL-02', 'Permanent Employee Salary', 'स्थायी कर्मचारियों की salary', 'monthly_fixed', 'manual', 25000.00, 7, CURRENT_DATE, 'Monthly wages for permanent factory workers', true, false, 2),
+  ('e1000000-0000-0000-0000-000000000003', 'EXP-OWNER-SAL-03', 'Owner/Manager Salary', 'Owner/Manager salary', 'monthly_fixed', 'manual', 20000.00, 10, CURRENT_DATE, 'Managerial compensation', true, false, 3),
+  ('e1000000-0000-0000-0000-000000000004', 'EXP-INGR-PKG-04', 'Ingredients & Packaging', 'कच्चा माल व पैकेजिंग', 'variable_production', 'automatic', 0.00, 1, CURRENT_DATE, 'Auto-calculated from batch recipe consumption', true, false, 4),
+  ('e1000000-0000-0000-0000-000000000005', 'EXP-LPG-ENERGY-05', 'LPG & Energy Consumption', 'LPG गैस व ऊर्जा', 'variable_production', 'automatic', 0.00, 1, CURRENT_DATE, 'Auto-calculated from cylinder readings and production', true, false, 5),
+  ('e1000000-0000-0000-0000-000000000006', 'EXP-WATER-CLEAN-06', 'Water & Cleaning', 'पानी व सफाई', 'variable_production', 'manual', 1000.00, 15, CURRENT_DATE, 'Water supply and cleaning supplies', true, false, 6),
+  ('e1000000-0000-0000-0000-000000000007', 'EXP-TEMP-LAB-07', 'Temporary Labour', 'अस्थायी मजदूरी', 'variable_production', 'manual', 0.00, 1, CURRENT_DATE, 'Daily / temporary packaging & helper wages', true, false, 7)
+ON CONFLICT (code) DO UPDATE SET
+  name_en = EXCLUDED.name_en,
+  name_hi = EXCLUDED.name_hi,
+  expense_group = EXCLUDED.expense_group,
+  calculation_mode = EXCLUDED.calculation_mode,
+  notes = EXCLUDED.notes;
+
 -- ============================================================================
 -- 9. RELOAD SCHEMA CACHE
 -- ============================================================================
@@ -1887,3 +1905,4 @@ NOTIFY pgrst, 'reload schema';
 -- ============================================================================
 -- SETUP COMPLETE
 -- ============================================================================
+

@@ -30,6 +30,10 @@ import {
   InventoryWastage,
   SupplierReturn,
   RawMaterialDashboardKPIs,
+  ExpenseHead,
+  MonthlyExpenseItem,
+  MonthlyExpenseSummary,
+  ProfitLossReport,
 } from '@/types';
 
 // Detect if running in mock/local mode (Never active in production; only in test or explicitly enabled DEV fallback)
@@ -2671,6 +2675,505 @@ export const api = {
     const { error } = await (supabase as any).from('expenses').delete().eq('id', expenseId);
     if (error) throw error;
     return { success: true, message: 'खर्चा सफलतापूर्वक हटा दिया गया।' };
+  },
+
+  // --- Expense Master ---
+  async getExpenseHeads(includeArchived = false): Promise<ExpenseHead[]> {
+    if (useMockMode) {
+      return mockStore.getExpenseHeads(includeArchived);
+    }
+    let query = (supabase as any).from('expense_heads').select('*').order('sort_order', { ascending: true });
+    if (!includeArchived) {
+      query = query.eq('is_archived', false);
+    }
+    const { data, error } = await query;
+    if (error) {
+      if (error.code === 'PGRST205' || error.code === '42P01') {
+        console.warn('[Supabase] Table expense_heads not found. Run migration 026 in Supabase SQL editor.');
+        return [];
+      }
+      throw new Error(`[Supabase Expense Heads ${error.code || ''}]: ${error.message}`);
+    }
+    return data || [];
+  },
+
+  async getExpenseHeadById(id: string): Promise<ExpenseHead | undefined> {
+    if (useMockMode) {
+      return mockStore.getExpenseHeadById(id);
+    }
+    const { data, error } = await (supabase as any).from('expense_heads').select('*').eq('id', id).maybeSingle();
+    if (error) {
+      if (error.code === 'PGRST205' || error.code === '42P01') return undefined;
+      throw new Error(`[Supabase Expense Head ${error.code || ''}]: ${error.message}`);
+    }
+    return data || undefined;
+  },
+
+  async createExpenseHead(head: Partial<ExpenseHead>, userId: string): Promise<ExpenseHead> {
+    if (useMockMode) {
+      return mockStore.addExpenseHead(head, userId);
+    }
+    const safeUserId = toSafeUuid(userId);
+    const payload = {
+      code: (head.code || '').trim().toUpperCase(),
+      name_en: (head.name_en || '').trim(),
+      name_hi: (head.name_hi || '').trim(),
+      expense_group: head.expense_group || 'monthly_fixed',
+      calculation_mode: head.calculation_mode || 'manual',
+      default_amount: Number(head.default_amount || 0),
+      due_day: Number(head.due_day || 5),
+      start_date: head.start_date || new Date().toISOString().split('T')[0],
+      end_date: head.end_date || null,
+      notes: head.notes || null,
+      is_active: head.is_active !== false,
+      is_archived: false,
+      created_by: safeUserId,
+    };
+    const { data, error } = await (supabase as any).from('expense_heads').insert(payload).select().single();
+    if (error) {
+      if (error.code === 'PGRST205' || error.code === '42P01') {
+        throw new Error(`Table 'public.expense_heads' is not found. Please run migration 026 in Supabase SQL Editor.`);
+      }
+      throw new Error(`[Supabase Create Expense Head ${error.code || ''}]: ${error.message}`);
+    }
+    return data;
+  },
+
+  async updateExpenseHead(headId: string, updates: Partial<ExpenseHead>, userId: string): Promise<ExpenseHead> {
+    if (useMockMode) {
+      return mockStore.updateExpenseHead(headId, updates, userId);
+    }
+    const { data, error } = await (supabase as any)
+      .from('expense_heads')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', headId)
+      .select()
+      .single();
+    if (error) {
+      throw new Error(`[Supabase Update Expense Head ${error.code || ''}]: ${error.message}`);
+    }
+    return data;
+  },
+
+  async deleteOrArchiveExpenseHead(headId: string, userId: string): Promise<{ success: boolean; action: 'deleted' | 'archived'; message: string }> {
+    if (useMockMode) {
+      return mockStore.deleteOrArchiveExpenseHead(headId, userId);
+    }
+    // Attempt RPC first
+    const { data: rpcData, error: rpcError } = await (supabase as any).rpc('delete_or_archive_expense_head', {
+      p_head_id: headId,
+      p_user_id: userId,
+    });
+    if (!rpcError && rpcData) {
+      return rpcData;
+    }
+
+    // Client-side fallback for Supabase
+    const { count } = await (supabase as any)
+      .from('expenses')
+      .select('*', { count: 'exact', head: true })
+      .eq('expense_head_id', headId);
+
+    if (count && count > 0) {
+      await (supabase as any)
+        .from('expense_heads')
+        .update({ is_archived: true, is_active: false, updated_at: new Date().toISOString() })
+        .eq('id', headId);
+      return { success: true, action: 'archived', message: 'Expense head archived because it has past expenses' };
+    } else {
+      await (supabase as any).from('expense_heads').delete().eq('id', headId);
+      return { success: true, action: 'deleted', message: 'Expense head permanently deleted' };
+    }
+  },
+
+  async restoreExpenseHead(headId: string, userId: string): Promise<ExpenseHead> {
+    if (useMockMode) {
+      return mockStore.restoreExpenseHead(headId, userId);
+    }
+    const { data, error } = await (supabase as any)
+      .from('expense_heads')
+      .update({ is_archived: false, is_active: true, updated_at: new Date().toISOString() })
+      .eq('id', headId)
+      .select()
+      .single();
+    if (error) {
+      throw new Error(`[Supabase Restore Expense Head ${error.code || ''}]: ${error.message}`);
+    }
+    return data;
+  },
+
+  // --- Monthly Expenses ---
+  async getMonthlyExpenses(month: string): Promise<MonthlyExpenseSummary> {
+    if (useMockMode) {
+      return mockStore.getMonthlyExpenses(month);
+    }
+
+    // 1. Fetch active monthly fixed heads
+    const { data: headsData, error: headsError } = await (supabase as any)
+      .from('expense_heads')
+      .select('*')
+      .eq('expense_group', 'monthly_fixed')
+      .eq('is_archived', false)
+      .order('sort_order', { ascending: true });
+
+    if (headsError) {
+      if (headsError.code === 'PGRST205' || headsError.code === '42P01') {
+        console.warn('[Supabase] Table expense_heads not found. Run migration 026.');
+        return { month, expected_total: 0, paid_total: 0, pending_total: 0, items: [] };
+      }
+      throw new Error(`[Supabase Monthly Expenses ${headsError.code || ''}]: ${headsError.message}`);
+    }
+
+    const heads: ExpenseHead[] = (headsData || []).filter((h: any) => h.is_active);
+
+    // 2. Fetch expenses for that month
+    const { data: expensesData, error: expError } = await (supabase as any)
+      .from('expenses')
+      .select('*')
+      .or(`expense_month.eq.${month},and(expense_date.gte.${month}-01,expense_date.lte.${month}-31,is_monthly_fixed.eq.true)`);
+
+    const monthExpenses: Expense[] = (!expError && expensesData) ? expensesData : [];
+
+    const items: MonthlyExpenseItem[] = heads.map((head) => {
+      const dayStr = String(head.due_day).padStart(2, '0');
+      const dueDate = `${month}-${dayStr}`;
+
+      const activeExp = monthExpenses.find((e) => e.expense_head_id === head.id && e.status === 'active');
+      const voidedExp = monthExpenses.find((e) => e.expense_head_id === head.id && e.status === 'voided');
+
+      if (activeExp) {
+        return {
+          head,
+          month,
+          expected_amount: Number(head.default_amount || 0),
+          actual_amount: Number(activeExp.amount || 0),
+          due_date: activeExp.due_date || dueDate,
+          status: 'paid',
+          expense: activeExp,
+          paid_date: activeExp.expense_date,
+          payment_method: activeExp.payment_method,
+          notes: activeExp.description,
+        };
+      } else if (voidedExp) {
+        return {
+          head,
+          month,
+          expected_amount: Number(head.default_amount || 0),
+          actual_amount: 0,
+          due_date: dueDate,
+          status: 'voided',
+          expense: voidedExp,
+          notes: voidedExp.void_reason,
+        };
+      } else {
+        return {
+          head,
+          month,
+          expected_amount: Number(head.default_amount || 0),
+          actual_amount: 0,
+          due_date: dueDate,
+          status: 'pending',
+          expense: null,
+        };
+      }
+    });
+
+    const expected_total = items.reduce((sum, it) => sum + it.expected_amount, 0);
+    const paid_total = items.filter((it) => it.status === 'paid').reduce((sum, it) => sum + it.actual_amount, 0);
+    const pending_total = items.filter((it) => it.status === 'pending').reduce((sum, it) => sum + it.expected_amount, 0);
+
+    return {
+      month,
+      expected_total: Number(expected_total.toFixed(2)),
+      paid_total: Number(paid_total.toFixed(2)),
+      pending_total: Number(pending_total.toFixed(2)),
+      items,
+    };
+  },
+
+  async confirmOrPayMonthlyExpense(
+    data: {
+      expense_head_id: string;
+      month: string;
+      amount: number;
+      payment_method: any;
+      paid_date?: string;
+      description?: string;
+      vendor_name?: string;
+      bill_image_path?: string;
+    },
+    userId: string
+  ): Promise<Expense> {
+    if (useMockMode) {
+      return mockStore.confirmOrPayMonthlyExpense(data, userId);
+    }
+    const safeUserId = toSafeUuid(userId);
+    const paidDate = data.paid_date || new Date().toISOString().split('T')[0];
+
+    const payload = {
+      expense_date: paidDate,
+      category: 'other',
+      amount: Number(data.amount),
+      payment_method: data.payment_method || 'cash',
+      description: data.description || `Monthly Fixed Expense (${data.month})`,
+      vendor_name: data.vendor_name || null,
+      bill_image_path: data.bill_image_path || null,
+      status: 'active',
+      expense_head_id: data.expense_head_id,
+      expense_month: data.month,
+      due_date: `${data.month}-05`,
+      idempotency_key: `${data.expense_head_id}_${data.month}_${Date.now()}`,
+      is_monthly_fixed: true,
+      created_by: safeUserId,
+    };
+
+    const { data: inserted, error } = await (supabase as any).from('expenses').insert(payload).select().single();
+    if (error) {
+      throw new Error(`[Supabase Confirm Monthly Expense ${error.code || ''}]: ${error.message}`);
+    }
+    return inserted;
+  },
+
+  async correctPaidExpense(
+    expenseId: string,
+    updates: {
+      amount: number;
+      payment_method?: any;
+      expense_date?: string;
+      description?: string;
+    },
+    reason: string,
+    userId: string
+  ): Promise<{ success: boolean; old_expense_id: string; new_expense_id: string; amount: number; message: string }> {
+    if (useMockMode) {
+      return mockStore.correctPaidExpense(expenseId, updates, reason, userId);
+    }
+    // Attempt RPC first
+    const { data: rpcData, error: rpcError } = await (supabase as any).rpc('correct_paid_expense', {
+      p_expense_id: expenseId,
+      p_new_amount: updates.amount,
+      p_new_payment_method: updates.payment_method || 'cash',
+      p_new_date: updates.expense_date || new Date().toISOString().split('T')[0],
+      p_new_description: updates.description || 'Corrected expense',
+      p_reason: reason,
+      p_user_id: userId,
+    });
+
+    if (!rpcError && rpcData) {
+      return rpcData;
+    }
+
+    // Direct fallback: void old and insert new
+    const { data: oldExpense, error: fetchErr } = await (supabase as any).from('expenses').select('*').eq('id', expenseId).single();
+    if (fetchErr || !oldExpense) {
+      throw new Error(`Expense ${expenseId} not found`);
+    }
+
+    await (supabase as any).from('expenses').update({
+      status: 'voided',
+      void_reason: `Correction: ${reason}`,
+      updated_at: new Date().toISOString(),
+    }).eq('id', expenseId);
+
+    const { data: newExpense, error: insertErr } = await (supabase as any).from('expenses').insert({
+      expense_date: updates.expense_date || oldExpense.expense_date,
+      category: oldExpense.category,
+      amount: Number(updates.amount),
+      payment_method: updates.payment_method || oldExpense.payment_method,
+      description: updates.description || oldExpense.description,
+      vendor_name: oldExpense.vendor_name,
+      status: 'active',
+      expense_head_id: oldExpense.expense_head_id,
+      expense_month: oldExpense.expense_month,
+      due_date: oldExpense.due_date,
+      corrected_from_expense_id: expenseId,
+      is_monthly_fixed: oldExpense.is_monthly_fixed,
+      created_by: toSafeUuid(userId),
+    }).select().single();
+
+    if (insertErr) {
+      throw new Error(`Failed to create corrected expense: ${insertErr.message}`);
+    }
+
+    return {
+      success: true,
+      old_expense_id: expenseId,
+      new_expense_id: newExpense.id,
+      amount: Number(updates.amount),
+      message: 'Expense corrected and replacement recorded',
+    };
+  },
+
+  async copyPreviousMonthFixedExpenses(
+    sourceMonth: string,
+    targetMonth: string,
+    userId: string
+  ): Promise<{ success: boolean; copied_count: number; target_month: string }> {
+    if (useMockMode) {
+      return mockStore.copyPreviousMonthFixedExpenses(sourceMonth, targetMonth, userId);
+    }
+    // Attempt RPC first
+    const { data: rpcData, error: rpcError } = await (supabase as any).rpc('copy_previous_month_fixed_expenses', {
+      p_source_month: sourceMonth,
+      p_target_month: targetMonth,
+      p_user_id: userId,
+    });
+
+    if (!rpcError && rpcData) {
+      return rpcData;
+    }
+
+    // Client fallback
+    const { data: activeHeads } = await (supabase as any)
+      .from('expense_heads')
+      .select('*')
+      .eq('expense_group', 'monthly_fixed')
+      .eq('is_active', true)
+      .eq('is_archived', false);
+
+    const { data: targetExpenses } = await (supabase as any)
+      .from('expenses')
+      .select('expense_head_id')
+      .eq('expense_month', targetMonth)
+      .eq('status', 'active');
+
+    const targetHeadIds = new Set((targetExpenses || []).map((e: any) => e.expense_head_id));
+
+    const { data: sourceExpenses } = await (supabase as any)
+      .from('expenses')
+      .select('*')
+      .eq('expense_month', sourceMonth)
+      .eq('status', 'active');
+
+    let copied_count = 0;
+    for (const head of activeHeads || []) {
+      if (!targetHeadIds.has(head.id)) {
+        const prevExp = (sourceExpenses || []).find((e: any) => e.expense_head_id === head.id);
+        const amount = prevExp ? Number(prevExp.amount) : Number(head.default_amount || 0);
+        const method = prevExp ? prevExp.payment_method : 'cash';
+
+        await (supabase as any).from('expenses').insert({
+          expense_date: `${targetMonth}-${String(head.due_day).padStart(2, '0')}`,
+          category: 'other',
+          amount,
+          payment_method: method,
+          description: `${head.name_hi} (${targetMonth})`,
+          vendor_name: prevExp?.vendor_name || head.name_en,
+          status: 'active',
+          expense_head_id: head.id,
+          expense_month: targetMonth,
+          due_date: `${targetMonth}-${String(head.due_day).padStart(2, '0')}`,
+          is_monthly_fixed: true,
+          created_by: toSafeUuid(userId),
+        });
+        copied_count++;
+      }
+    }
+
+    return {
+      success: true,
+      copied_count,
+      target_month: targetMonth,
+    };
+  },
+
+  async getProfitLossReport(fromDate: string, toDate: string): Promise<ProfitLossReport> {
+    if (useMockMode) {
+      return mockStore.getProfitLossReport(fromDate, toDate);
+    }
+
+    // 1. Sales & Revenue from approved settlements
+    const { data: settlements } = await (supabase as any)
+      .from('seller_settlements')
+      .select('gross_sales, total_commission, total_received')
+      .gte('settlement_date', fromDate)
+      .lte('settlement_date', toDate)
+      .eq('status', 'approved');
+
+    const gross_sales = (settlements || []).reduce((sum: number, s: any) => sum + Number(s.gross_sales || 0), 0);
+    const total_commission = (settlements || []).reduce((sum: number, s: any) => sum + Number(s.total_commission || 0), 0);
+    const net_received_sales = (settlements || []).reduce((sum: number, s: any) => sum + Number(s.total_received || 0), 0);
+
+    // 2. Production consumption movements (Ingredients & Packaging)
+    const { data: movements } = await (supabase as any)
+      .from('raw_material_movements')
+      .select('total_value_snapshot, quantity, unit_cost_snapshot, ingredient:ingredients(category)')
+      .in('movement_type', ['production_consumption', 'production'])
+      .gte('movement_date', fromDate)
+      .lte('movement_date', toDate);
+
+    let production_ingredient_cost = 0;
+    let packaging_cost = 0;
+    for (const m of movements || []) {
+      const val = Math.abs(Number(m.total_value_snapshot || (m.quantity * (m.unit_cost_snapshot || 0))));
+      if (m.ingredient?.category === 'packaging') {
+        packaging_cost += val;
+      } else {
+        production_ingredient_cost += val;
+      }
+    }
+
+    // 3. LPG Energy cost
+    const { data: lpgReadings } = await (supabase as any)
+      .from('lpg_cylinder_readings')
+      .select('gas_consumed_kg')
+      .gte('reading_date', fromDate)
+      .lte('reading_date', toDate);
+
+    const lpg_energy_cost = (lpgReadings || []).reduce((sum: number, r: any) => sum + Number(r.gas_consumed_kg || 0) * 95, 0);
+    const total_production_cost = Number((production_ingredient_cost + packaging_cost + lpg_energy_cost).toFixed(2));
+
+    // 4. Confirmed Expenses
+    const { data: activeExpenses } = await (supabase as any)
+      .from('expenses')
+      .select('amount, is_monthly_fixed, expense_head_id, expense_head:expense_heads(expense_group)')
+      .gte('expense_date', fromDate)
+      .lte('expense_date', toDate)
+      .eq('status', 'active');
+
+    const confirmed_monthly_fixed_expenses = (activeExpenses || [])
+      .filter((e: any) => e.is_monthly_fixed || e.expense_head?.expense_group === 'monthly_fixed')
+      .reduce((sum: number, e: any) => sum + Number(e.amount || 0), 0);
+
+    const other_manual_expenses = (activeExpenses || [])
+      .filter((e: any) => !e.is_monthly_fixed && e.expense_head?.expense_group !== 'monthly_fixed')
+      .reduce((sum: number, e: any) => sum + Number(e.amount || 0), 0);
+
+    const total_operating_expenses = Number((confirmed_monthly_fixed_expenses + other_manual_expenses).toFixed(2));
+
+    const month = fromDate.slice(0, 7);
+    const monthlySummary = await this.getMonthlyExpenses(month);
+    const pending_monthly_fixed_templates = monthlySummary.pending_total;
+
+    const [yr, mo] = month.split('-').map(Number);
+    const days_in_month = new Date(yr, mo, 0).getDate();
+    const daily_allocated_fixed_cost = Number((confirmed_monthly_fixed_expenses / (days_in_month || 30)).toFixed(2));
+
+    const gross_profit = Number((gross_sales - total_production_cost).toFixed(2));
+    const net_operating_profit = Number((gross_profit - total_operating_expenses).toFixed(2));
+    const profit_margin_percentage = gross_sales > 0 ? Number(((net_operating_profit / gross_sales) * 100).toFixed(2)) : 0;
+
+    return {
+      from_date: fromDate,
+      to_date: toDate,
+      month,
+      days_in_month,
+      gross_sales: Number(gross_sales.toFixed(2)),
+      net_received_sales: Number(net_received_sales.toFixed(2)),
+      total_commission: Number(total_commission.toFixed(2)),
+      production_ingredient_cost: Number(production_ingredient_cost.toFixed(2)),
+      packaging_cost: Number(packaging_cost.toFixed(2)),
+      lpg_energy_cost: Number(lpg_energy_cost.toFixed(2)),
+      total_production_cost,
+      confirmed_monthly_fixed_expenses: Number(confirmed_monthly_fixed_expenses.toFixed(2)),
+      pending_monthly_fixed_templates: Number(pending_monthly_fixed_templates.toFixed(2)),
+      other_manual_expenses: Number(other_manual_expenses.toFixed(2)),
+      total_operating_expenses,
+      daily_allocated_fixed_cost,
+      gross_profit,
+      net_operating_profit,
+      profit_margin_percentage,
+    };
   },
 
   // --- Daily Closings ---

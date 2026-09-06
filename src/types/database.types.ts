@@ -561,6 +561,63 @@ export interface Database {
           complimentary_reason?: string | null;
         };
       };
+      expense_heads: {
+        Row: {
+          id: string;
+          code: string;
+          name_en: string;
+          name_hi: string;
+          expense_group: 'monthly_fixed' | 'variable_production';
+          calculation_mode: 'manual' | 'automatic';
+          default_amount: number;
+          due_day: number;
+          start_date: string;
+          end_date: string | null;
+          notes: string | null;
+          is_active: boolean;
+          is_archived: boolean;
+          sort_order: number;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          code: string;
+          name_en: string;
+          name_hi: string;
+          expense_group: 'monthly_fixed' | 'variable_production';
+          calculation_mode: 'manual' | 'automatic';
+          default_amount?: number;
+          due_day?: number;
+          start_date?: string;
+          end_date?: string | null;
+          notes?: string | null;
+          is_active?: boolean;
+          is_archived?: boolean;
+          sort_order?: number;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          code?: string;
+          name_en?: string;
+          name_hi?: string;
+          expense_group?: 'monthly_fixed' | 'variable_production';
+          calculation_mode?: 'manual' | 'automatic';
+          default_amount?: number;
+          due_day?: number;
+          start_date?: string;
+          end_date?: string | null;
+          notes?: string | null;
+          is_active?: boolean;
+          is_archived?: boolean;
+          sort_order?: number;
+          updated_at?: string;
+        };
+      };
       expenses: {
         Row: {
           id: string;
@@ -573,6 +630,12 @@ export interface Database {
           bill_image_path: string | null;
           status: ExpenseStatus;
           void_reason: string | null;
+          expense_head_id: string | null;
+          expense_month: string | null;
+          due_date: string | null;
+          corrected_from_expense_id: string | null;
+          idempotency_key: string | null;
+          is_monthly_fixed: boolean;
           created_by: string | null;
           created_at: string;
           updated_at: string;
@@ -588,6 +651,12 @@ export interface Database {
           bill_image_path?: string | null;
           status?: ExpenseStatus;
           void_reason?: string | null;
+          expense_head_id?: string | null;
+          expense_month?: string | null;
+          due_date?: string | null;
+          corrected_from_expense_id?: string | null;
+          idempotency_key?: string | null;
+          is_monthly_fixed?: boolean;
           created_by?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -603,6 +672,12 @@ export interface Database {
           bill_image_path?: string | null;
           status?: ExpenseStatus;
           void_reason?: string | null;
+          expense_head_id?: string | null;
+          expense_month?: string | null;
+          due_date?: string | null;
+          corrected_from_expense_id?: string | null;
+          idempotency_key?: string | null;
+          is_monthly_fixed?: boolean;
           updated_at?: string;
         };
       };

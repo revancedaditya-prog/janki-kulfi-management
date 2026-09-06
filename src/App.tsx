@@ -29,6 +29,8 @@ import { AddMaterialPurchasePage } from './pages/inventory/AddMaterialPurchasePa
 import { PhysicalStockCheckPage } from './pages/inventory/PhysicalStockCheckPage';
 import { LpgCylinderPage } from './pages/inventory/LpgCylinderPage';
 import { WastagePage } from './pages/inventory/WastagePage';
+import { ExpenseMasterPage } from './pages/master/ExpenseMasterPage';
+import { MonthlyExpensesPage } from './pages/expenses/MonthlyExpensesPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -102,6 +104,30 @@ export function App() {
                     element={
                       <ProtectedRoute requiredRole="owner">
                         <ExpensesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="expenses/monthly"
+                    element={
+                      <ProtectedRoute requiredRole="owner">
+                        <MonthlyExpensesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="master/expenses"
+                    element={
+                      <ProtectedRoute requiredRole="owner">
+                        <ExpenseMasterPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="settings/expense-master"
+                    element={
+                      <ProtectedRoute requiredRole="owner">
+                        <ExpenseMasterPage />
                       </ProtectedRoute>
                     }
                   />
