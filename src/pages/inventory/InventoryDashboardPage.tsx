@@ -17,6 +17,7 @@ import { useAuth } from '@/context/AuthContext';
 import { Ingredient, IngredientCategory, UnitType, MaterialPurchaseWithItems } from '@/types';
 import { formatCurrency, formatDate } from '@/lib/formatters';
 import { formatIngredientQuantityWithUnit } from '@/lib/inventoryService';
+import { useMockMode } from '@/lib/api';
 import { Card } from '@/components/common/Card';
 import { Button } from '@/components/common/Button';
 import { Badge } from '@/components/common/Badge';
@@ -448,7 +449,7 @@ export const InventoryDashboardPage: React.FC = () => {
       {/* Top Header: Unified Raw Material Management Title */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-black text-stone-900 tracking-tight flex items-center gap-2">
               <Layers className="w-6 h-6 text-amber-600" />
               <span>{language === 'hi' ? 'कच्चा माल प्रबंधन' : 'Raw Material Management'}</span>
@@ -460,6 +461,10 @@ export const InventoryDashboardPage: React.FC = () => {
                 ? `${purchases.length} खरीद रिकॉर्ड`
                 : `${ingredients.length} मास्टर आइटम`}
             </Badge>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-black tracking-wider uppercase bg-emerald-50 text-emerald-800 border border-emerald-200">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>DATA SOURCE: {useMockMode ? 'MOCK STORE' : 'SUPABASE'}</span>
+            </span>
           </div>
           <p className="text-xs text-stone-600 mt-0.5">
             {language === 'hi'

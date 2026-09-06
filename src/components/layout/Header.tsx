@@ -4,6 +4,7 @@ import { useLanguage } from '@/i18n/LanguageContext';
 import { LanguageToggle } from '@/components/common/LanguageToggle';
 import { OnlineStatusBadge } from '@/components/common/OnlineStatusBadge';
 import { formatDate } from '@/lib/formatters';
+import { useMockMode } from '@/lib/api';
 
 export const Header: React.FC = () => {
   const { user, switchSimulatedUser, availableProfiles } = useAuth();
@@ -33,8 +34,12 @@ export const Header: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Actions: Sync, Language, User Role Switcher */}
+        {/* Right Actions: Data Source, Sync, Language, User Role Switcher */}
         <div className="flex items-center gap-2 sm:gap-3">
+          <div className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase bg-emerald-50 text-emerald-800 border border-emerald-200">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span>DATA SOURCE: {useMockMode ? 'MOCK STORE' : 'SUPABASE'}</span>
+          </div>
           <OnlineStatusBadge />
           <LanguageToggle />
 

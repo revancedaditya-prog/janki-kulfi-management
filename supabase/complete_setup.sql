@@ -758,8 +758,8 @@ LEFT JOIN current_location_stock cls
   AND cls.location_id = 'a0000000-0000-0000-0000-000000000002'
 WHERE p.is_active = true;
 
--- 4.3 Raw Material Stock View
-CREATE OR REPLACE VIEW v_raw_material_stock AS
+-- 4.3 Raw Material Stock Canonical View
+CREATE OR REPLACE VIEW public.current_raw_material_stock AS
 SELECT 
   i.id,
   i.id AS ingredient_id,
@@ -780,10 +780,13 @@ SELECT
   i.storage_location,
   i.track_expiry,
   i.track_lots,
+  i.track_inventory,
   i.is_active,
+  COALESCE(SUM(rmm.quantity), 0) AS available_quantity,
   COALESCE(SUM(rmm.quantity), 0) AS current_stock,
   COALESCE(SUM(rmm.quantity), 0) AS available_base_quantity,
-  (COALESCE(SUM(rmm.quantity), 0) * i.current_rate) AS total_value,
+  (COALESCE(SUM(rmm.quantity), 0) * COALESCE(i.current_rate, 0)) AS stock_value,
+  (COALESCE(SUM(rmm.quantity), 0) * COALESCE(i.current_rate, 0)) AS total_value,
   CASE 
     WHEN COALESCE(SUM(rmm.quantity), 0) <= 0 THEN 'out_of_stock'
     WHEN COALESCE(SUM(rmm.quantity), 0) <= i.min_stock_level THEN 'low_stock'
@@ -792,6 +795,9 @@ SELECT
 FROM ingredients i
 LEFT JOIN raw_material_movements rmm ON i.id = rmm.ingredient_id
 GROUP BY i.id;
+
+CREATE OR REPLACE VIEW public.v_raw_material_stock AS
+SELECT * FROM public.current_raw_material_stock;
 
 -- ============================================================================
 -- 5. SECURITY & ROLE HELPER FUNCTIONS

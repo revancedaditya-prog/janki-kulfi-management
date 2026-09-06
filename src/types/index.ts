@@ -509,6 +509,14 @@ export interface RawMaterialDashboardKPIs {
   consumption_this_month: number;
   wastage_this_month: number;
   pending_physical_count: boolean;
+
+  // camelCase aliases for modern Raw Material Management dashboard
+  totalInventoryValue?: number;
+  totalActiveMaterials?: number;
+  lowStockMaterials?: number;
+  outOfStockMaterials?: number;
+  purchasesThisMonth?: number;
+  productionConsumptionThisMonth?: number;
 }
 
 export interface IngredientPrice {

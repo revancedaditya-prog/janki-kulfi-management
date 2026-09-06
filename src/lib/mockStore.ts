@@ -2354,6 +2354,14 @@ class MockStore {
       consumption_this_month: Number(consumption_this_month.toFixed(2)),
       wastage_this_month: Number(wastage_this_month.toFixed(2)),
       pending_physical_count,
+
+      // camelCase aliases
+      totalInventoryValue: Number(total_stock_value.toFixed(2)),
+      totalActiveMaterials: ingredients.length,
+      lowStockMaterials: low_stock_count,
+      outOfStockMaterials: out_of_stock_count,
+      purchasesThisMonth: Number(purchases_this_month.toFixed(2)),
+      productionConsumptionThisMonth: Number(consumption_this_month.toFixed(2)),
     };
   }
 

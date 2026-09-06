@@ -151,13 +151,23 @@ export function useCreateMaterialPurchase() {
         expiry_date?: string | null;
       }[];
     }) => api.createMaterialPurchase(data, user?.id || 'usr-owner-001'),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['material-purchases'] });
-      queryClient.invalidateQueries({ queryKey: ['ingredients'] });
-      queryClient.invalidateQueries({ queryKey: ['raw-material-movements'] });
-      queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] });
-      queryClient.invalidateQueries({ queryKey: ['reorder-list'] });
-      queryClient.invalidateQueries({ queryKey: ['expenses'] });
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['material-purchases'] }),
+        queryClient.invalidateQueries({ queryKey: ['ingredients'] }),
+        queryClient.invalidateQueries({ queryKey: ['raw-material-balances'] }),
+        queryClient.invalidateQueries({ queryKey: ['current_raw_material_stock'] }),
+        queryClient.invalidateQueries({ queryKey: ['raw-material-movements'] }),
+        queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] }),
+        queryClient.invalidateQueries({ queryKey: ['reorder-list'] }),
+        queryClient.invalidateQueries({ queryKey: ['expenses'] }),
+      ]);
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ['ingredients'] }),
+        queryClient.refetchQueries({ queryKey: ['raw-material-kpis'] }),
+        queryClient.refetchQueries({ queryKey: ['material-purchases'] }),
+        queryClient.refetchQueries({ queryKey: ['raw-material-movements'] }),
+      ]);
     },
   });
 }
@@ -169,12 +179,22 @@ export function useReverseMaterialPurchase() {
   return useMutation({
     mutationFn: ({ purchaseId, reason }: { purchaseId: string; reason: string }) =>
       api.reverseMaterialPurchase(purchaseId, reason, user?.id || 'usr-owner-001'),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['material-purchases'] });
-      queryClient.invalidateQueries({ queryKey: ['ingredients'] });
-      queryClient.invalidateQueries({ queryKey: ['raw-material-movements'] });
-      queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] });
-      queryClient.invalidateQueries({ queryKey: ['expenses'] });
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['material-purchases'] }),
+        queryClient.invalidateQueries({ queryKey: ['ingredients'] }),
+        queryClient.invalidateQueries({ queryKey: ['raw-material-balances'] }),
+        queryClient.invalidateQueries({ queryKey: ['current_raw_material_stock'] }),
+        queryClient.invalidateQueries({ queryKey: ['raw-material-movements'] }),
+        queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] }),
+        queryClient.invalidateQueries({ queryKey: ['expenses'] }),
+      ]);
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ['ingredients'] }),
+        queryClient.refetchQueries({ queryKey: ['raw-material-kpis'] }),
+        queryClient.refetchQueries({ queryKey: ['material-purchases'] }),
+        queryClient.refetchQueries({ queryKey: ['raw-material-movements'] }),
+      ]);
     },
   });
 }

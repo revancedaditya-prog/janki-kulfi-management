@@ -32,8 +32,10 @@ import {
   RawMaterialDashboardKPIs,
 } from '@/types';
 
-// Detect if running in mock/local mode (Supabase unconfigured or running unit tests)
-export const useMockMode = !isSupabaseConfigured || import.meta.env.MODE === 'test';
+// Detect if running in mock/local mode (Never active in production; only in test or explicitly enabled DEV fallback)
+export const useMockMode =
+  import.meta.env.MODE === 'test' ||
+  (import.meta.env.DEV && import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true');
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function toSafeUuid(id: any): string | null {
@@ -2939,100 +2941,154 @@ export const api = {
     if (useMockMode) {
       return mockStore.getIngredients(includeInactive);
     }
-    try {
-      let query = (supabase as any).from('v_raw_material_stock').select('*').order('name_hi');
-      if (!includeInactive) {
-        query = query.eq('is_active', true);
-      }
-      const { data, error } = await query;
-      if (!error && data && data.length > 0) {
-        return data.map((ing: any) => ({
-          ...ing,
-          id: ing.id || ing.ingredient_id,
-          current_stock: Number(ing.current_stock ?? ing.available_base_quantity) || 0,
-          current_rate: Number(ing.current_rate ?? ing.latest_purchase_rate) || 0,
-        }));
-      }
 
-      // Fallback: query ingredients table directly
-      let rawQuery = (supabase as any).from('ingredients').select('*').order('name_hi');
-      if (!includeInactive) {
-        rawQuery = rawQuery.eq('is_active', true);
+    // 1. Try canonical view current_raw_material_stock / v_raw_material_stock
+    let query = (supabase as any).from('current_raw_material_stock').select('*').order('name_hi');
+    if (!includeInactive) {
+      query = query.eq('is_active', true);
+    }
+    const { data, error } = await query;
+    if (!error && data && data.length > 0) {
+      return data.map((ing: any) => ({
+        ...ing,
+        id: ing.id || ing.ingredient_id,
+        current_stock: Number(ing.current_stock ?? ing.available_quantity ?? ing.available_base_quantity) || 0,
+        current_rate: Number(ing.current_rate ?? ing.latest_purchase_rate) || 0,
+      }));
+    }
+
+    // 2. Try v_raw_material_stock
+    let vQuery = (supabase as any).from('v_raw_material_stock').select('*').order('name_hi');
+    if (!includeInactive) {
+      vQuery = vQuery.eq('is_active', true);
+    }
+    const { data: vData, error: vError } = await vQuery;
+    if (!vError && vData && vData.length > 0) {
+      return vData.map((ing: any) => ({
+        ...ing,
+        id: ing.id || ing.ingredient_id,
+        current_stock: Number(ing.current_stock ?? ing.available_quantity ?? ing.available_base_quantity) || 0,
+        current_rate: Number(ing.current_rate ?? ing.latest_purchase_rate) || 0,
+      }));
+    }
+
+    // 3. Fallback: query ingredients table directly and calculate from movements
+    let rawQuery = (supabase as any).from('ingredients').select('*').order('name_hi');
+    if (!includeInactive) {
+      rawQuery = rawQuery.eq('is_active', true);
+    }
+    const { data: rawData, error: rawError } = await rawQuery;
+    if (rawError) {
+      throw new Error(`[Ingredients ${rawError.code || ''}]: ${rawError.message}`);
+    }
+
+    const { data: movData, error: movError } = await (supabase as any).from('raw_material_movements').select('ingredient_id, quantity');
+    if (movError) {
+      throw new Error(`[Ingredients Movements ${movError.code || ''}]: ${movError.message}`);
+    }
+
+    const balances: Record<string, number> = {};
+    for (const m of movData || []) {
+      if (m.ingredient_id) {
+        balances[m.ingredient_id] = (balances[m.ingredient_id] || 0) + Number(m.quantity || 0);
       }
-      const { data: rawData, error: rawError } = await rawQuery;
-      if (!rawError && rawData && rawData.length > 0) {
-        return rawData.map((ing: any) => ({
-          ...ing,
-          id: ing.id || ing.ingredient_id,
-          current_stock: Number(ing.current_stock ?? ing.available_base_quantity) || 0,
-          current_rate: Number(ing.current_rate ?? ing.latest_purchase_rate) || 0,
-        }));
-      }
-    } catch {}
-    return mockStore.getIngredients(includeInactive);
+    }
+
+    return (rawData || []).map((ing: any) => ({
+      ...ing,
+      id: ing.id,
+      current_stock: balances[ing.id] || 0,
+      current_rate: Number(ing.current_rate) || 0,
+    }));
   },
 
   async getIngredientById(id: string): Promise<Ingredient | undefined> {
     if (useMockMode) {
       return mockStore.getIngredientById(id);
     }
-    try {
-      const resolvedId = await resolveSupabaseIngredientId(id);
 
-      // 1. Direct query on ingredients table
-      const { data: rawData, error: rawError } = await (supabase as any)
+    const resolvedId = await resolveSupabaseIngredientId(id);
+
+    // 1. Direct query on ingredients table
+    const { data: rawData, error: rawError } = await (supabase as any)
+      .from('ingredients')
+      .select('*')
+      .eq('id', resolvedId)
+      .maybeSingle();
+
+    if (rawError && rawError.code !== 'PGRST116') {
+      throw new Error(`[Ingredient ${rawError.code || ''}]: ${rawError.message}`);
+    }
+
+    if (rawData) {
+      const { data: stockData, error: stockError } = await (supabase as any)
+        .from('raw_material_movements')
+        .select('quantity')
+        .eq('ingredient_id', rawData.id);
+
+      if (stockError) {
+        throw new Error(`[Ingredient Stock ${stockError.code || ''}]: ${stockError.message}`);
+      }
+
+      const currentStock = (stockData || []).reduce((sum: number, m: any) => sum + (Number(m.quantity) || 0), 0);
+      return {
+        ...rawData,
+        id: rawData.id,
+        current_stock: currentStock,
+        current_rate: Number(rawData.current_rate) || 0,
+      };
+    }
+
+    // 2. Query view with fallback
+    const { data, error } = await (supabase as any)
+      .from('current_raw_material_stock')
+      .select('*')
+      .or(`id.eq.${resolvedId},ingredient_id.eq.${resolvedId}`)
+      .maybeSingle();
+
+    if (error && error.code !== 'PGRST116') {
+      throw new Error(`[Ingredient ${error.code || ''}]: ${error.message}`);
+    }
+
+    if (data) {
+      return {
+        ...data,
+        id: data.id || data.ingredient_id,
+        current_stock: Number(data.current_stock ?? data.available_quantity ?? data.available_base_quantity) || 0,
+        current_rate: Number(data.current_rate ?? data.latest_purchase_rate) || 0,
+      };
+    }
+
+    // 3. Fallback search by code or name in Supabase
+    if (id && !isValidUuid(id)) {
+      const { data: byCode, error: codeErr } = await (supabase as any)
         .from('ingredients')
         .select('*')
-        .eq('id', resolvedId)
-        .maybeSingle();
+        .or(`code.ilike.${id},name_en.ilike.${id}`)
+        .limit(1);
 
-      if (!rawError && rawData) {
+      if (codeErr) {
+        throw new Error(`[Ingredient Search ${codeErr.code || ''}]: ${codeErr.message}`);
+      }
+
+      if (byCode && byCode.length > 0) {
+        const ing = byCode[0];
         const { data: stockData } = await (supabase as any)
           .from('raw_material_movements')
           .select('quantity')
-          .eq('ingredient_id', rawData.id);
-        const currentStock = stockData ? stockData.reduce((sum: number, m: any) => sum + (Number(m.quantity) || 0), 0) : 0;
+          .eq('ingredient_id', ing.id);
+
+        const currentStock = (stockData || []).reduce((sum: number, m: any) => sum + (Number(m.quantity) || 0), 0);
         return {
-          ...rawData,
-          id: rawData.id,
+          ...ing,
+          id: ing.id,
           current_stock: currentStock,
-          current_rate: Number(rawData.current_rate) || 0,
+          current_rate: Number(ing.current_rate) || 0,
         };
       }
+    }
 
-      // 2. Query view with fallback
-      const { data, error } = await (supabase as any)
-        .from('v_raw_material_stock')
-        .select('*')
-        .or(`id.eq.${resolvedId},ingredient_id.eq.${resolvedId}`)
-        .maybeSingle();
-      if (!error && data) {
-        return {
-          ...data,
-          id: data.id || data.ingredient_id,
-          current_stock: Number(data.current_stock ?? data.available_base_quantity) || 0,
-          current_rate: Number(data.current_rate ?? data.latest_purchase_rate) || 0,
-        };
-      }
-
-      // 3. Fallback search by code or name in Supabase
-      if (id && !isValidUuid(id)) {
-        const { data: byCode } = await (supabase as any)
-          .from('ingredients')
-          .select('*')
-          .or(`code.ilike.${id},name_en.ilike.${id}`)
-          .limit(1);
-        if (byCode && byCode.length > 0) {
-          return {
-            ...byCode[0],
-            id: byCode[0].id,
-            current_stock: Number(byCode[0].current_stock) || 0,
-            current_rate: Number(byCode[0].current_rate) || 0,
-          };
-        }
-      }
-    } catch {}
-    return mockStore.getIngredientById(id);
+    return undefined;
   },
 
   async createIngredient(
@@ -3047,67 +3103,74 @@ export const api = {
     if (useMockMode) {
       return mockStore.addIngredient(ingredient, userId);
     }
-    try {
-      const { opening_stock, opening_stock_rate, opening_stock_date, opening_stock_reason, ...ingData } = ingredient;
-      const { data, error } = await (supabase as any).from('ingredients').insert(ingData).select().single();
-      if (!error && data) {
-        if (Number(opening_stock) > 0) {
-          const qty = Number(opening_stock);
-          const rate = Number(opening_stock_rate ?? data.current_rate ?? 0);
-          await (supabase as any).from('raw_material_movements').insert({
-            ingredient_id: data.id,
-            movement_type: 'opening_stock',
-            quantity: qty,
-            base_unit: data.base_unit,
-            unit_cost_snapshot: rate,
-            total_value_snapshot: Number((qty * rate).toFixed(2)),
-            movement_date: opening_stock_date || new Date().toISOString(),
-            source_location: 'Opening Balance',
-            destination_location: data.storage_location || 'Main Store',
-            reason: opening_stock_reason || 'Initial opening stock entry',
-            created_by: userId,
-          });
-        }
-        return data;
+
+    const { opening_stock, opening_stock_rate, opening_stock_date, opening_stock_reason, ...ingData } = ingredient;
+    const { data, error } = await (supabase as any).from('ingredients').insert(ingData).select().single();
+    if (error) {
+      throw new Error(`[Create Ingredient ${error.code || ''}]: ${error.message}`);
+    }
+
+    if (Number(opening_stock) > 0) {
+      const qty = Number(opening_stock);
+      const rate = Number(opening_stock_rate ?? data.current_rate ?? 0);
+      const { error: movError } = await (supabase as any).from('raw_material_movements').insert({
+        ingredient_id: data.id,
+        movement_type: 'opening_stock',
+        quantity: qty,
+        base_unit: data.base_unit,
+        unit_cost_snapshot: rate,
+        total_value_snapshot: Number((qty * rate).toFixed(2)),
+        movement_date: opening_stock_date || new Date().toISOString(),
+        source_location: 'Opening Balance',
+        destination_location: data.storage_location || 'Main Store',
+        reason: opening_stock_reason || 'Initial opening stock entry',
+        created_by: userId,
+      });
+      if (movError) {
+        console.error('[Create Ingredient Opening Stock Movement]:', movError);
       }
-    } catch {}
-    return mockStore.addIngredient(ingredient, userId);
+    }
+
+    return data;
   },
 
   async updateIngredient(id: string, updates: Partial<Ingredient>, reason: string, userId: string): Promise<Ingredient> {
     if (useMockMode) {
       return mockStore.updateIngredient(id, updates, reason, userId);
     }
-    try {
-      const resolvedId = await resolveSupabaseIngredientId(id);
-      const { data, error } = await (supabase as any).from('ingredients').update(updates).eq('id', resolvedId).select().single();
-      if (!error && data) return data;
-    } catch {}
-    return mockStore.updateIngredient(id, updates, reason, userId);
+
+    const resolvedId = await resolveSupabaseIngredientId(id);
+    const { data, error } = await (supabase as any).from('ingredients').update(updates).eq('id', resolvedId).select().single();
+    if (error) {
+      throw new Error(`[Update Ingredient ${error.code || ''}]: ${error.message}`);
+    }
+    return data;
   },
 
   async deactivateIngredient(id: string, reason: string, userId: string): Promise<boolean> {
     if (useMockMode) {
       return mockStore.deactivateIngredient(id, reason, userId);
     }
-    try {
-      const resolvedId = await resolveSupabaseIngredientId(id);
-      const { error } = await (supabase as any).from('ingredients').update({ is_active: false }).eq('id', resolvedId);
-      if (!error) return true;
-    } catch {}
-    return mockStore.deactivateIngredient(id, reason, userId);
+
+    const resolvedId = await resolveSupabaseIngredientId(id);
+    const { error } = await (supabase as any).from('ingredients').update({ is_active: false }).eq('id', resolvedId);
+    if (error) {
+      throw new Error(`[Deactivate Ingredient ${error.code || ''}]: ${error.message}`);
+    }
+    return true;
   },
 
   async reactivateIngredient(id: string, userId: string): Promise<boolean> {
     if (useMockMode) {
       return mockStore.reactivateIngredient(id, userId);
     }
-    try {
-      const resolvedId = await resolveSupabaseIngredientId(id);
-      const { error } = await (supabase as any).from('ingredients').update({ is_active: true }).eq('id', resolvedId);
-      if (!error) return true;
-    } catch {}
-    return mockStore.reactivateIngredient(id, userId);
+
+    const resolvedId = await resolveSupabaseIngredientId(id);
+    const { error } = await (supabase as any).from('ingredients').update({ is_active: true }).eq('id', resolvedId);
+    if (error) {
+      throw new Error(`[Reactivate Ingredient ${error.code || ''}]: ${error.message}`);
+    }
+    return true;
   },
 
   async deleteIngredient(id: string, reason?: string, userId?: string): Promise<{ success: boolean; deactivated?: boolean; deleted?: boolean; message: string }> {
@@ -3122,7 +3185,7 @@ export const api = {
       p_user_id: userId || null,
     });
     if (error) {
-      throw new Error(error.message || 'Failed to delete ingredient');
+      throw new Error(`[Delete Ingredient ${error.code || ''}]: ${error.message}`);
     }
     return data;
   },
@@ -3132,41 +3195,210 @@ export const api = {
     if (useMockMode) {
       return mockStore.getAvailableRawMaterialStock(ingredientId);
     }
-    try {
-      const resolvedId = await resolveSupabaseIngredientId(ingredientId);
-      const { data, error } = await (supabase as any).rpc('get_available_raw_material_stock', { p_ingredient_id: resolvedId });
-      if (!error && data !== null) return Number(data);
-    } catch {}
-    return mockStore.getAvailableRawMaterialStock(ingredientId);
+
+    const resolvedId = await resolveSupabaseIngredientId(ingredientId);
+    const { data, error } = await (supabase as any).rpc('get_available_raw_material_stock', { p_ingredient_id: resolvedId });
+    if (!error && data !== null) return Number(data);
+
+    const { data: movData, error: movError } = await (supabase as any)
+      .from('raw_material_movements')
+      .select('quantity')
+      .eq('ingredient_id', resolvedId);
+
+    if (movError) {
+      throw new Error(`[Available Stock ${movError.code || ''}]: ${movError.message}`);
+    }
+
+    return (movData || []).reduce((sum: number, m: any) => sum + (Number(m.quantity) || 0), 0);
   },
 
   async getRawMaterialBalances(): Promise<Record<string, number>> {
-    if (useMockMode) {
-      return mockStore.getRawMaterialBalances();
+    if (useMockMode) return mockStore.getRawMaterialBalances();
+
+    const { data, error } = await (supabase as any)
+      .from('raw_material_movements')
+      .select('ingredient_id, quantity');
+
+    if (error) {
+      throw new Error(
+        `[Raw Material Balance ${error.code || ''}]: ${error.message}`
+      );
     }
-    return mockStore.getRawMaterialBalances();
+
+    const balances: Record<string, number> = {};
+
+    for (const movement of data || []) {
+      if (movement.ingredient_id) {
+        balances[movement.ingredient_id] =
+          (balances[movement.ingredient_id] || 0) +
+          Number(movement.quantity || 0);
+      }
+    }
+
+    return balances;
   },
 
   async getRawMaterialMovements(ingredientId?: string): Promise<RawMaterialMovement[]> {
     if (useMockMode) {
       return mockStore.getRawMaterialMovements(ingredientId);
     }
-    try {
-      let query = (supabase as any).from('raw_material_movements').select('*, ingredient:ingredients(*)').order('movement_date', { ascending: false });
-      if (ingredientId) {
-        query = query.eq('ingredient_id', ingredientId);
-      }
-      const { data, error } = await query;
-      if (!error && data) return data;
-    } catch {}
-    return mockStore.getRawMaterialMovements(ingredientId);
+
+    let query = (supabase as any)
+      .from('raw_material_movements')
+      .select('*, ingredient:ingredients(*)')
+      .order('movement_date', { ascending: false });
+
+    if (ingredientId) {
+      const resolvedId = await resolveSupabaseIngredientId(ingredientId);
+      query = query.eq('ingredient_id', resolvedId);
+    }
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`[Raw Material Movements ${error.code || ''}]: ${error.message}`);
+    }
+    return data || [];
   },
 
   async getRawMaterialDashboardKPIs(): Promise<RawMaterialDashboardKPIs> {
     if (useMockMode) {
       return mockStore.getRawMaterialDashboardKPIs();
     }
-    return mockStore.getRawMaterialDashboardKPIs();
+
+    // 1. Fetch live stock from canonical view or ingredients + movements
+    let stockItems: any[] = [];
+    const { data: viewData, error: viewError } = await (supabase as any)
+      .from('current_raw_material_stock')
+      .select('*');
+
+    if (!viewError && viewData && viewData.length > 0) {
+      stockItems = viewData;
+    } else {
+      const { data: vData, error: vError } = await (supabase as any)
+        .from('v_raw_material_stock')
+        .select('*');
+      if (!vError && vData && vData.length > 0) {
+        stockItems = vData;
+      }
+    }
+
+    let activeCount = 0;
+    let totalValue = 0;
+    let lowStockCount = 0;
+    let outOfStockCount = 0;
+
+    if (stockItems.length > 0) {
+      for (const item of stockItems) {
+        if (item.is_active !== false) {
+          activeCount++;
+          const qty = Number(item.current_stock ?? item.available_quantity ?? item.available_base_quantity ?? 0);
+          const rate = Number(item.current_rate ?? item.latest_purchase_rate ?? 0);
+          totalValue += qty * rate;
+
+          const minStock = Number(item.min_stock_level || 0);
+          if (qty <= 0) {
+            outOfStockCount++;
+          } else if (qty <= minStock) {
+            lowStockCount++;
+          }
+        }
+      }
+    } else {
+      const { data: ingredients, error: ingError } = await (supabase as any)
+        .from('ingredients')
+        .select('*');
+
+      if (ingError) {
+        throw new Error(`[Dashboard KPIs ${ingError.code || ''}]: ${ingError.message}`);
+      }
+
+      const { data: movements, error: movError } = await (supabase as any)
+        .from('raw_material_movements')
+        .select('ingredient_id, quantity');
+
+      if (movError) {
+        throw new Error(`[Dashboard KPIs ${movError.code || ''}]: ${movError.message}`);
+      }
+
+      const balances: Record<string, number> = {};
+      for (const m of movements || []) {
+        if (m.ingredient_id) {
+          balances[m.ingredient_id] = (balances[m.ingredient_id] || 0) + Number(m.quantity || 0);
+        }
+      }
+
+      for (const ing of ingredients || []) {
+        if (ing.is_active !== false) {
+          activeCount++;
+          const qty = balances[ing.id] || 0;
+          const rate = Number(ing.current_rate || 0);
+          totalValue += qty * rate;
+          const minStock = Number(ing.min_stock_level || 0);
+          if (qty <= 0) {
+            outOfStockCount++;
+          } else if (qty <= minStock) {
+            lowStockCount++;
+          }
+        }
+      }
+    }
+
+    // 2. Purchases this month (from material_purchases)
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString().split('T')[0];
+
+    const { data: purchaseData, error: purchaseError } = await (supabase as any)
+      .from('material_purchases')
+      .select('grand_total, status')
+      .gte('purchase_date', startOfMonth)
+      .lte('purchase_date', endOfMonth)
+      .neq('status', 'cancelled');
+
+    if (purchaseError) {
+      throw new Error(`[Dashboard KPIs Purchases ${purchaseError.code || ''}]: ${purchaseError.message}`);
+    }
+
+    const purchasesThisMonth = (purchaseData || []).reduce((sum: number, p: any) => sum + Number(p.grand_total || 0), 0);
+
+    // 3. Production consumption this month (from raw_material_movements where movement_type = 'production_consumption' or 'production')
+    const { data: consumptionData, error: consumError } = await (supabase as any)
+      .from('raw_material_movements')
+      .select('total_value_snapshot, quantity, unit_cost_snapshot')
+      .in('movement_type', ['production_consumption', 'production'])
+      .gte('movement_date', startOfMonth);
+
+    if (consumError) {
+      throw new Error(`[Dashboard KPIs Consumption ${consumError.code || ''}]: ${consumError.message}`);
+    }
+
+    const productionConsumptionThisMonth = (consumptionData || []).reduce((sum: number, c: any) => {
+      const val = Number(c.total_value_snapshot || (Math.abs(Number(c.quantity || 0)) * Number(c.unit_cost_snapshot || 0)));
+      return sum + Math.abs(val);
+    }, 0);
+
+    return {
+      // canonical fields
+      total_stock_value: Number(totalValue.toFixed(2)),
+      low_stock_count: lowStockCount,
+      out_of_stock_count: outOfStockCount,
+      expiring_soon_count: 0,
+      lpg_full_count: 0,
+      lpg_in_use_count: 0,
+      lpg_empty_count: 0,
+      total_lpg_remaining_kg: 0,
+      purchases_this_month: Number(purchasesThisMonth.toFixed(2)),
+      consumption_this_month: Number(productionConsumptionThisMonth.toFixed(2)),
+      wastage_this_month: 0,
+      pending_physical_count: false,
+
+      // camelCase aliases
+      totalInventoryValue: Number(totalValue.toFixed(2)),
+      totalActiveMaterials: activeCount,
+      lowStockMaterials: lowStockCount,
+      outOfStockMaterials: outOfStockCount,
+      purchasesThisMonth: Number(purchasesThisMonth.toFixed(2)),
+      productionConsumptionThisMonth: Number(productionConsumptionThisMonth.toFixed(2)),
+    };
   },
 
   // --- Material Purchases ---
@@ -3174,29 +3406,33 @@ export const api = {
     if (useMockMode) {
       return mockStore.getMaterialPurchases();
     }
-    try {
-      const { data, error } = await (supabase as any)
-        .from('material_purchases')
-        .select('*, supplier:suppliers(*), items:material_purchase_items(*, ingredient:ingredients(*))')
-        .order('purchase_date', { ascending: false });
-      if (!error && data) return data;
-    } catch {}
-    return mockStore.getMaterialPurchases();
+
+    const { data, error } = await (supabase as any)
+      .from('material_purchases')
+      .select('*, supplier:suppliers(*), items:material_purchase_items(*, ingredient:ingredients(*))')
+      .order('purchase_date', { ascending: false });
+
+    if (error) {
+      throw new Error(`[Material Purchases ${error.code || ''}]: ${error.message}`);
+    }
+    return data || [];
   },
 
   async getMaterialPurchaseById(id: string): Promise<MaterialPurchaseWithItems | undefined> {
     if (useMockMode) {
       return mockStore.getMaterialPurchaseById(id);
     }
-    try {
-      const { data, error } = await (supabase as any)
-        .from('material_purchases')
-        .select('*, supplier:suppliers(*), items:material_purchase_items(*, ingredient:ingredients(*))')
-        .eq('id', id)
-        .maybeSingle();
-      if (!error && data) return data;
-    } catch {}
-    return mockStore.getMaterialPurchaseById(id);
+
+    const { data, error } = await (supabase as any)
+      .from('material_purchases')
+      .select('*, supplier:suppliers(*), items:material_purchase_items(*, ingredient:ingredients(*))')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`[Material Purchase ${error.code || ''}]: ${error.message}`);
+    }
+    return data || undefined;
   },
 
   async createMaterialPurchase(
@@ -3228,6 +3464,7 @@ export const api = {
     if (useMockMode) {
       return mockStore.createMaterialPurchase(data, userId);
     }
+
     const resolvedItems = await Promise.all(
       data.items.map(async (item) => ({
         ...item,
@@ -3235,31 +3472,64 @@ export const api = {
       }))
     );
     const resolvedSupplierId = await resolveSupabaseSupplierId(data.supplier_id);
-    try {
-      const { data: result, error } = await (supabase as any).rpc('confirm_material_purchase_transaction', {
-        p_purchase_date: data.purchase_date,
-        p_supplier_id: resolvedSupplierId || null,
-        p_invoice_number: data.invoice_number || null,
-        p_payment_method: data.payment_method,
-        p_paid_amount: data.paid_amount,
-        p_credit_amount: data.credit_amount || 0,
-        p_bill_image_url: data.bill_image_url || null,
-        p_notes: data.notes || null,
-        p_items: resolvedItems,
-        p_user_id: userId,
-      });
-      if (!error && result?.purchase_id) {
-        return (await this.getMaterialPurchaseById(result.purchase_id)) || mockStore.createMaterialPurchase(data, userId);
-      }
-    } catch {}
-    return mockStore.createMaterialPurchase(data, userId);
+
+    const payload = {
+      p_purchase_date: data.purchase_date,
+      p_supplier_id: resolvedSupplierId || null,
+      p_invoice_number: data.invoice_number || null,
+      p_payment_method: data.payment_method,
+      p_paid_amount: data.paid_amount,
+      p_credit_amount: data.credit_amount || 0,
+      p_bill_image_url: data.bill_image_url || null,
+      p_notes: data.notes || null,
+      p_items: resolvedItems,
+      p_user_id: userId,
+    };
+
+    const { data: result, error } = await (supabase as any).rpc(
+      'confirm_material_purchase_transaction',
+      payload
+    );
+
+    if (error) {
+      console.error('[material purchase] RPC failed', error);
+      throw new Error(
+        `[Supabase ${error.code || ''}]: ${error.message}`
+      );
+    }
+
+    if (!result?.success || !result?.purchase_id) {
+      throw new Error(result?.message || 'Material purchase was not saved');
+    }
+
+    const loadedPurchase = await this.getMaterialPurchaseById(result.purchase_id);
+    if (!loadedPurchase) {
+      throw new Error(`[Supabase]: Purchase ${result.purchase_id} confirmed but could not be retrieved from database`);
+    }
+
+    return loadedPurchase;
   },
 
   async reverseMaterialPurchase(purchaseId: string, reason: string, userId: string): Promise<boolean> {
     if (useMockMode) {
       return mockStore.reverseMaterialPurchase(purchaseId, reason, userId);
     }
-    return mockStore.reverseMaterialPurchase(purchaseId, reason, userId);
+
+    const { data, error } = await (supabase as any).rpc('reverse_material_purchase_transaction', {
+      p_purchase_id: purchaseId,
+      p_reason: reason,
+      p_user_id: userId,
+    });
+
+    if (error) {
+      throw new Error(`[Reverse Purchase ${error.code || ''}]: ${error.message}`);
+    }
+
+    if (data && data.success === false) {
+      throw new Error(data.message || 'Failed to reverse purchase');
+    }
+
+    return true;
   },
 
   // --- Physical Stock Counts ---
@@ -3267,14 +3537,14 @@ export const api = {
     if (useMockMode) {
       return mockStore.getPhysicalStockCounts();
     }
-    try {
-      const { data, error } = await (supabase as any)
-        .from('physical_stock_counts')
-        .select('*, items:physical_stock_count_items(*, ingredient:ingredients(*))')
-        .order('count_date', { ascending: false });
-      if (!error && data) return data;
-    } catch {}
-    return mockStore.getPhysicalStockCounts();
+    const { data, error } = await (supabase as any)
+      .from('physical_stock_counts')
+      .select('*, items:physical_stock_count_items(*, ingredient:ingredients(*))')
+      .order('count_date', { ascending: false });
+    if (error) {
+      throw new Error(`[Physical Stock Counts ${error.code || ''}]: ${error.message}`);
+    }
+    return data || [];
   },
 
   async createPhysicalStockCount(
@@ -3293,14 +3563,48 @@ export const api = {
     if (useMockMode) {
       return mockStore.createPhysicalStockCount(data, userId);
     }
-    return mockStore.createPhysicalStockCount(data, userId);
+    const resolvedItems = await Promise.all(
+      data.items.map(async (item) => ({
+        ...item,
+        ingredient_id: await resolveSupabaseIngredientId(item.ingredient_id),
+      }))
+    );
+    const { data: created, error } = await (supabase as any).from('physical_stock_counts').insert({
+      count_date: data.count_date,
+      notes: data.notes,
+      status: data.status || 'draft',
+      counted_by: userId,
+    }).select().single();
+    if (error) {
+      throw new Error(`[Create Stock Count ${error.code || ''}]: ${error.message}`);
+    }
+    if (resolvedItems.length > 0) {
+      const itemsToInsert = resolvedItems.map((item) => ({
+        count_id: created.id,
+        ingredient_id: item.ingredient_id,
+        physical_stock: item.physical_stock,
+        reason: item.reason || null,
+      }));
+      const { error: itemsError } = await (supabase as any).from('physical_stock_count_items').insert(itemsToInsert);
+      if (itemsError) {
+        throw new Error(`[Stock Count Items ${itemsError.code || ''}]: ${itemsError.message}`);
+      }
+    }
+    return (await this.getPhysicalStockCounts()).find((c) => c.id === created.id) || created;
   },
 
   async approvePhysicalStockCount(countId: string, approvedBy: string): Promise<boolean> {
     if (useMockMode) {
       return mockStore.approvePhysicalStockCount(countId, approvedBy);
     }
-    return mockStore.approvePhysicalStockCount(countId, approvedBy);
+    const { data, error } = await (supabase as any).rpc('approve_physical_stock_count_transaction', {
+      p_count_id: countId,
+      p_approved_by: approvedBy,
+    });
+    if (error) {
+      throw new Error(`[Approve Stock Count ${error.code || ''}]: ${error.message}`);
+    }
+    return data?.success !== false;
   },
 
   // --- LPG Cylinders ---
@@ -3308,22 +3612,22 @@ export const api = {
     if (useMockMode) {
       return mockStore.getLpgCylinders();
     }
-    try {
-      const { data, error } = await (supabase as any).from('lpg_cylinders').select('*').order('cylinder_code');
-      if (!error && data) return data;
-    } catch {}
-    return mockStore.getLpgCylinders();
+    const { data, error } = await (supabase as any).from('lpg_cylinders').select('*').order('cylinder_code');
+    if (error) {
+      throw new Error(`[LPG Cylinders ${error.code || ''}]: ${error.message}`);
+    }
+    return data || [];
   },
 
   async getLpgCylinderById(id: string): Promise<LpgCylinder | undefined> {
     if (useMockMode) {
       return mockStore.getLpgCylinderById(id);
     }
-    try {
-      const { data, error } = await (supabase as any).from('lpg_cylinders').select('*').eq('id', id).maybeSingle();
-      if (!error && data) return data;
-    } catch {}
-    return mockStore.getLpgCylinderById(id);
+    const { data, error } = await (supabase as any).from('lpg_cylinders').select('*').eq('id', id).maybeSingle();
+    if (error) {
+      throw new Error(`[LPG Cylinder ${error.code || ''}]: ${error.message}`);
+    }
+    return data || undefined;
   },
 
   async createLpgCylinder(
@@ -3333,11 +3637,11 @@ export const api = {
     if (useMockMode) {
       return mockStore.addLpgCylinder(data, userId);
     }
-    try {
-      const { data: created, error } = await (supabase as any).from('lpg_cylinders').insert(data).select().single();
-      if (!error && created) return created;
-    } catch {}
-    return mockStore.addLpgCylinder(data, userId);
+    const { data: created, error } = await (supabase as any).from('lpg_cylinders').insert(data).select().single();
+    if (error) {
+      throw new Error(`[Create LPG Cylinder ${error.code || ''}]: ${error.message}`);
+    }
+    return created;
   },
 
   async recordLpgReading(
@@ -3351,7 +3655,23 @@ export const api = {
     if (useMockMode) {
       return mockStore.recordLpgReading(cylinderId, grossWeight, readingType, batchId, notes, userId);
     }
-    return mockStore.recordLpgReading(cylinderId, grossWeight, readingType, batchId, notes, userId);
+    const { error: readError } = await (supabase as any).from('lpg_cylinder_readings').insert({
+      cylinder_id: cylinderId,
+      gross_weight: grossWeight,
+      reading_type: readingType,
+      batch_id: batchId || null,
+      notes: notes || null,
+      recorded_by: userId || null,
+      reading_date: new Date().toISOString(),
+    }).select().single();
+    if (readError) {
+      throw new Error(`[Record LPG Reading ${readError.code || ''}]: ${readError.message}`);
+    }
+    const updated = await this.getLpgCylinderById(cylinderId);
+    if (!updated) {
+      throw new Error(`[LPG Cylinder]: Cylinder ${cylinderId} not found after reading`);
+    }
+    return updated;
   },
 
   async recordLpgRefill(
@@ -3363,51 +3683,70 @@ export const api = {
     if (useMockMode) {
       return mockStore.recordLpgRefill(cylinderId, refillCost, fullGrossWeight, userId);
     }
-    return mockStore.recordLpgRefill(cylinderId, refillCost, fullGrossWeight, userId);
+    const { error } = await (supabase as any).from('lpg_cylinders').update({
+      status: 'full',
+      current_gross_weight: fullGrossWeight || 30.5,
+      refill_cost: refillCost,
+      last_refill_date: new Date().toISOString().split('T')[0],
+    }).eq('id', cylinderId);
+    if (error) {
+      throw new Error(`[Record LPG Refill ${error.code || ''}]: ${error.message}`);
+    }
+    const updated = await this.getLpgCylinderById(cylinderId);
+    if (!updated) {
+      throw new Error(`[LPG Cylinder]: Cylinder ${cylinderId} not found after refill`);
+    }
+    return updated;
   },
 
   async connectLpgCylinder(cylinderId: string, userId: string): Promise<LpgCylinder> {
     if (useMockMode) {
       return mockStore.connectLpgCylinder(cylinderId, userId);
     }
-    return mockStore.connectLpgCylinder(cylinderId, userId);
+    const { error } = await (supabase as any).from('lpg_cylinders').update({
+      status: 'in_use',
+      connected_date: new Date().toISOString().split('T')[0],
+    }).eq('id', cylinderId);
+    if (error) {
+      throw new Error(`[Connect LPG Cylinder ${error.code || ''}]: ${error.message}`);
+    }
+    const updated = await this.getLpgCylinderById(cylinderId);
+    if (!updated) {
+      throw new Error(`[LPG Cylinder]: Cylinder ${cylinderId} not found after connecting`);
+    }
+    return updated;
   },
 
   async getLpgReadings(cylinderId?: string): Promise<LpgCylinderReading[]> {
     if (useMockMode) {
       return mockStore.getLpgReadings(cylinderId);
     }
-    try {
-      let query = (supabase as any).from('lpg_cylinder_readings').select('*').order('reading_date', { ascending: false });
-      if (cylinderId) query = query.eq('cylinder_id', cylinderId);
-      const { data, error } = await query;
-      if (!error && data) return data;
-    } catch {}
-    return mockStore.getLpgReadings(cylinderId);
+    let query = (supabase as any).from('lpg_cylinder_readings').select('*').order('reading_date', { ascending: false });
+    if (cylinderId) query = query.eq('cylinder_id', cylinderId);
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`[LPG Readings ${error.code || ''}]: ${error.message}`);
+    }
+    return data || [];
   },
 
   async deleteLpgCylinder(id: string, userId: string = 'usr-owner-001'): Promise<{ success: boolean; cylinder_id?: string; message?: string }> {
     if (useMockMode) {
       return mockStore.deleteLpgCylinder(id, userId);
     }
-    try {
-      const { data, error } = await (supabase as any).rpc('delete_lpg_cylinder_transaction', {
-        p_cylinder_id: id,
-        p_user_id: userId,
-      });
-      if (!error && data) return data;
-      if (error) {
-        // Fallback to direct delete if RPC is missing
-        const { error: delError } = await (supabase as any).from('lpg_cylinders').delete().eq('id', id);
-        if (delError) throw delError;
-        return { success: true, cylinder_id: id };
+    const { data, error } = await (supabase as any).rpc('delete_lpg_cylinder_transaction', {
+      p_cylinder_id: id,
+      p_user_id: userId,
+    });
+    if (!error && data) return data;
+    if (error) {
+      const { error: delError } = await (supabase as any).from('lpg_cylinders').delete().eq('id', id);
+      if (delError) {
+        throw new Error(`[Delete LPG Cylinder ${delError.code || ''}]: ${delError.message}`);
       }
-    } catch (err) {
-      if (isSupabaseConfigured && import.meta.env.MODE !== 'test') {
-        throw err;
-      }
+      return { success: true, cylinder_id: id };
     }
-    return mockStore.deleteLpgCylinder(id, userId);
+    return { success: true, cylinder_id: id };
   },
 
   // --- Inventory Wastage & Damage ---
@@ -3415,11 +3754,11 @@ export const api = {
     if (useMockMode) {
       return mockStore.getInventoryWastages();
     }
-    try {
-      const { data, error } = await (supabase as any).from('inventory_wastage').select('*, ingredient:ingredients(*)').order('wastage_date', { ascending: false });
-      if (!error && data) return data;
-    } catch {}
-    return mockStore.getInventoryWastages();
+    const { data, error } = await (supabase as any).from('inventory_wastage').select('*, ingredient:ingredients(*)').order('wastage_date', { ascending: false });
+    if (error) {
+      throw new Error(`[Inventory Wastages ${error.code || ''}]: ${error.message}`);
+    }
+    return data || [];
   },
 
   async recordInventoryWastage(
@@ -3439,7 +3778,33 @@ export const api = {
       return mockStore.recordInventoryWastage(data, userId);
     }
     const resolvedIngredientId = await resolveSupabaseIngredientId(data.ingredient_id);
-    return mockStore.recordInventoryWastage({ ...data, ingredient_id: resolvedIngredientId }, userId);
+    const { data: created, error } = await (supabase as any).from('inventory_wastage').insert({
+      ...data,
+      ingredient_id: resolvedIngredientId,
+      recorded_by: userId,
+    }).select().single();
+
+    if (error) {
+      throw new Error(`[Record Wastage ${error.code || ''}]: ${error.message}`);
+    }
+
+    const { error: movError } = await (supabase as any).from('raw_material_movements').insert({
+      ingredient_id: resolvedIngredientId,
+      movement_type: 'wastage',
+      quantity: -Math.abs(data.quantity),
+      base_unit: data.unit,
+      movement_date: data.wastage_date || new Date().toISOString(),
+      source_location: 'Main Store',
+      destination_location: 'Wastage',
+      reason: `Wastage: ${data.reason}`,
+      created_by: userId,
+    });
+
+    if (movError) {
+      throw new Error(`[Wastage Movement ${movError.code || ''}]: ${movError.message}`);
+    }
+
+    return created;
   },
 
   // --- Supplier Returns ---
@@ -3447,11 +3812,11 @@ export const api = {
     if (useMockMode) {
       return mockStore.getSupplierReturns();
     }
-    try {
-      const { data, error } = await (supabase as any).from('supplier_returns').select('*, ingredient:ingredients(*), supplier:suppliers(*)').order('return_date', { ascending: false });
-      if (!error && data) return data;
-    } catch {}
-    return mockStore.getSupplierReturns();
+    const { data, error } = await (supabase as any).from('supplier_returns').select('*, ingredient:ingredients(*), supplier:suppliers(*)').order('return_date', { ascending: false });
+    if (error) {
+      throw new Error(`[Supplier Returns ${error.code || ''}]: ${error.message}`);
+    }
+    return data || [];
   },
 
   async createSupplierReturn(
@@ -3473,7 +3838,34 @@ export const api = {
     }
     const resolvedIngredientId = await resolveSupabaseIngredientId(data.ingredient_id);
     const resolvedSupplierId = await resolveSupabaseSupplierId(data.supplier_id);
-    return mockStore.createSupplierReturn({ ...data, ingredient_id: resolvedIngredientId, supplier_id: resolvedSupplierId }, userId);
+    const { data: created, error } = await (supabase as any).from('supplier_returns').insert({
+      ...data,
+      ingredient_id: resolvedIngredientId,
+      supplier_id: resolvedSupplierId,
+      processed_by: userId,
+    }).select().single();
+
+    if (error) {
+      throw new Error(`[Supplier Return ${error.code || ''}]: ${error.message}`);
+    }
+
+    const { error: movError } = await (supabase as any).from('raw_material_movements').insert({
+      ingredient_id: resolvedIngredientId,
+      movement_type: 'supplier_return',
+      quantity: -Math.abs(data.returned_quantity),
+      base_unit: data.unit,
+      movement_date: data.return_date || new Date().toISOString(),
+      source_location: 'Main Store',
+      destination_location: 'Supplier Return',
+      reason: `Supplier Return: ${data.reason}`,
+      created_by: userId,
+    });
+
+    if (movError) {
+      throw new Error(`[Supplier Return Movement ${movError.code || ''}]: ${movError.message}`);
+    }
+
+    return created;
   },
 
   // --- Raw Material Stock Correction ---
@@ -3494,7 +3886,7 @@ export const api = {
       p_user_id: params.userId || null,
     });
     if (error) {
-      throw new Error(error.message || 'Failed to correct raw material stock');
+      throw new Error(`[Stock Correction ${error.code || ''}]: ${error.message}`);
     }
     return data;
   },
