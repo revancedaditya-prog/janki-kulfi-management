@@ -2975,6 +2975,12 @@ export const api = {
 
       const { data: rawData, error: rawError } = await (supabase as any).from('ingredients').select('*').eq('id', resolvedId).maybeSingle();
       if (!rawError && rawData) return rawData;
+
+      // Fallback search by code or name in Supabase
+      if (id && !isValidUuid(id)) {
+        const { data: byCode } = await (supabase as any).from('ingredients').select('*').or(`code.ilike.${id},name_en.ilike.${id}`).limit(1);
+        if (byCode && byCode.length > 0) return byCode[0];
+      }
     } catch {}
     return mockStore.getIngredientById(id);
   },
