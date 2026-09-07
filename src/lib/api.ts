@@ -57,6 +57,19 @@ export function isValidUuid(id?: string | null): boolean {
   return UUID_REGEX.test(id.trim());
 }
 
+export function isRpcMissingError(err: any): boolean {
+  if (!err) return false;
+  const code = String(err.code || '');
+  const msg = String(err.message || '').toLowerCase();
+  return (
+    code === 'PGRST202' ||
+    code === '42883' ||
+    msg.includes('schema cache') ||
+    msg.includes('could not find the function') ||
+    msg.includes('does not exist')
+  );
+}
+
 export async function resolveSupabaseIngredientId(ingredientId: string): Promise<string> {
   if (!ingredientId) return ingredientId;
 
@@ -4377,20 +4390,124 @@ export const api = {
       const created = mockStore.addSimpleLpgCylinder(data, userId || 'usr-owner-001');
       return { success: true, cylinder: created.cylinder, movement: created.movement };
     }
-    const { data: res, error } = await (supabase as any).rpc('add_lpg_cylinder_transaction', {
-      p_cylinder_code: data.cylinder_code,
-      p_status: data.status || 'full',
-      p_supplier_id: toSafeUuid(data.supplier_id),
-      p_supplier_name: data.supplier_name || null,
-      p_starting_date: data.starting_date || new Date().toISOString().split('T')[0],
-      p_notes: data.notes || null,
-      p_user_id: toSafeUuid(userId),
-      p_idempotency_key: data.idempotency_key || null,
-    });
-    if (error) {
-      throw new Error(`[Add Cylinder ${error.code || ''}]: ${error.message}`);
+    const cleanCode = data.cylinder_code.trim().toUpperCase();
+    const cleanStatus = data.status || 'full';
+    const cleanPlace = cleanStatus === 'connected' ? 'भट्टी 1' : 'Main Store';
+    const effDate = data.starting_date || new Date().toISOString().split('T')[0];
+
+    try {
+      const { data: res, error } = await (supabase as any).rpc('add_lpg_cylinder_transaction', {
+        p_cylinder_code: cleanCode,
+        p_status: cleanStatus,
+        p_supplier_id: toSafeUuid(data.supplier_id),
+        p_supplier_name: data.supplier_name || null,
+        p_place: cleanPlace,
+        p_starting_date: effDate,
+        p_notes: data.notes || null,
+        p_user_id: toSafeUuid(userId),
+        p_idempotency_key: data.idempotency_key || null,
+      });
+      if (error) {
+        if (isRpcMissingError(error)) {
+          return await this.addSimpleLpgCylinderDirectFallback(data, userId);
+        }
+        throw new Error(`[Add Cylinder ${error.code || ''}]: ${error.message}`);
+      }
+      return res;
+    } catch (err: any) {
+      if (isRpcMissingError(err)) {
+        return await this.addSimpleLpgCylinderDirectFallback(data, userId);
+      }
+      throw err;
     }
-    return res;
+  },
+
+  async addSimpleLpgCylinderDirectFallback(
+    data: {
+      cylinder_code: string;
+      status?: SimpleLpgCylinderStatus;
+      supplier_id?: string | null;
+      supplier_name?: string | null;
+      starting_date?: string;
+      notes?: string | null;
+      idempotency_key?: string;
+    },
+    userId?: string
+  ): Promise<{ success: boolean; cylinder: SimpleLpgCylinder; movement: SimpleLpgMovement }> {
+    const cleanCode = data.cylinder_code.trim().toUpperCase();
+    if (!cleanCode) throw new Error('Cylinder ID/Code is required.');
+
+    // Unique code check
+    const { data: existing } = await (supabase as any)
+      .from('lpg_cylinders')
+      .select('id, cylinder_code')
+      .ilike('cylinder_code', cleanCode);
+
+    if (existing && existing.length > 0) {
+      throw new Error(`Cylinder code "${cleanCode}" already exists. Please choose a unique code.`);
+    }
+
+    const cleanStatus = data.status || 'full';
+    const initialPlace = cleanStatus === 'connected' ? 'भट्टी 1' : 'Main Store';
+    const effDate = data.starting_date ? new Date(data.starting_date).toISOString() : new Date().toISOString();
+
+    const { data: newCyl, error: cylErr } = await (supabase as any)
+      .from('lpg_cylinders')
+      .insert({
+        cylinder_code: cleanCode,
+        status: cleanStatus,
+        current_place: initialPlace,
+        supplier_id: toSafeUuid(data.supplier_id),
+        supplier_name: data.supplier_name || null,
+        notes: data.notes || null,
+        is_active: true,
+        connected_at: cleanStatus === 'connected' ? effDate : null,
+        last_movement_at: effDate,
+      })
+      .select()
+      .single();
+
+    if (cylErr) {
+      throw new Error(`[Add Cylinder DB]: ${cylErr.message}`);
+    }
+
+    const { data: newMov } = await (supabase as any)
+      .from('lpg_cylinder_movements')
+      .insert({
+        cylinder_id: newCyl.id,
+        movement_type: cleanStatus === 'connected' ? 'connected' : 'cylinder_added',
+        movement_date: effDate,
+        place: initialPlace,
+        supplier_name: data.supplier_name || null,
+        notes: data.notes || 'Initial cylinder registration',
+        idempotency_key: data.idempotency_key || null,
+        created_by: toSafeUuid(userId),
+      })
+      .select()
+      .single();
+
+    try {
+      await (supabase as any).from('audit_logs').insert({
+        table_name: 'lpg_cylinders',
+        record_id: newCyl.id,
+        action: 'ADD_LPG_CYLINDER',
+        new_data: { id: newCyl.id, code: cleanCode, status: cleanStatus },
+        reason: 'New cylinder registered: ' + cleanCode,
+        performed_by: toSafeUuid(userId),
+      });
+    } catch (_) {}
+
+    return {
+      success: true,
+      cylinder: newCyl,
+      movement: newMov || {
+        id: 'mov-' + Date.now(),
+        cylinder_id: newCyl.id,
+        movement_type: cleanStatus === 'connected' ? 'connected' : 'cylinder_added',
+        movement_date: effDate,
+        place: initialPlace,
+      } as any,
+    };
   },
 
   async recordSimpleLpgMovement(
@@ -4420,22 +4537,146 @@ export const api = {
       }, userId || 'usr-owner-001');
       return { success: true, cylinder: res.cylinder, movement: res.movement };
     }
-    const { data: res, error } = await (supabase as any).rpc('record_lpg_cylinder_movement_transaction', {
-      p_cylinder_id: data.cylinder_id,
-      p_movement_type: data.movement_type,
-      p_movement_date: data.movement_date || new Date().toISOString().split('T')[0],
-      p_movement_time: data.movement_time || null,
-      p_bhatti_place: data.bhatti_place || null,
-      p_supplier_name: data.supplier_name || null,
-      p_bill_number: data.bill_number || null,
-      p_notes: data.notes || null,
-      p_user_id: toSafeUuid(userId),
-      p_idempotency_key: data.idempotency_key || null,
-    });
-    if (error) {
-      throw new Error(`[Record Movement ${error.code || ''}]: ${error.message}`);
+
+    try {
+      const { data: res, error } = await (supabase as any).rpc('record_lpg_cylinder_movement_transaction', {
+        p_cylinder_id: data.cylinder_id,
+        p_movement_type: data.movement_type,
+        p_movement_date: data.movement_date || new Date().toISOString().split('T')[0],
+        p_movement_time: data.movement_time || null,
+        p_place: data.bhatti_place || null,
+        p_bhatti_place: data.bhatti_place || null,
+        p_supplier_name: data.supplier_name || null,
+        p_bill_number: data.bill_number || null,
+        p_notes: data.notes || null,
+        p_user_id: toSafeUuid(userId),
+        p_idempotency_key: data.idempotency_key || null,
+      });
+      if (error) {
+        if (isRpcMissingError(error)) {
+          return await this.recordSimpleLpgMovementDirectFallback(data, userId);
+        }
+        throw new Error(`[Record Movement ${error.code || ''}]: ${error.message}`);
+      }
+      return res;
+    } catch (err: any) {
+      if (isRpcMissingError(err)) {
+        return await this.recordSimpleLpgMovementDirectFallback(data, userId);
+      }
+      throw err;
     }
-    return res;
+  },
+
+  async recordSimpleLpgMovementDirectFallback(
+    data: {
+      cylinder_id: string;
+      movement_type: SimpleLpgMovementType;
+      movement_date?: string;
+      movement_time?: string | null;
+      bhatti_place?: string | null;
+      supplier_name?: string | null;
+      bill_number?: string | null;
+      notes?: string | null;
+      idempotency_key?: string;
+    },
+    userId?: string
+  ): Promise<{ success: boolean; cylinder: SimpleLpgCylinder; movement: SimpleLpgMovement }> {
+    const { data: cyl, error: getErr } = await (supabase as any)
+      .from('lpg_cylinders')
+      .select('*')
+      .eq('id', data.cylinder_id)
+      .single();
+
+    if (getErr || !cyl) throw new Error('Cylinder not found');
+    if (cyl.is_active === false) throw new Error('Cannot record movement on an inactive/archived cylinder.');
+
+    const effDate = data.movement_date ? new Date(data.movement_date).toISOString() : new Date().toISOString();
+    let newStatus = cyl.status;
+    let targetPlace = cyl.current_place || 'Main Store';
+    let connectedAt = cyl.connected_at;
+    let emptyAt: string | null = null;
+    let runningDurationHours: number | null = null;
+    let runningDurationDisplay: string | null = null;
+
+    if (data.movement_type === 'connected') {
+      if (cyl.status === 'connected') throw new Error(`Cylinder ${cyl.cylinder_code} is already connected.`);
+      newStatus = 'connected';
+      targetPlace = data.bhatti_place || cyl.current_place || 'भट्टी 1';
+      connectedAt = effDate;
+    } else if (data.movement_type === 'empty_removed') {
+      newStatus = 'empty';
+      targetPlace = data.bhatti_place || 'Empty Storage';
+      emptyAt = effDate;
+      if (cyl.connected_at) {
+        const connMs = new Date(cyl.connected_at).getTime();
+        const empMs = new Date(effDate).getTime();
+        if (empMs >= connMs) {
+          runningDurationHours = Math.round(((empMs - connMs) / (1000 * 3600)) * 100) / 100;
+          const days = Math.floor(runningDurationHours / 24);
+          const remHours = Math.round(runningDurationHours % 24);
+          runningDurationDisplay = days > 0 ? (remHours > 0 ? `${days} दिन ${remHours} घंटे` : `${days} दिन`) : `${Math.max(1, remHours)} घंटे`;
+        }
+      }
+      connectedAt = null;
+    } else if (data.movement_type === 'refill_sent') {
+      if (cyl.status === 'connected') throw new Error('Cannot send a connected cylinder for refill. Please mark it Empty/Removed first.');
+      newStatus = 'sent_for_refill';
+      targetPlace = data.bhatti_place || 'Gas Agency';
+    } else if (data.movement_type === 'refill_received') {
+      newStatus = 'full';
+      targetPlace = data.bhatti_place || 'Main Store';
+    }
+
+    const { data: updatedCyl, error: updateErr } = await (supabase as any)
+      .from('lpg_cylinders')
+      .update({
+        status: newStatus,
+        current_place: targetPlace,
+        connected_at: connectedAt,
+        supplier_name: data.supplier_name || cyl.supplier_name,
+        last_movement_at: effDate,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', data.cylinder_id)
+      .select()
+      .single();
+
+    if (updateErr) throw new Error(`[Update Cylinder DB]: ${updateErr.message}`);
+
+    const { data: mov, error: movErr } = await (supabase as any)
+      .from('lpg_cylinder_movements')
+      .insert({
+        cylinder_id: data.cylinder_id,
+        movement_type: data.movement_type,
+        movement_date: effDate,
+        place: targetPlace,
+        connected_at: data.movement_type === 'empty_removed' ? cyl.connected_at : connectedAt,
+        empty_removed_at: emptyAt,
+        running_duration_hours: runningDurationHours,
+        running_duration_display: runningDurationDisplay,
+        supplier_name: data.supplier_name || null,
+        bill_number: data.bill_number || null,
+        notes: data.notes || null,
+        idempotency_key: data.idempotency_key || null,
+        created_by: toSafeUuid(userId),
+      })
+      .select()
+      .single();
+
+    if (movErr) throw new Error(`[Insert Movement DB]: ${movErr.message}`);
+
+    try {
+      await (supabase as any).from('audit_logs').insert({
+        table_name: 'lpg_cylinder_movements',
+        record_id: mov.id,
+        action: 'LPG_MOVEMENT_' + data.movement_type.toUpperCase(),
+        new_data: { new_status: newStatus, place: targetPlace, duration: runningDurationDisplay },
+        reason: data.notes || 'Cylinder movement: ' + data.movement_type,
+        performed_by: toSafeUuid(userId),
+      });
+    } catch (_) {}
+
+    return { success: true, cylinder: updatedCyl, movement: mov };
   },
 
   async correctSimpleLpgMovement(
@@ -4457,23 +4698,115 @@ export const api = {
       const res = mockStore.correctSimpleLpgMovement(data, userId || 'usr-owner-001');
       return { success: true, correction_movement: res.correction_movement, cylinder: res.cylinder };
     }
-    const { data: res, error } = await (supabase as any).rpc('correct_lpg_cylinder_movement_transaction', {
-      p_movement_id: data.movement_id,
-      p_reason: data.reason,
-      p_corrected_movement_type: data.corrected_movement_type || null,
-      p_corrected_date: data.corrected_date || null,
-      p_corrected_time: data.corrected_time || null,
-      p_corrected_bhatti_place: data.corrected_bhatti_place || null,
-      p_corrected_supplier_name: data.corrected_supplier_name || null,
-      p_corrected_bill_number: data.corrected_bill_number || null,
-      p_corrected_notes: data.corrected_notes || null,
-      p_user_id: toSafeUuid(userId),
-      p_idempotency_key: data.idempotency_key || null,
-    });
-    if (error) {
-      throw new Error(`[Correct Movement ${error.code || ''}]: ${error.message}`);
+    try {
+      const { data: res, error } = await (supabase as any).rpc('correct_lpg_cylinder_movement_transaction', {
+        p_movement_id: data.movement_id,
+        p_reason: data.reason,
+        p_corrected_movement_type: data.corrected_movement_type || null,
+        p_corrected_date: data.corrected_date || null,
+        p_corrected_time: data.corrected_time || null,
+        p_corrected_place: data.corrected_bhatti_place || null,
+        p_corrected_bhatti_place: data.corrected_bhatti_place || null,
+        p_corrected_supplier_name: data.corrected_supplier_name || null,
+        p_corrected_bill_number: data.corrected_bill_number || null,
+        p_corrected_notes: data.corrected_notes || null,
+        p_user_id: toSafeUuid(userId),
+        p_idempotency_key: data.idempotency_key || null,
+      });
+      if (error) {
+        if (isRpcMissingError(error)) {
+          return await this.correctSimpleLpgMovementDirectFallback(data, userId);
+        }
+        throw new Error(`[Correct Movement ${error.code || ''}]: ${error.message}`);
+      }
+      return res;
+    } catch (err: any) {
+      if (isRpcMissingError(err)) {
+        return await this.correctSimpleLpgMovementDirectFallback(data, userId);
+      }
+      throw err;
     }
-    return res;
+  },
+
+  async correctSimpleLpgMovementDirectFallback(
+    data: {
+      movement_id: string;
+      reason: string;
+      corrected_movement_type?: SimpleLpgMovementType;
+      corrected_date?: string;
+      corrected_time?: string;
+      corrected_bhatti_place?: string;
+      corrected_supplier_name?: string;
+      corrected_bill_number?: string;
+      corrected_notes?: string;
+      idempotency_key?: string;
+    },
+    userId?: string
+  ): Promise<{ success: boolean; correction_movement: SimpleLpgMovement; cylinder: SimpleLpgCylinder }> {
+    const { data: oldMov, error: oldErr } = await (supabase as any)
+      .from('lpg_cylinder_movements')
+      .select('*')
+      .eq('id', data.movement_id)
+      .single();
+
+    if (oldErr || !oldMov) throw new Error('Movement record not found');
+
+    const effDate = data.corrected_date ? new Date(data.corrected_date).toISOString() : new Date().toISOString();
+    const corrPlace = data.corrected_bhatti_place || oldMov.place || 'Main Store';
+
+    const { data: mov, error: movErr } = await (supabase as any)
+      .from('lpg_cylinder_movements')
+      .insert({
+        cylinder_id: oldMov.cylinder_id,
+        movement_type: 'correction',
+        movement_date: effDate,
+        place: corrPlace,
+        supplier_name: data.corrected_supplier_name || oldMov.supplier_name,
+        bill_number: data.corrected_bill_number || oldMov.bill_number,
+        notes: `Correction: ${data.reason} | ${data.corrected_notes || ''}`,
+        corrected_from_movement_id: data.movement_id,
+        idempotency_key: data.idempotency_key || null,
+        created_by: toSafeUuid(userId),
+      })
+      .select()
+      .single();
+
+    if (movErr) throw new Error(`[Insert Correction Movement DB]: ${movErr.message}`);
+
+    // Fetch latest non-correction movement for this cylinder
+    const { data: latestMovs } = await (supabase as any)
+      .from('lpg_cylinder_movements')
+      .select('*')
+      .eq('cylinder_id', oldMov.cylinder_id)
+      .neq('id', data.movement_id)
+      .neq('movement_type', 'correction')
+      .order('movement_date', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    const latest = latestMovs?.[0];
+    let newStatus = 'full';
+    if (latest) {
+      if (latest.movement_type === 'connected') newStatus = 'connected';
+      else if (latest.movement_type === 'empty_removed') newStatus = 'empty';
+      else if (latest.movement_type === 'refill_sent') newStatus = 'sent_for_refill';
+    }
+
+    const { data: updatedCyl, error: cylErr } = await (supabase as any)
+      .from('lpg_cylinders')
+      .update({
+        status: newStatus,
+        current_place: corrPlace,
+        last_movement_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', oldMov.cylinder_id)
+      .select()
+      .single();
+
+    if (cylErr) throw new Error(`[Update Cylinder Correction DB]: ${cylErr.message}`);
+
+    return { success: true, correction_movement: mov, cylinder: updatedCyl };
   },
 
   async deleteOrArchiveSimpleLpgCylinder(
@@ -4487,15 +4820,92 @@ export const api = {
       const res = mockStore.deleteOrArchiveSimpleLpgCylinder(data, userId || 'usr-owner-001');
       return { success: true, ...res };
     }
-    const { data: res, error } = await (supabase as any).rpc('delete_or_archive_lpg_cylinder_transaction', {
-      p_cylinder_id: data.cylinder_id,
-      p_reason: data.reason,
-      p_user_id: toSafeUuid(userId),
-    });
-    if (error) {
-      throw new Error(`[Delete/Archive Cylinder ${error.code || ''}]: ${error.message}`);
+    try {
+      const { data: res, error } = await (supabase as any).rpc('delete_or_archive_lpg_cylinder_transaction', {
+        p_cylinder_id: data.cylinder_id,
+        p_reason: data.reason || null,
+        p_user_id: toSafeUuid(userId),
+      });
+      if (error) {
+        if (isRpcMissingError(error)) {
+          return await this.deleteOrArchiveSimpleLpgCylinderDirectFallback(data, userId);
+        }
+        throw new Error(`[Delete/Archive Cylinder ${error.code || ''}]: ${error.message}`);
+      }
+      return res;
+    } catch (err: any) {
+      if (isRpcMissingError(err)) {
+        return await this.deleteOrArchiveSimpleLpgCylinderDirectFallback(data, userId);
+      }
+      throw err;
     }
-    return res;
+  },
+
+  async deleteOrArchiveSimpleLpgCylinderDirectFallback(
+    data: {
+      cylinder_id: string;
+      reason: string;
+    },
+    userId?: string
+  ): Promise<{ success: boolean; action: 'deleted' | 'archived'; cylinder_id: string; message: string }> {
+    const { data: cyl, error: getErr } = await (supabase as any)
+      .from('lpg_cylinders')
+      .select('*')
+      .eq('id', data.cylinder_id)
+      .single();
+
+    if (getErr || !cyl) throw new Error('Cylinder not found');
+    if (cyl.status === 'connected') {
+      throw new Error('Cannot remove a connected cylinder. Please mark it Empty/Removed first before archiving.');
+    }
+
+    const { data: movements } = await (supabase as any)
+      .from('lpg_cylinder_movements')
+      .select('id, movement_type')
+      .eq('cylinder_id', data.cylinder_id);
+
+    const operationalMovements = (movements || []).filter((m: any) => m.movement_type !== 'cylinder_added');
+
+    if (operationalMovements.length === 0) {
+      await (supabase as any).from('lpg_cylinder_movements').delete().eq('cylinder_id', data.cylinder_id);
+      await (supabase as any).from('lpg_cylinders').delete().eq('id', data.cylinder_id);
+      try {
+        await (supabase as any).from('audit_logs').insert({
+          table_name: 'lpg_cylinders',
+          record_id: data.cylinder_id,
+          action: 'DELETE_LPG_CYLINDER',
+          reason: data.reason || 'Unused cylinder permanently deleted',
+          performed_by: toSafeUuid(userId),
+        });
+      } catch (_) {}
+      return {
+        success: true,
+        action: 'deleted',
+        cylinder_id: data.cylinder_id,
+        message: 'अउपयोगी सिलेंडर स्थायी रूप से हटाया गया (Permanently Deleted)',
+      };
+    } else {
+      await (supabase as any).from('lpg_cylinders').update({
+        is_active: false,
+        status: 'inactive',
+        updated_at: new Date().toISOString(),
+      }).eq('id', data.cylinder_id);
+      try {
+        await (supabase as any).from('audit_logs').insert({
+          table_name: 'lpg_cylinders',
+          record_id: data.cylinder_id,
+          action: 'ARCHIVE_LPG_CYLINDER',
+          reason: data.reason || 'Cylinder archived to preserve movement history',
+          performed_by: toSafeUuid(userId),
+        });
+      } catch (_) {}
+      return {
+        success: true,
+        action: 'archived',
+        cylinder_id: data.cylinder_id,
+        message: 'सिलेंडर सुरक्षित रूप से संग्रहित (Archived) किया गया',
+      };
+    }
   },
 
   async reactivateSimpleLpgCylinder(
@@ -4509,15 +4919,58 @@ export const api = {
       const res = mockStore.reactivateSimpleLpgCylinder(data.cylinder_id, data.reason, userId || 'usr-owner-001');
       return { success: true, cylinder: res.cylinder };
     }
-    const { data: res, error } = await (supabase as any).rpc('reactivate_lpg_cylinder_transaction', {
-      p_cylinder_id: data.cylinder_id,
-      p_reason: data.reason || null,
-      p_user_id: toSafeUuid(userId),
-    });
-    if (error) {
-      throw new Error(`[Reactivate Cylinder ${error.code || ''}]: ${error.message}`);
+    try {
+      const { data: res, error } = await (supabase as any).rpc('reactivate_lpg_cylinder_transaction', {
+        p_cylinder_id: data.cylinder_id,
+        p_status: 'full',
+        p_reason: data.reason || null,
+        p_user_id: toSafeUuid(userId),
+      });
+      if (error) {
+        if (isRpcMissingError(error)) {
+          return await this.reactivateSimpleLpgCylinderDirectFallback(data, userId);
+        }
+        throw new Error(`[Reactivate Cylinder ${error.code || ''}]: ${error.message}`);
+      }
+      return res;
+    } catch (err: any) {
+      if (isRpcMissingError(err)) {
+        return await this.reactivateSimpleLpgCylinderDirectFallback(data, userId);
+      }
+      throw err;
     }
-    return res;
+  },
+
+  async reactivateSimpleLpgCylinderDirectFallback(
+    data: {
+      cylinder_id: string;
+      reason?: string;
+    },
+    userId?: string
+  ): Promise<{ success: boolean; cylinder: SimpleLpgCylinder }> {
+    const { data: cyl, error: cylErr } = await (supabase as any)
+      .from('lpg_cylinders')
+      .update({
+        is_active: true,
+        status: 'full',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', data.cylinder_id)
+      .select()
+      .single();
+
+    if (cylErr || !cyl) throw new Error(`[Reactivate Cylinder DB]: ${cylErr?.message || 'Failed'}`);
+
+    await (supabase as any).from('lpg_cylinder_movements').insert({
+      cylinder_id: data.cylinder_id,
+      movement_type: 'cylinder_added',
+      movement_date: new Date().toISOString(),
+      place: cyl.current_place || 'Main Store',
+      notes: data.reason || 'Reactivated from archive as full',
+      created_by: toSafeUuid(userId),
+    });
+
+    return { success: true, cylinder: cyl };
   },
 
   // --- Legacy Compatibility Wrappers ---

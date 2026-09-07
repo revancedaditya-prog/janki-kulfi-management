@@ -520,4 +520,13 @@ describe('Simple LPG Cylinder Register System Tests', () => {
     const movs = await api.getSimpleLpgMovements(addRes.cylinder.id);
     expect(movs.length).toBeGreaterThanOrEqual(3); // cylinder_added, connected, correction
   });
+
+  it('18. isRpcMissingError correctly detects PGRST202 and missing schema cache errors', async () => {
+    const { isRpcMissingError } = await import('../lib/api');
+    expect(isRpcMissingError({ code: 'PGRST202', message: 'Could not find the function public.add_lpg_cylinder_transaction in the schema cache' })).toBe(true);
+    expect(isRpcMissingError({ code: '42883', message: 'function does not exist' })).toBe(true);
+    expect(isRpcMissingError(new Error('Could not find the function public.add_lpg_cylinder_transaction(...) in the schema cache'))).toBe(true);
+    expect(isRpcMissingError({ code: '23505', message: 'duplicate key value' })).toBe(false);
+    expect(isRpcMissingError(null)).toBe(false);
+  });
 });

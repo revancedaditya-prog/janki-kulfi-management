@@ -100,12 +100,16 @@ END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
 -- 7. RPC 1: add_lpg_cylinder_transaction
+DROP FUNCTION IF EXISTS add_lpg_cylinder_transaction(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, UUID, TEXT);
+DROP FUNCTION IF EXISTS add_lpg_cylinder_transaction(TEXT, TEXT, TEXT, TEXT, TEXT, DATE, TEXT, UUID, TEXT);
+
 CREATE OR REPLACE FUNCTION add_lpg_cylinder_transaction(
   p_cylinder_code TEXT,
   p_status TEXT DEFAULT 'full',
   p_supplier_id TEXT DEFAULT NULL,
   p_supplier_name TEXT DEFAULT NULL,
   p_place TEXT DEFAULT NULL,
+  p_starting_date DATE DEFAULT CURRENT_DATE,
   p_notes TEXT DEFAULT NULL,
   p_idempotency_key UUID DEFAULT NULL,
   p_user_id TEXT DEFAULT NULL
@@ -117,6 +121,7 @@ DECLARE
   v_supplier_uuid UUID := NULL;
   v_initial_movement_type TEXT;
   v_initial_place TEXT;
+  v_eff_date TIMESTAMPTZ;
 BEGIN
   IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
     v_user_uuid := p_user_id::UUID;
@@ -130,6 +135,8 @@ BEGIN
   IF v_clean_code IS NULL OR length(v_clean_code) < 1 THEN
     RAISE EXCEPTION 'Cylinder ID/Code is required.';
   END IF;
+
+  v_eff_date := COALESCE(p_starting_date::TIMESTAMPTZ, NOW());
 
   -- Idempotency check
   IF p_idempotency_key IS NOT NULL THEN
@@ -164,8 +171,8 @@ BEGIN
     p_supplier_name,
     p_notes,
     true,
-    CASE WHEN p_status = 'connected' THEN NOW() ELSE NULL END,
-    NOW()
+    CASE WHEN p_status = 'connected' THEN v_eff_date ELSE NULL END,
+    v_eff_date
   ) RETURNING id INTO v_cyl_id;
 
   -- 2. Initial movement entry
@@ -177,7 +184,7 @@ BEGIN
   ) VALUES (
     v_cyl_id,
     v_initial_movement_type,
-    NOW(),
+    v_eff_date,
     v_initial_place,
     p_supplier_name,
     COALESCE(p_notes, 'Initial cylinder registration'),
@@ -208,11 +215,16 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- 8. RPC 2: record_lpg_cylinder_movement_transaction
+DROP FUNCTION IF EXISTS record_lpg_cylinder_movement_transaction(UUID, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT, UUID, TEXT);
+DROP FUNCTION IF EXISTS record_lpg_cylinder_movement_transaction(UUID, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, UUID, TEXT);
+
 CREATE OR REPLACE FUNCTION record_lpg_cylinder_movement_transaction(
   p_cylinder_id UUID,
   p_movement_type TEXT,
   p_movement_date TIMESTAMPTZ DEFAULT NOW(),
+  p_movement_time TEXT DEFAULT NULL,
   p_place TEXT DEFAULT NULL,
+  p_bhatti_place TEXT DEFAULT NULL,
   p_supplier_name TEXT DEFAULT NULL,
   p_bill_number TEXT DEFAULT NULL,
   p_notes TEXT DEFAULT NULL,
@@ -230,12 +242,14 @@ DECLARE
   v_target_place TEXT;
   v_new_status TEXT;
   v_eff_date TIMESTAMPTZ;
+  v_input_place TEXT;
 BEGIN
   IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
     v_user_uuid := p_user_id::UUID;
   END IF;
 
   v_eff_date := COALESCE(p_movement_date, NOW());
+  v_input_place := COALESCE(p_bhatti_place, p_place);
 
   -- Idempotency check
   IF p_idempotency_key IS NOT NULL THEN
@@ -267,7 +281,7 @@ BEGIN
     END IF;
 
     v_new_status := 'connected';
-    v_target_place := COALESCE(p_place, v_cyl.current_place, 'भट्टी 1');
+    v_target_place := COALESCE(v_input_place, v_cyl.current_place, 'भट्टी 1');
     v_connected_at := v_eff_date;
 
     UPDATE lpg_cylinders
@@ -280,7 +294,7 @@ BEGIN
 
   ELSIF p_movement_type = 'empty_removed' THEN
     v_new_status := 'empty';
-    v_target_place := COALESCE(p_place, 'Empty Storage');
+    v_target_place := COALESCE(v_input_place, 'Empty Storage');
     v_empty_at := v_eff_date;
     v_connected_at := v_cyl.connected_at;
 
@@ -303,7 +317,7 @@ BEGIN
     END IF;
 
     v_new_status := 'sent_for_refill';
-    v_target_place := COALESCE(p_place, 'Gas Agency');
+    v_target_place := COALESCE(v_input_place, 'Gas Agency');
 
     UPDATE lpg_cylinders
     SET status = 'sent_for_refill',
@@ -315,7 +329,7 @@ BEGIN
 
   ELSIF p_movement_type = 'refill_received' THEN
     v_new_status := 'full';
-    v_target_place := COALESCE(p_place, 'Main Store');
+    v_target_place := COALESCE(v_input_place, 'Main Store');
 
     UPDATE lpg_cylinders
     SET status = 'full',
@@ -375,13 +389,21 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- 9. RPC 3: correct_lpg_cylinder_movement_transaction
+DROP FUNCTION IF EXISTS correct_lpg_cylinder_movement_transaction(UUID, TEXT, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT);
+DROP FUNCTION IF EXISTS correct_lpg_cylinder_movement_transaction(UUID, TEXT, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, UUID, TEXT);
+
 CREATE OR REPLACE FUNCTION correct_lpg_cylinder_movement_transaction(
   p_movement_id UUID,
   p_reason TEXT,
-  p_corrected_movement_type TEXT,
-  p_corrected_date TIMESTAMPTZ,
-  p_corrected_place TEXT,
-  p_corrected_notes TEXT,
+  p_corrected_movement_type TEXT DEFAULT NULL,
+  p_corrected_date TIMESTAMPTZ DEFAULT NULL,
+  p_corrected_time TEXT DEFAULT NULL,
+  p_corrected_place TEXT DEFAULT NULL,
+  p_corrected_bhatti_place TEXT DEFAULT NULL,
+  p_corrected_supplier_name TEXT DEFAULT NULL,
+  p_corrected_bill_number TEXT DEFAULT NULL,
+  p_corrected_notes TEXT DEFAULT NULL,
+  p_idempotency_key UUID DEFAULT NULL,
   p_user_id TEXT DEFAULT NULL
 ) RETURNS JSONB AS $$
 DECLARE
@@ -390,6 +412,7 @@ DECLARE
   v_user_uuid UUID := NULL;
   v_new_mov_id UUID;
   v_latest_mov RECORD;
+  v_corr_place TEXT;
 BEGIN
   IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN
     RAISE EXCEPTION 'A valid correction reason is required (min 3 characters).';
@@ -398,6 +421,8 @@ BEGIN
   IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
     v_user_uuid := p_user_id::UUID;
   END IF;
+
+  v_corr_place := COALESCE(p_corrected_bhatti_place, p_corrected_place);
 
   SELECT * INTO v_old_mov FROM lpg_cylinder_movements WHERE id = p_movement_id;
   IF NOT FOUND THEN
@@ -415,16 +440,22 @@ BEGIN
     movement_type,
     movement_date,
     place,
+    supplier_name,
+    bill_number,
     notes,
     corrected_from_movement_id,
+    idempotency_key,
     created_by
   ) VALUES (
     v_old_mov.cylinder_id,
     'correction',
     COALESCE(p_corrected_date, NOW()),
-    COALESCE(p_corrected_place, v_old_mov.place),
+    COALESCE(v_corr_place, v_old_mov.place),
+    COALESCE(p_corrected_supplier_name, v_old_mov.supplier_name),
+    COALESCE(p_corrected_bill_number, v_old_mov.bill_number),
     'Correction: ' || p_reason || ' | ' || COALESCE(p_corrected_notes, ''),
     p_movement_id,
+    p_idempotency_key,
     v_user_uuid
   ) RETURNING id INTO v_new_mov_id;
 
@@ -443,7 +474,7 @@ BEGIN
           WHEN v_latest_mov.movement_type = 'refill_sent' THEN 'sent_for_refill'
           ELSE 'full'
         END,
-        current_place = COALESCE(p_corrected_place, v_latest_mov.place, 'Main Store'),
+        current_place = COALESCE(v_corr_place, v_latest_mov.place, 'Main Store'),
         last_movement_at = NOW(),
         updated_at = NOW()
     WHERE id = v_old_mov.cylinder_id;
@@ -471,9 +502,11 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- 10. RPC 4: delete_or_archive_lpg_cylinder_transaction
+DROP FUNCTION IF EXISTS delete_or_archive_lpg_cylinder_transaction(UUID, TEXT, TEXT);
+
 CREATE OR REPLACE FUNCTION delete_or_archive_lpg_cylinder_transaction(
   p_cylinder_id UUID,
-  p_reason TEXT,
+  p_reason TEXT DEFAULT NULL,
   p_user_id TEXT DEFAULT NULL
 ) RETURNS JSONB AS $$
 DECLARE
@@ -551,9 +584,12 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- 11. RPC 5: reactivate_lpg_cylinder_transaction
+DROP FUNCTION IF EXISTS reactivate_lpg_cylinder_transaction(UUID, TEXT, TEXT);
+
 CREATE OR REPLACE FUNCTION reactivate_lpg_cylinder_transaction(
   p_cylinder_id UUID,
   p_status TEXT DEFAULT 'full',
+  p_reason TEXT DEFAULT NULL,
   p_user_id TEXT DEFAULT NULL
 ) RETURNS JSONB AS $$
 DECLARE
@@ -585,7 +621,7 @@ BEGIN
     'cylinder_added',
     NOW(),
     v_cyl.current_place,
-    'Reactivated from archive as ' || v_clean_status,
+    COALESCE(p_reason, 'Reactivated from archive as ' || v_clean_status),
     v_user_uuid
   );
 
@@ -616,3 +652,4 @@ GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, se
 GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, anon, authenticated, service_role;
 
 NOTIFY pgrst, 'reload schema';
+
