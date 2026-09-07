@@ -8,6 +8,22 @@ ALTER TABLE public.lpg_cylinders ADD COLUMN IF NOT EXISTS connected_at TIMESTAMP
 ALTER TABLE public.lpg_cylinders ADD COLUMN IF NOT EXISTS last_movement_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE public.lpg_cylinders ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0;
 
+DO $$ BEGIN
+  ALTER TABLE public.lpg_cylinders ALTER COLUMN tare_weight DROP NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE public.lpg_cylinders ALTER COLUMN full_gross_weight DROP NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE public.lpg_cylinders ALTER COLUMN current_gross_weight DROP NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE public.lpg_cylinders ALTER COLUMN cylinder_type DROP NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
+
 -- 2. Create lpg_cylinder_movements table for chronological movement register
 CREATE TABLE IF NOT EXISTS public.lpg_cylinder_movements (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

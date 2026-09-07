@@ -586,11 +586,26 @@ ALTER TABLE lpg_cylinders ADD COLUMN IF NOT EXISTS current_gross_weight NUMERIC(
 ALTER TABLE lpg_cylinders ADD COLUMN IF NOT EXISTS calculated_remaining_gas NUMERIC(6,2) NOT NULL DEFAULT 19.00;
 ALTER TABLE lpg_cylinders ADD COLUMN IF NOT EXISTS remaining_percentage NUMERIC(5,2) NOT NULL DEFAULT 100.00;
 ALTER TABLE lpg_cylinders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'full';
-ALTER TABLE lpg_cylinders ADD COLUMN IF NOT EXISTS refill_date DATE;
 ALTER TABLE lpg_cylinders ADD COLUMN IF NOT EXISTS current_place TEXT;
 ALTER TABLE lpg_cylinders ADD COLUMN IF NOT EXISTS connected_at TIMESTAMPTZ;
 ALTER TABLE lpg_cylinders ADD COLUMN IF NOT EXISTS last_movement_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE lpg_cylinders ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0;
+
+DO $$ BEGIN
+  ALTER TABLE public.lpg_cylinders ALTER COLUMN tare_weight DROP NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE public.lpg_cylinders ALTER COLUMN full_gross_weight DROP NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE public.lpg_cylinders ALTER COLUMN current_gross_weight DROP NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE public.lpg_cylinders ALTER COLUMN cylinder_type DROP NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
 
 -- 2.21 LPG Cylinder Movements Register (Chronological Ledger)
 CREATE TABLE IF NOT EXISTS public.lpg_cylinder_movements (
