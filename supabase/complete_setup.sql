@@ -899,306 +899,1805 @@ $$ LANGUAGE plpgsql SECURITY DEFINER STABLE;
 -- 6. AUTHORITATIVE STORED PROCEDURES (RPCs)
 -- ============================================================================
 
--- 6.1 Atomic Production Completion with Standard Recipe Deduction
+-- ----------------------------------------------------------------------------
+-- 6.1 Security & Role Helpers
+-- ----------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION get_or_create_stock_location(
+  p_location_type stock_location_type,
+  p_seller_id UUID DEFAULT NULL,
+  p_name TEXT DEFAULT NULL
+) RETURNS UUID AS $$
+DECLARE
+  v_location_id UUID;
+  v_seller_name TEXT;
+BEGIN
+  IF p_location_type = 'seller' THEN
+    SELECT id INTO v_location_id FROM stock_locations WHERE seller_id = p_seller_id AND location_type = 'seller' LIMIT 1;
+    IF v_location_id IS NULL THEN
+      SELECT full_name INTO v_seller_name FROM sellers WHERE id = p_seller_id;
+      INSERT INTO stock_locations (location_type, name, seller_id, is_active)
+      VALUES ('seller', COALESCE(v_seller_name, 'Seller') || ' Cart Stock', p_seller_id, true)
+      RETURNING id INTO v_location_id;
+    END IF;
+  ELSE
+    SELECT id INTO v_location_id FROM stock_locations WHERE location_type = p_location_type LIMIT 1;
+    IF v_location_id IS NULL THEN
+      INSERT INTO stock_locations (location_type, name, is_active)
+      VALUES (p_location_type, COALESCE(p_name, INITCAP(REPLACE(p_location_type::TEXT, '_', ' '))), true)
+      RETURNING id INTO v_location_id;
+    END IF;
+  END IF;
+  RETURN v_location_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- ----------------------------------------------------------------------------
+-- 6.2 Production & Recipe RPCs
+-- ----------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION create_production_batch_transaction(
+  p_date DATE,
+  p_cost NUMERIC(12,2),
+  p_notes TEXT,
+  p_items JSONB,
+  p_user_id UUID
+) RETURNS JSONB AS $$
+DECLARE
+  v_batch_id UUID;
+  v_batch_number TEXT;
+  v_item JSONB;
+  v_product_id UUID;
+  v_produced_qty INTEGER;
+  v_damaged_qty INTEGER;
+  v_saleable_qty INTEGER;
+  v_allocated_cost NUMERIC(12,2);
+  v_unit_cost NUMERIC(12,2);
+  v_total_saleable INTEGER := 0;
+  v_prod_loc_id UUID;
+  v_freezer_loc_id UUID;
+BEGIN
+  -- Generate batch number (e.g. BAT-20260901-1234)
+  v_batch_number := 'BAT-' || TO_CHAR(p_date, 'YYYYMMDD') || '-' || LPAD(FLOOR(RANDOM() * 9000 + 1000)::TEXT, 4, '0');
+
+  -- Create production batch (completed)
+  INSERT INTO production_batches (
+    batch_number,
+    production_date,
+    status,
+    total_ingredient_cost,
+    notes,
+    completed_at,
+    created_by,
+    created_at,
+    updated_at
+  ) VALUES (
+    v_batch_number,
+    p_date,
+    'completed',
+    COALESCE(p_cost, 0.00),
+    p_notes,
+    NOW(),
+    p_user_id,
+    NOW(),
+    NOW()
+  ) RETURNING id INTO v_batch_id;
+
+  -- Ensure locations exist
+  v_prod_loc_id := get_or_create_stock_location('production', NULL, 'Production Floor');
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
+
+  -- First pass: calculate total saleable pieces for cost allocation
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_produced_qty := COALESCE((v_item->>'produced_quantity')::INTEGER, 0);
+    v_damaged_qty := COALESCE((v_item->>'damaged_quantity')::INTEGER, 0);
+    IF v_damaged_qty > v_produced_qty THEN
+      RAISE EXCEPTION 'Damaged quantity (%) cannot exceed produced quantity (%)', v_damaged_qty, v_produced_qty;
+    END IF;
+    v_total_saleable := v_total_saleable + (v_produced_qty - v_damaged_qty);
+  END LOOP;
+
+  -- Second pass: insert items & stock movements
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_product_id := (v_item->>'product_id')::UUID;
+    v_produced_qty := COALESCE((v_item->>'produced_quantity')::INTEGER, 0);
+    v_damaged_qty := COALESCE((v_item->>'damaged_quantity')::INTEGER, 0);
+    v_saleable_qty := v_produced_qty - v_damaged_qty;
+
+    IF v_total_saleable > 0 THEN
+      v_allocated_cost := ROUND((COALESCE(p_cost, 0.00) * v_saleable_qty) / v_total_saleable, 2);
+    ELSE
+      v_allocated_cost := 0.00;
+    END IF;
+
+    IF v_saleable_qty > 0 THEN
+      v_unit_cost := ROUND(v_allocated_cost / v_saleable_qty, 2);
+    ELSE
+      v_unit_cost := 0.00;
+    END IF;
+
+    INSERT INTO production_items (
+      batch_id,
+      product_id,
+      produced_quantity,
+      damaged_quantity,
+      saleable_quantity,
+      allocated_ingredient_cost,
+      unit_production_cost,
+      notes
+    ) VALUES (
+      v_batch_id,
+      v_product_id,
+      v_produced_qty,
+      v_damaged_qty,
+      v_saleable_qty,
+      v_allocated_cost,
+      v_unit_cost,
+      v_item->>'notes'
+    );
+
+    -- Stock Movement into Main Freezer
+    IF v_saleable_qty > 0 THEN
+      INSERT INTO stock_movements (
+        movement_date,
+        product_id,
+        source_location_id,
+        destination_location_id,
+        quantity,
+        movement_type,
+        reference_table,
+        reference_id,
+        notes,
+        created_by
+      ) VALUES (
+        NOW(),
+        v_product_id,
+        v_prod_loc_id,
+        v_freezer_loc_id,
+        v_saleable_qty,
+        'production_completed',
+        'production_batches',
+        v_batch_id,
+        'Daily Production: ' || v_batch_number,
+        p_user_id
+      );
+    END IF;
+  END LOOP;
+
+  -- Audit log
+  INSERT INTO audit_logs (
+    table_name,
+    record_id,
+    action,
+    new_values,
+    change_reason,
+    user_id,
+    created_at
+  ) VALUES (
+    'production_batches',
+    v_batch_id,
+    'CREATE_BATCH',
+    jsonb_build_object('batch_number', v_batch_number, 'cost', p_cost, 'items_count', jsonb_array_length(p_items)),
+    'Completed production batch recorded',
+    p_user_id,
+    NOW()
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'batch_id', v_batch_id,
+    'batch_number', v_batch_number,
+    'message', 'Production batch completed successfully'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION complete_production_batch(
+  p_batch_id UUID,
+  p_user_id UUID
+) RETURNS JSONB AS $$
+DECLARE
+  v_batch RECORD;
+  v_item RECORD;
+  v_prod_loc_id UUID;
+  v_freezer_loc_id UUID;
+  v_total_saleable INTEGER := 0;
+  v_total_cost NUMERIC(12,2) := 0;
+BEGIN
+  -- Validate Batch
+  SELECT * INTO v_batch FROM production_batches WHERE id = p_batch_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Production batch not found';
+  END IF;
+
+  IF v_batch.status = 'completed' THEN
+    RAISE EXCEPTION 'Batch is already completed';
+  END IF;
+
+  IF v_batch.status = 'cancelled' THEN
+    RAISE EXCEPTION 'Cannot complete a cancelled batch';
+  END IF;
+
+  -- Ensure Locations exist
+  v_prod_loc_id := get_or_create_stock_location('production', NULL, 'Production Floor');
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
+
+  -- Process Items
+  FOR v_item IN SELECT * FROM production_items WHERE batch_id = p_batch_id FOR UPDATE LOOP
+    IF v_item.produced_quantity < 0 OR v_item.damaged_quantity < 0 THEN
+      RAISE EXCEPTION 'Quantities cannot be negative';
+    END IF;
+    IF v_item.damaged_quantity > v_item.produced_quantity THEN
+      RAISE EXCEPTION 'Damaged quantity cannot exceed produced quantity';
+    END IF;
+
+    -- Update calculated saleable quantity
+    UPDATE production_items
+    SET saleable_quantity = v_item.produced_quantity - v_item.damaged_quantity,
+        unit_production_cost = CASE WHEN (v_item.produced_quantity - v_item.damaged_quantity) > 0 
+          THEN ROUND(v_item.allocated_ingredient_cost / (v_item.produced_quantity - v_item.damaged_quantity), 2)
+          ELSE 0.00 END
+    WHERE id = v_item.id;
+
+    -- Create stock movement for saleable stock into Main Freezer
+    IF (v_item.produced_quantity - v_item.damaged_quantity) > 0 THEN
+      INSERT INTO stock_movements (
+        product_id,
+        source_location_id,
+        destination_location_id,
+        quantity,
+        movement_type,
+        reference_table,
+        reference_id,
+        notes,
+        created_by
+      ) VALUES (
+        v_item.product_id,
+        v_prod_loc_id,
+        v_freezer_loc_id,
+        v_item.produced_quantity - v_item.damaged_quantity,
+        'production_completed',
+        'production_batches',
+        p_batch_id,
+        'Batch completed: ' || v_batch.batch_number,
+        p_user_id
+      );
+    END IF;
+
+    -- If damaged during production, record to damaged stock location
+    IF v_item.damaged_quantity > 0 THEN
+      INSERT INTO stock_movements (
+        product_id,
+        source_location_id,
+        destination_location_id,
+        quantity,
+        movement_type,
+        reference_table,
+        reference_id,
+        notes,
+        created_by
+      ) VALUES (
+        v_item.product_id,
+        v_prod_loc_id,
+        get_or_create_stock_location('damaged', NULL, 'Damaged Stock'),
+        v_item.damaged_quantity,
+        'damaged',
+        'production_batches',
+        p_batch_id,
+        'Production wastage in batch: ' || v_batch.batch_number,
+        p_user_id
+      );
+    END IF;
+
+    v_total_saleable := v_total_saleable + (v_item.produced_quantity - v_item.damaged_quantity);
+  END LOOP;
+
+  -- Update Batch Status
+  UPDATE production_batches
+  SET status = 'completed',
+      completed_at = NOW(),
+      updated_at = NOW()
+  WHERE id = p_batch_id;
+
+  -- Log Audit
+  INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
+  VALUES (
+    'production_batches',
+    p_batch_id,
+    'COMPLETE_PRODUCTION',
+    row_to_json(v_batch)::jsonb,
+    jsonb_build_object('status', 'completed', 'total_saleable', v_total_saleable),
+    'Production batch completed and moved to freezer',
+    p_user_id
+  );
+
+  RETURN jsonb_build_object('success', true, 'batch_id', p_batch_id, 'total_saleable', v_total_saleable);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 CREATE OR REPLACE FUNCTION complete_production_with_recipe_transaction(
   p_production_date DATE,
   p_product_id UUID,
   p_produced_quantity INTEGER,
   p_damaged_quantity INTEGER DEFAULT 0,
   p_recipe_id UUID DEFAULT NULL,
-  p_actual_ingredients JSONB DEFAULT NULL,
-  p_notes TEXT DEFAULT NULL,
-  p_lpg_cost NUMERIC DEFAULT 0.00,
-  p_overhead_costs JSONB DEFAULT NULL,
+  p_actual_ingredients JSONB DEFAULT NULL, -- array of { ingredient_id, actual_quantity, unit, reason }
+  p_notes TEXT DEFAULT '',
+  p_lpg_cost NUMERIC(12,2) DEFAULT 0.00,
+  p_overhead_costs JSONB DEFAULT '{}'::jsonb,
   p_idempotency_key UUID DEFAULT NULL,
   p_user_id UUID DEFAULT NULL
 ) RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_prod_batch_id UUID;
-  v_batch_num TEXT;
-  v_freezer_loc_id UUID := 'a0000000-0000-0000-0000-000000000002';
+  v_caller_id UUID := COALESCE(p_user_id, auth.uid());
+  v_user_role TEXT;
   v_product RECORD;
   v_recipe RECORD;
-  v_expected_yield NUMERIC;
-  v_saleable_qty INTEGER;
-  v_cost_per_piece NUMERIC(10,2);
-  v_total_ingredient_cost NUMERIC(10,2) := 0.00;
   v_rec_item RECORD;
-  v_std_item_qty NUMERIC;
-  v_actual_item_qty NUMERIC;
-  v_item_base_qty NUMERIC;
-  v_item_cost NUMERIC;
-  v_variance_reason TEXT;
+  v_ing RECORD;
+  v_batch_id UUID;
+  v_batch_number TEXT;
+  v_saleable_qty INTEGER;
+  v_expected_yield NUMERIC(12,3);
+  v_std_item_qty NUMERIC(12,3);
+  v_req_item_qty NUMERIC(12,3);
+  v_actual_item_qty NUMERIC(12,3);
+  v_item_base_qty NUMERIC(12,3);
+  v_item_rate_qty NUMERIC(12,4);
+  v_avail_stock NUMERIC(12,3);
+  v_shortage NUMERIC(12,3);
+  v_item_rate NUMERIC(12,4);
+  v_item_cost NUMERIC(12,2);
+  v_total_ingredient_cost NUMERIC(12,2) := 0.00;
+  v_total_batch_cost NUMERIC(12,2) := 0.00;
+  v_cost_per_piece NUMERIC(12,2) := 0.00;
+  v_costing_source TEXT := 'recipe_calculated';
+  v_prod_loc_id UUID;
+  v_freezer_loc_id UUID;
+  v_shortages JSONB := '[]'::jsonb;
   v_actual_override_entry JSONB;
   v_has_actual_override BOOLEAN := false;
+  v_variance_reason TEXT := NULL;
   v_calculated_ingredients JSONB := '[]'::jsonb;
-  v_shortages JSONB := '[]'::jsonb;
-  v_avail_stock NUMERIC;
   v_existing_batch RECORD;
 BEGIN
-  -- 1. Idempotency Check
+  -- 1. Authentication & Role Validation
+  IF v_caller_id IS NOT NULL THEN
+    SELECT role::TEXT INTO v_user_role FROM profiles WHERE id = v_caller_id;
+    IF v_user_role IS NOT NULL AND v_user_role NOT IN ('owner', 'production_worker') THEN
+      RAISE EXCEPTION 'Access denied. Production entry requires production_worker or owner role.'
+        USING ERRCODE = '42501';
+    END IF;
+  END IF;
+
+  -- 2. Idempotency Check
   IF p_idempotency_key IS NOT NULL THEN
-    SELECT * INTO v_existing_batch FROM production_batches WHERE idempotency_key = p_idempotency_key;
+    SELECT * INTO v_existing_batch 
+    FROM production_batches 
+    WHERE idempotency_key = p_idempotency_key 
+    LIMIT 1;
+
     IF FOUND THEN
       RETURN jsonb_build_object(
         'success', true,
         'idempotent', true,
         'batch_id', v_existing_batch.id,
         'batch_number', v_existing_batch.batch_number,
-        'saleable_quantity', (SELECT saleable_quantity FROM production_items WHERE batch_id = v_existing_batch.id LIMIT 1),
-        'total_ingredient_cost', v_existing_batch.total_ingredient_cost,
-        'message', 'Idempotent replay: batch already processed.'
+        'message', 'Production batch already completed (Idempotent replay)'
       );
     END IF;
   END IF;
 
-  -- 2. Validation
-  IF p_produced_quantity <= 0 THEN
+  -- 3. Quantity Validations
+  IF p_produced_quantity IS NULL OR p_produced_quantity <= 0 THEN
     RAISE EXCEPTION 'Produced quantity must be greater than 0' USING ERRCODE = '22023';
   END IF;
-  IF p_damaged_quantity < 0 OR p_damaged_quantity > p_produced_quantity THEN
-    RAISE EXCEPTION 'Damaged quantity cannot exceed produced quantity' USING ERRCODE = '22023';
+
+  IF p_damaged_quantity IS NULL OR p_damaged_quantity < 0 THEN
+    RAISE EXCEPTION 'Damaged quantity cannot be negative' USING ERRCODE = '22023';
+  END IF;
+
+  IF p_damaged_quantity > p_produced_quantity THEN
+    RAISE EXCEPTION 'खराब मात्रा (% पीस) उत्पादित मात्रा (% पीस) से अधिक नहीं हो सकती',
+      p_damaged_quantity, p_produced_quantity
+      USING ERRCODE = '22023';
   END IF;
 
   v_saleable_qty := p_produced_quantity - p_damaged_quantity;
 
-  SELECT * INTO v_product FROM products WHERE id = p_product_id AND is_active = true;
+  -- 4. Lock & Validate Product
+  SELECT * INTO v_product FROM products WHERE id = p_product_id FOR UPDATE;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Active product % not found', p_product_id USING ERRCODE = 'P0002';
+    RAISE EXCEPTION 'Product % does not exist', p_product_id USING ERRCODE = 'P0002';
   END IF;
 
-  -- 3. Resolve Recipe
+  -- 5. Lock & Load Active Recipe
   IF p_recipe_id IS NOT NULL THEN
-    SELECT * INTO v_recipe FROM recipes WHERE id = p_recipe_id;
+    SELECT * INTO v_recipe FROM recipes WHERE id = p_recipe_id FOR UPDATE;
   ELSE
-    SELECT * INTO v_recipe FROM recipes WHERE product_id = p_product_id AND status = 'active' LIMIT 1;
+    SELECT * INTO v_recipe FROM recipes 
+    WHERE product_id = p_product_id AND status = 'active' 
+    ORDER BY version_number DESC LIMIT 1 FOR UPDATE;
   END IF;
 
   IF NOT FOUND OR v_recipe.id IS NULL THEN
-    RAISE EXCEPTION 'No active recipe found for product %', v_product.name_hi USING ERRCODE = 'P0002';
+    RAISE EXCEPTION 'No active recipe configured for product "%" (%)',
+      v_product.name_hi, v_product.name_en
+      USING ERRCODE = 'P0002';
   END IF;
 
-  v_expected_yield := COALESCE(v_recipe.standard_output_pieces, v_recipe.expected_yield_pieces, 100);
+  v_expected_yield := COALESCE(v_recipe.expected_yield_pieces, v_recipe.standard_output_pieces, 100);
+  IF v_expected_yield <= 0 THEN
+    RAISE EXCEPTION 'Recipe yield must be greater than 0' USING ERRCODE = '22023';
+  END IF;
 
-  -- 4. Calculate Ingredient Consumption & Check Stock Shortages
+  -- Verify recipe has items
+  IF NOT EXISTS (SELECT 1 FROM recipe_items WHERE recipe_id = v_recipe.id) THEN
+    RAISE EXCEPTION 'Active recipe has no ingredient items configured' USING ERRCODE = '22023';
+  END IF;
+
+  -- 6. Lock Inventory Rows & Pre-validate Stock Availability
   FOR v_rec_item IN 
-    SELECT ri.*, i.code, i.name_en, i.name_hi, i.base_unit, i.conversion_factor, i.current_rate, i.rate_unit, i.category, i.storage_location
+    SELECT ri.*, i.name_en, i.name_hi, i.base_unit, i.conversion_factor, i.current_rate, i.rate_unit, i.category, i.storage_location
     FROM recipe_items ri
     JOIN ingredients i ON ri.ingredient_id = i.id
     WHERE ri.recipe_id = v_recipe.id
-    ORDER BY ri.sort_order
+    ORDER BY ri.sort_order, ri.id
   LOOP
+    -- Lock ingredient master
+    PERFORM 1 FROM ingredients WHERE id = v_rec_item.ingredient_id FOR UPDATE;
+
+    -- Standard required recipe consumption: (recipe_quantity / yield) * produced_quantity
     v_std_item_qty := (v_rec_item.quantity / v_expected_yield) * p_produced_quantity;
+    v_req_item_qty := v_std_item_qty;
     v_actual_item_qty := v_std_item_qty;
     v_variance_reason := NULL;
 
-    -- Check actual override if provided
+    -- Check if actual override was provided for this ingredient
     IF p_actual_ingredients IS NOT NULL AND jsonb_array_length(p_actual_ingredients) > 0 THEN
       FOR v_actual_override_entry IN SELECT * FROM jsonb_array_elements(p_actual_ingredients) LOOP
-        IF (v_actual_override_entry->>'ingredient_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' 
-            AND (v_actual_override_entry->>'ingredient_id')::UUID = v_rec_item.ingredient_id)
-           OR (v_actual_override_entry->>'ingredient_id' ILIKE v_rec_item.code) THEN
+        IF (v_actual_override_entry->>'ingredient_id')::UUID = v_rec_item.ingredient_id THEN
           v_actual_item_qty := COALESCE((v_actual_override_entry->>'actual_quantity')::NUMERIC, v_std_item_qty);
           v_variance_reason := v_actual_override_entry->>'reason';
+          
           IF v_actual_item_qty <> v_std_item_qty THEN
             v_has_actual_override := true;
+            IF v_variance_reason IS NULL OR length(btrim(v_variance_reason)) < 3 THEN
+              RAISE EXCEPTION 'A valid reason is mandatory when actual consumption of "%" differs from recipe standard.',
+                v_rec_item.name_hi USING ERRCODE = '22023';
+            END IF;
           END IF;
         END IF;
       END LOOP;
     END IF;
 
-    -- Unit conversion to base unit
+    -- Convert to base unit for ledger check
     IF v_rec_item.unit = v_rec_item.base_unit THEN
       v_item_base_qty := v_actual_item_qty;
     ELSIF v_rec_item.unit = 'g' AND v_rec_item.base_unit = 'kg' THEN
       v_item_base_qty := v_actual_item_qty / 1000.0;
+    ELSIF v_rec_item.unit = 'kg' AND v_rec_item.base_unit = 'g' THEN
+      v_item_base_qty := v_actual_item_qty * 1000.0;
     ELSIF v_rec_item.unit = 'ml' AND v_rec_item.base_unit = 'litre' THEN
       v_item_base_qty := v_actual_item_qty / 1000.0;
+    ELSIF v_rec_item.unit = 'litre' AND v_rec_item.base_unit = 'ml' THEN
+      v_item_base_qty := v_actual_item_qty * 1000.0;
     ELSE
       v_item_base_qty := v_actual_item_qty;
     END IF;
 
-    -- Cost calculation
-    v_item_cost := v_item_base_qty * v_rec_item.current_rate;
-    v_total_ingredient_cost := v_total_ingredient_cost + v_item_cost;
-
-    -- Stock Availability Check
-    SELECT COALESCE(SUM(quantity), 0) INTO v_avail_stock 
-    FROM raw_material_movements 
+    -- Calculate current authoritative available stock
+    SELECT GREATEST(0, COALESCE(SUM(quantity), 0)) INTO v_avail_stock
+    FROM raw_material_movements
     WHERE ingredient_id = v_rec_item.ingredient_id;
 
     IF v_avail_stock < v_item_base_qty THEN
-      v_shortages := v_shortages || jsonb_build_object(
+      v_shortage := v_item_base_qty - v_avail_stock;
+      v_shortages := v_shortages || jsonb_build_array(jsonb_build_object(
         'ingredient_id', v_rec_item.ingredient_id,
-        'ingredient_name', v_rec_item.name_hi,
+        'ingredient_name_hi', v_rec_item.name_hi,
+        'ingredient_name_en', v_rec_item.name_en,
         'required', v_item_base_qty,
         'available', v_avail_stock,
-        'shortage', v_item_base_qty - v_avail_stock,
+        'shortage', v_shortage,
         'unit', v_rec_item.base_unit
-      );
+      ));
     END IF;
 
-    v_calculated_ingredients := v_calculated_ingredients || jsonb_build_object(
+    -- Calculate Cost using rate snapshot and unit conversion to rate_unit
+    IF v_rec_item.unit = COALESCE(v_rec_item.rate_unit, v_rec_item.base_unit) THEN
+      v_item_rate_qty := v_actual_item_qty;
+    ELSIF v_rec_item.unit = 'g' AND COALESCE(v_rec_item.rate_unit, v_rec_item.base_unit) = 'kg' THEN
+      v_item_rate_qty := v_actual_item_qty / 1000.0;
+    ELSIF v_rec_item.unit = 'kg' AND COALESCE(v_rec_item.rate_unit, v_rec_item.base_unit) = 'g' THEN
+      v_item_rate_qty := v_actual_item_qty * 1000.0;
+    ELSIF v_rec_item.unit = 'ml' AND COALESCE(v_rec_item.rate_unit, v_rec_item.base_unit) = 'litre' THEN
+      v_item_rate_qty := v_actual_item_qty / 1000.0;
+    ELSIF v_rec_item.unit = 'litre' AND COALESCE(v_rec_item.rate_unit, v_rec_item.base_unit) = 'ml' THEN
+      v_item_rate_qty := v_actual_item_qty * 1000.0;
+    ELSE
+      v_item_rate_qty := v_actual_item_qty;
+    END IF;
+
+    v_item_rate := COALESCE(v_rec_item.current_rate, 0.00);
+    v_item_cost := ROUND(v_item_rate_qty * v_item_rate, 2);
+    v_total_ingredient_cost := v_total_ingredient_cost + v_item_cost;
+
+    -- Buffer calculated data for insertion
+    v_calculated_ingredients := v_calculated_ingredients || jsonb_build_array(jsonb_build_object(
       'ingredient_id', v_rec_item.ingredient_id,
-      'ingredient_name', v_rec_item.name_hi,
+      'ingredient_name', v_rec_item.name_hi || ' (' || v_rec_item.name_en || ')',
+      'expected_qty', v_std_item_qty,
+      'actual_qty', v_actual_item_qty,
+      'unit', v_rec_item.unit,
       'base_qty', v_item_base_qty,
-      'rate_snapshot', v_rec_item.current_rate,
+      'rate_snapshot', v_item_rate,
       'rate_unit', v_rec_item.rate_unit,
       'calculated_cost', v_item_cost,
-      'storage_location', COALESCE(v_rec_item.storage_location, 'Kitchen Area')
-    );
+      'is_packaging', (v_rec_item.category = 'packaging'),
+      'variance_reason', v_variance_reason,
+      'storage_location', COALESCE(v_rec_item.storage_location, 'Main Raw Material Store')
+    ));
   END LOOP;
 
-  -- Block production if insufficient raw materials
+  -- 7. Reject completion if any shortages exist
   IF jsonb_array_length(v_shortages) > 0 THEN
-    RAISE EXCEPTION 'Insufficient raw material stock for production: %', v_shortages USING ERRCODE = '55000';
+    RAISE EXCEPTION 'Insufficient raw material stock for production. Shortages: %', v_shortages
+      USING ERRCODE = '22023';
   END IF;
 
-  v_cost_per_piece := ROUND(v_total_ingredient_cost / p_produced_quantity, 2);
-  v_batch_num := 'PRD-' || TO_CHAR(p_production_date, 'YYYYMMDD') || '-' || LPAD(FLOOR(RANDOM() * 1000)::TEXT, 3, '0');
+  IF v_has_actual_override THEN
+    v_costing_source := 'actual_override';
+  END IF;
 
-  -- 5. Insert Production Batch Header
+  -- 8. Final Cost Breakdown
+  v_total_batch_cost := v_total_ingredient_cost + COALESCE(p_lpg_cost, 0.00);
+  IF p_produced_quantity > 0 THEN
+    v_cost_per_piece := ROUND(v_total_batch_cost / p_produced_quantity, 2);
+  END IF;
+
+  -- 9. Create Production Batch
+  v_batch_number := 'BAT-' || TO_CHAR(p_production_date, 'YYYYMMDD') || '-' || LPAD(FLOOR(RANDOM() * 9000 + 1000)::TEXT, 4, '0');
+
   INSERT INTO production_batches (
-    batch_number, production_date, total_ingredient_cost, lpg_cost, costing_source,
-    idempotency_key, recipe_id, recipe_version_snapshot, expected_yield_snapshot,
-    status, notes, completed_at, created_by
+    batch_number,
+    production_date,
+    status,
+    total_ingredient_cost,
+    recipe_id,
+    overhead_costs,
+    total_batch_cost,
+    cost_per_saleable_piece,
+    costing_source,
+    idempotency_key,
+    expected_yield_snapshot,
+    recipe_version_snapshot,
+    lpg_cost,
+    notes,
+    completed_at,
+    created_by,
+    created_at,
+    updated_at
   ) VALUES (
-    v_batch_num, p_production_date, v_total_ingredient_cost, p_lpg_cost,
-    CASE WHEN v_has_actual_override THEN 'actual_override' ELSE 'recipe_calculated' END,
-    p_idempotency_key, v_recipe.id, v_recipe.version_number, v_expected_yield,
-    'completed', p_notes, NOW(), p_user_id
-  ) RETURNING id INTO v_prod_batch_id;
+    v_batch_number,
+    p_production_date,
+    'completed',
+    v_total_ingredient_cost,
+    v_recipe.id,
+    COALESCE(p_overhead_costs, '{}'::jsonb),
+    v_total_batch_cost,
+    v_cost_per_piece,
+    v_costing_source,
+    p_idempotency_key,
+    v_expected_yield::INTEGER,
+    v_recipe.version_number,
+    COALESCE(p_lpg_cost, 0.00),
+    p_notes,
+    NOW(),
+    v_caller_id,
+    NOW(),
+    NOW()
+  ) RETURNING id INTO v_batch_id;
 
-  -- 6. Insert Production Items
+  -- 10. Insert Production Item
   INSERT INTO production_items (
-    batch_id, product_id, produced_quantity, damaged_quantity, cost_per_piece, expected_sales
+    batch_id,
+    product_id,
+    produced_quantity,
+    damaged_quantity,
+    saleable_quantity,
+    allocated_ingredient_cost,
+    unit_production_cost,
+    notes
   ) VALUES (
-    v_prod_batch_id, p_product_id, p_produced_quantity, p_damaged_quantity, v_cost_per_piece, 0.00
+    v_batch_id,
+    p_product_id,
+    p_produced_quantity,
+    p_damaged_quantity,
+    v_saleable_qty,
+    v_total_ingredient_cost,
+    v_cost_per_piece,
+    p_notes
   );
 
-  -- 7. Deduct Raw Materials from Ledger
+  -- 11. Insert Batch Ingredient Snapshots & Raw Material Consumption Movements
   FOR v_actual_override_entry IN SELECT * FROM jsonb_array_elements(v_calculated_ingredients) LOOP
-    INSERT INTO raw_material_movements (
-      ingredient_id, movement_date, source_location, destination_location,
-      quantity, base_unit, movement_type, reference_id, reference_type,
-      unit_cost_snapshot, total_value_snapshot, reason, performed_by
+    -- Permanent Snapshot
+    INSERT INTO production_batch_ingredients (
+      batch_id,
+      ingredient_id,
+      ingredient_name,
+      quantity_used,
+      unit,
+      converted_base_quantity,
+      rate_snapshot,
+      rate_unit,
+      calculated_cost,
+      is_packaging,
+      expected_quantity,
+      actual_quantity,
+      variance_reason
     ) VALUES (
-      (v_actual_override_entry->>'ingredient_id')::UUID, NOW(),
-      v_actual_override_entry->>'storage_location', 'Production Batch ' || v_batch_num,
-      -((v_actual_override_entry->>'base_qty')::NUMERIC),
-      v_actual_override_entry->>'rate_unit', 'production_consumption',
-      v_prod_batch_id, 'production_batches',
+      v_batch_id,
+      (v_actual_override_entry->>'ingredient_id')::UUID,
+      v_actual_override_entry->>'ingredient_name',
+      (v_actual_override_entry->>'actual_qty')::NUMERIC,
+      v_actual_override_entry->>'unit',
+      (v_actual_override_entry->>'base_qty')::NUMERIC,
+      (v_actual_override_entry->>'rate_snapshot')::NUMERIC,
+      v_actual_override_entry->>'rate_unit',
+      (v_actual_override_entry->>'calculated_cost')::NUMERIC,
+      (v_actual_override_entry->>'is_packaging')::BOOLEAN,
+      (v_actual_override_entry->>'expected_qty')::NUMERIC,
+      (v_actual_override_entry->>'actual_qty')::NUMERIC,
+      v_actual_override_entry->>'variance_reason'
+    );
+
+    -- Authoritative Negative Raw Material Movement (Deduction)
+    INSERT INTO raw_material_movements (
+      ingredient_id,
+      movement_date,
+      source_location,
+      destination_location,
+      quantity,
+      base_unit,
+      movement_type,
+      reference_table,
+      reference_id,
+      unit_cost_snapshot,
+      total_value_snapshot,
+      reason,
+      created_by
+    ) VALUES (
+      (v_actual_override_entry->>'ingredient_id')::UUID,
+      NOW(),
+      v_actual_override_entry->>'storage_location',
+      'Production Floor',
+      -((v_actual_override_entry->>'base_qty')::NUMERIC), -- Deduct
+      v_actual_override_entry->>'rate_unit',
+      'production_consumption',
+      'production_batches',
+      v_batch_id,
       (v_actual_override_entry->>'rate_snapshot')::NUMERIC,
       (v_actual_override_entry->>'calculated_cost')::NUMERIC,
-      'Automatic recipe consumption for batch ' || v_batch_num, p_user_id
+      'Batch ' || v_batch_number || ' (' || v_product.name_hi || ' ' || p_produced_quantity || ' pcs)',
+      v_caller_id
     );
   END LOOP;
 
-  -- 8. Add Saleable Kulfi directly to Main Freezer
+  -- 12. Increase Finished Kulfi Stock in Main Freezer
+  v_prod_loc_id := get_or_create_stock_location('production', NULL, 'Production Floor');
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
+
   IF v_saleable_qty > 0 THEN
     INSERT INTO stock_movements (
-      product_id, source_location_id, destination_location_id,
-      quantity, movement_type, reference_id, reference_type,
-      notes, performed_by
+      movement_date,
+      product_id,
+      source_location_id,
+      destination_location_id,
+      quantity,
+      movement_type,
+      reference_table,
+      reference_id,
+      notes,
+      created_by
     ) VALUES (
-      p_product_id, NULL, v_freezer_loc_id,
-      v_saleable_qty, 'production_in', v_prod_batch_id, 'production_batches',
-      'Production batch ' || v_batch_num || ' completed (' || v_saleable_qty || ' saleable pcs added to Main Freezer)', p_user_id
+      NOW(),
+      p_product_id,
+      v_prod_loc_id,
+      v_freezer_loc_id,
+      v_saleable_qty,
+      'production_completed',
+      'production_batches',
+      v_batch_id,
+      'Recipe Batch Completed: ' || v_batch_number || ' (' || v_product.name_hi || ')',
+      v_caller_id
     );
   END IF;
+
+  -- 13. Audit Log
+  INSERT INTO audit_logs (
+    table_name,
+    record_id,
+    action,
+    new_data,
+    reason,
+    performed_by,
+    performed_at
+  ) VALUES (
+    'production_batches',
+    v_batch_id,
+    'COMPLETE_RECIPE_PRODUCTION',
+    jsonb_build_object(
+      'batch_number', v_batch_number,
+      'product_id', p_product_id,
+      'product_name', v_product.name_hi,
+      'produced_qty', p_produced_quantity,
+      'damaged_qty', p_damaged_quantity,
+      'saleable_qty', v_saleable_qty,
+      'recipe_id', v_recipe.id,
+      'recipe_version', v_recipe.version_number,
+      'total_ingredient_cost', v_total_ingredient_cost,
+      'lpg_cost', p_lpg_cost,
+      'total_batch_cost', v_total_batch_cost,
+      'cost_per_piece', v_cost_per_piece,
+      'costing_source', v_costing_source
+    ),
+    'Production completed atomically with recipe ingredient deduction',
+    v_caller_id,
+    NOW()
+  );
 
   RETURN jsonb_build_object(
     'success', true,
-    'batch_id', v_prod_batch_id,
-    'batch_number', v_batch_num,
+    'batch_id', v_batch_id,
+    'batch_number', v_batch_number,
     'saleable_quantity', v_saleable_qty,
     'total_ingredient_cost', v_total_ingredient_cost,
     'cost_per_piece', v_cost_per_piece,
-    'message', 'Production batch completed and stock deducted successfully.'
+    'message', 'उत्पादन बैच सफलतापूर्वक दर्ज हुआ, कच्चा माल घटाया गया एवं स्टॉक मुख्य फ्रीजर में स्थानांतरित हुआ'
   );
 END;
 $$;
 
--- 6.2 Activate Recipe Version
+CREATE OR REPLACE FUNCTION complete_production_with_raw_materials_transaction(
+  p_batch_id UUID,
+  p_raw_materials JSONB,
+  p_allow_emergency_override BOOLEAN DEFAULT false,
+  p_override_reason TEXT DEFAULT NULL,
+  p_user_id UUID DEFAULT NULL
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_batch RECORD;
+  v_mat JSONB;
+  v_ing RECORD;
+  v_used_qty NUMERIC(12,3);
+  v_base_qty NUMERIC(12,3);
+  v_unit_rate NUMERIC(12,4);
+  v_item_cost NUMERIC(12,2);
+  v_total_raw_cost NUMERIC(12,2) := 0.00;
+BEGIN
+  SELECT * INTO v_batch FROM production_batches WHERE id = p_batch_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Production batch not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  IF v_batch.status = 'completed' THEN
+    RETURN jsonb_build_object('success', true, 'message', 'Batch already completed.');
+  END IF;
+
+  -- Process Raw Material Deductions
+  FOR v_mat IN SELECT * FROM jsonb_array_elements(p_raw_materials) LOOP
+    IF (v_mat->>'ingredient_id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+      SELECT * INTO v_ing FROM ingredients WHERE id = (v_mat->>'ingredient_id')::UUID;
+    ELSE
+      SELECT * INTO v_ing FROM ingredients WHERE code ILIKE (v_mat->>'ingredient_id') LIMIT 1;
+    END IF;
+
+    IF NOT FOUND OR v_ing.id IS NULL THEN
+      SELECT * INTO v_ing FROM ingredients WHERE code ILIKE (v_mat->>'ingredient_id') OR name_en ILIKE (v_mat->>'ingredient_id') LIMIT 1;
+    END IF;
+
+    IF NOT FOUND OR v_ing.id IS NULL THEN
+      SELECT * INTO v_ing FROM ingredients LIMIT 1;
+      IF NOT FOUND OR v_ing.id IS NULL THEN
+        CONTINUE;
+      END IF;
+    END IF;
+
+    v_used_qty := COALESCE((v_mat->>'quantity_used')::NUMERIC, 0);
+    v_base_qty := v_used_qty * COALESCE(v_ing.conversion_factor, 1.0000);
+    v_unit_rate := COALESCE(v_ing.current_rate, 0.00);
+    v_item_cost := ROUND(v_base_qty * v_unit_rate, 2);
+    v_total_raw_cost := v_total_raw_cost + v_item_cost;
+
+    INSERT INTO raw_material_movements (
+      ingredient_id, movement_date, source_location, destination_location,
+      quantity, base_unit, movement_type, reference_type, reference_id,
+      unit_cost_snapshot, total_value_snapshot, reason, performed_by
+    ) VALUES (
+      v_ing.id, NOW(), COALESCE(v_ing.storage_location, 'Kitchen Area'),
+      'Production Batch ' || v_batch.batch_number,
+      -v_base_qty, v_ing.base_unit, 'production_consumption',
+      'production_batches', p_batch_id, v_unit_rate, v_item_cost,
+      'Batch ' || v_batch.batch_number || ' raw material consumption', p_user_id
+    );
+  END LOOP;
+
+  UPDATE production_batches
+  SET status = 'completed',
+      total_ingredient_cost = CASE WHEN total_ingredient_cost > 0 THEN total_ingredient_cost ELSE v_total_raw_cost END,
+      completed_at = NOW(),
+      updated_at = NOW()
+  WHERE id = p_batch_id;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'batch_id', p_batch_id,
+    'total_ingredient_cost', v_total_raw_cost,
+    'message', 'Production completed and raw materials deducted successfully.'
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION create_production_costing_batch_transaction(
+  p_date DATE,
+  p_product_id UUID,
+  p_recipe_id UUID DEFAULT NULL,
+  p_produced_qty INTEGER DEFAULT 0,
+  p_damaged_qty INTEGER DEFAULT 0,
+  p_total_ingredient_cost NUMERIC(12,2) DEFAULT 0.00,
+  p_overhead_costs JSONB DEFAULT '{}'::jsonb,
+  p_total_batch_cost NUMERIC(12,2) DEFAULT 0.00,
+  p_cost_per_piece NUMERIC(12,2) DEFAULT 0.00,
+  p_expected_sales NUMERIC(12,2) DEFAULT 0.00,
+  p_gross_profit NUMERIC(12,2) DEFAULT 0.00,
+  p_gross_margin NUMERIC(6,2) DEFAULT 0.00,
+  p_ingredients JSONB DEFAULT '[]'::jsonb,
+  p_notes TEXT DEFAULT '',
+  p_user_id UUID DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_batch_id UUID;
+  v_batch_number TEXT;
+  v_saleable_qty INTEGER;
+  v_ing JSONB;
+  v_ing_id UUID;
+  v_prod_loc_id UUID;
+  v_freezer_loc_id UUID;
+BEGIN
+  -- Basic validations
+  IF p_damaged_qty > p_produced_qty THEN
+    RAISE EXCEPTION 'खराब मात्रा (%) उत्पादित मात्रा (%) से अधिक नहीं हो सकती', p_damaged_qty, p_produced_qty;
+  END IF;
+
+  v_saleable_qty := p_produced_qty - p_damaged_qty;
+  IF v_saleable_qty <= 0 THEN
+    RAISE EXCEPTION 'बिक्री योग्य मात्रा (Saleable quantity) 0 से अधिक होनी चाहिए';
+  END IF;
+
+  -- Generate batch number (e.g. BAT-20260902-1234)
+  v_batch_number := 'BAT-' || TO_CHAR(p_date, 'YYYYMMDD') || '-' || LPAD(FLOOR(RANDOM() * 9000 + 1000)::TEXT, 4, '0');
+
+  -- Create production batch record
+  INSERT INTO production_batches (
+    batch_number,
+    production_date,
+    status,
+    total_ingredient_cost,
+    recipe_id,
+    overhead_costs,
+    total_batch_cost,
+    cost_per_saleable_piece,
+    expected_sales,
+    estimated_gross_profit,
+    gross_margin_percentage,
+    notes,
+    completed_at,
+    created_by,
+    created_at,
+    updated_at
+  ) VALUES (
+    v_batch_number,
+    p_date,
+    'completed',
+    COALESCE(p_total_ingredient_cost, 0.00),
+    p_recipe_id,
+    COALESCE(p_overhead_costs, '{}'::jsonb),
+    COALESCE(p_total_batch_cost, 0.00),
+    COALESCE(p_cost_per_piece, 0.00),
+    COALESCE(p_expected_sales, 0.00),
+    COALESCE(p_gross_profit, 0.00),
+    COALESCE(p_gross_margin, 0.00),
+    p_notes,
+    NOW(),
+    p_user_id,
+    NOW(),
+    NOW()
+  ) RETURNING id INTO v_batch_id;
+
+  -- Insert production item (single product costing item)
+  INSERT INTO production_items (
+    batch_id,
+    product_id,
+    produced_quantity,
+    damaged_quantity,
+    saleable_quantity,
+    allocated_ingredient_cost,
+    unit_production_cost,
+    notes
+  ) VALUES (
+    v_batch_id,
+    p_product_id,
+    p_produced_qty,
+    p_damaged_qty,
+    v_saleable_qty,
+    COALESCE(p_total_ingredient_cost, 0.00),
+    COALESCE(p_cost_per_piece, 0.00),
+    p_notes
+  );
+
+  -- Store ingredient snapshots
+  IF p_ingredients IS NOT NULL AND jsonb_array_length(p_ingredients) > 0 THEN
+    FOR v_ing IN SELECT * FROM jsonb_array_elements(p_ingredients) LOOP
+      -- Safely parse UUID
+      v_ing_id := NULL;
+      IF (v_ing->>'ingredient_id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+        v_ing_id := (v_ing->>'ingredient_id')::UUID;
+      END IF;
+
+      INSERT INTO production_batch_ingredients (
+        batch_id,
+        ingredient_id,
+        ingredient_name,
+        quantity_used,
+        unit,
+        converted_base_quantity,
+        rate_snapshot,
+        rate_unit,
+        calculated_cost,
+        is_packaging
+      ) VALUES (
+        v_batch_id,
+        v_ing_id,
+        COALESCE(v_ing->>'ingredient_name', 'Ingredient'),
+        COALESCE((v_ing->>'quantity_used')::NUMERIC, 0),
+        COALESCE(v_ing->>'unit', 'kg'),
+        COALESCE((v_ing->>'converted_base_quantity')::NUMERIC, 0),
+        COALESCE((v_ing->>'rate_snapshot')::NUMERIC, 0),
+        COALESCE(v_ing->>'rate_unit', 'kg'),
+        COALESCE((v_ing->>'calculated_cost')::NUMERIC, 0),
+        COALESCE((v_ing->>'is_packaging')::BOOLEAN, false)
+      );
+    END LOOP;
+  END IF;
+
+  -- Stock movement into Main Freezer
+  v_prod_loc_id := get_or_create_stock_location('production', NULL, 'Production Floor');
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
+
+  INSERT INTO stock_movements (
+    movement_date,
+    product_id,
+    source_location_id,
+    destination_location_id,
+    quantity,
+    movement_type,
+    reference_table,
+    reference_id,
+    notes,
+    created_by
+  ) VALUES (
+    NOW(),
+    p_product_id,
+    v_prod_loc_id,
+    v_freezer_loc_id,
+    v_saleable_qty,
+    'production_completed',
+    'production_batches',
+    v_batch_id,
+    'Costing Batch Completed: ' || v_batch_number,
+    p_user_id
+  );
+
+  -- Audit Log
+  INSERT INTO audit_logs (
+    table_name,
+    record_id,
+    action,
+    new_values,
+    change_reason,
+    user_id,
+    created_at
+  ) VALUES (
+    'production_batches',
+    v_batch_id,
+    'CREATE_COSTING_BATCH',
+    jsonb_build_object(
+      'batch_number', v_batch_number,
+      'product_id', p_product_id,
+      'saleable_qty', v_saleable_qty,
+      'total_batch_cost', p_total_batch_cost,
+      'cost_per_piece', p_cost_per_piece,
+      'gross_margin', p_gross_margin
+    ),
+    'Completed production batch with recipe costing snapshot',
+    p_user_id,
+    NOW()
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'batch_id', v_batch_id,
+    'batch_number', v_batch_number,
+    'saleable_quantity', v_saleable_qty,
+    'cost_per_piece', p_cost_per_piece,
+    'message', 'उत्पादन लागत बैच सफलतापूर्वक पूर्ण हुआ एवं स्टॉक फ्रीजर में स्थानांतरित हुआ'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 CREATE OR REPLACE FUNCTION activate_recipe_version_transaction(
   p_recipe_id UUID,
   p_user_id UUID DEFAULT NULL
 ) RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 DECLARE
+  v_caller_id UUID := COALESCE(p_user_id, auth.uid());
+  v_user_role TEXT;
   v_recipe RECORD;
+  v_yield INTEGER;
+  v_items_count INTEGER;
 BEGIN
-  SELECT * INTO v_recipe FROM recipes WHERE id = p_recipe_id;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Recipe % not found', p_recipe_id;
+  IF v_caller_id IS NOT NULL THEN
+    SELECT role::TEXT INTO v_user_role FROM profiles WHERE id = v_caller_id;
+    IF v_user_role IS DISTINCT FROM 'owner' THEN
+      RAISE EXCEPTION 'Only the Owner can activate recipe versions' USING ERRCODE = '42501';
+    END IF;
   END IF;
 
-  -- Archive other versions
-  UPDATE recipes 
-  SET status = 'archived', is_default = false, updated_at = NOW()
-  WHERE product_id = v_recipe.product_id AND id <> p_recipe_id;
+  SELECT * INTO v_recipe FROM recipes WHERE id = p_recipe_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Recipe % not found', p_recipe_id USING ERRCODE = 'P0002';
+  END IF;
+
+  v_yield := COALESCE(v_recipe.expected_yield_pieces, v_recipe.standard_output_pieces, 0);
+  IF v_yield <= 0 THEN
+    RAISE EXCEPTION 'Cannot activate recipe with 0 expected yield' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT COUNT(*) INTO v_items_count FROM recipe_items WHERE recipe_id = p_recipe_id;
+  IF v_items_count = 0 THEN
+    RAISE EXCEPTION 'Cannot activate recipe with no ingredient items' USING ERRCODE = '22023';
+  END IF;
+
+  -- Archive currently active recipe for this product
+  UPDATE recipes
+  SET status = 'archived',
+      is_default = false,
+      updated_at = NOW()
+  WHERE product_id = v_recipe.product_id AND status = 'active';
 
   -- Activate selected recipe
-  UPDATE recipes 
-  SET status = 'active', is_default = true, updated_at = NOW()
+  UPDATE recipes
+  SET status = 'active',
+      is_default = true,
+      updated_at = NOW()
   WHERE id = p_recipe_id;
+
+  INSERT INTO audit_logs (
+    table_name, record_id, action, new_data, reason, performed_by, performed_at
+  ) VALUES (
+    'recipes', p_recipe_id, 'ACTIVATE_RECIPE_VERSION',
+    jsonb_build_object('product_id', v_recipe.product_id, 'version_number', v_recipe.version_number, 'name', v_recipe.name),
+    'Activated recipe version and archived previous version',
+    v_caller_id, NOW()
+  );
 
   RETURN jsonb_build_object(
     'success', true,
     'recipe_id', p_recipe_id,
-    'message', 'Recipe version activated successfully.'
+    'product_id', v_recipe.product_id,
+    'version_number', v_recipe.version_number,
+    'message', 'रेसिपी संस्करण सफलतापूर्वक सक्रिय (Active) किया गया'
   );
 END;
 $$;
 
--- 6.3 Safe Recipe Deletion
 CREATE OR REPLACE FUNCTION delete_recipe_version_transaction(
   p_recipe_id UUID,
   p_user_id UUID DEFAULT NULL
 ) RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 DECLARE
+  v_caller_id UUID := COALESCE(p_user_id, auth.uid());
+  v_user_role TEXT;
   v_recipe RECORD;
   v_batch_count INTEGER;
 BEGIN
-  SELECT * INTO v_recipe FROM recipes WHERE id = p_recipe_id;
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object(
-      'success', true,
-      'deleted', true,
-      'message', 'Recipe version does not exist or has already been removed.'
-    );
+  IF v_caller_id IS NOT NULL THEN
+    SELECT role::TEXT INTO v_user_role FROM profiles WHERE id = v_caller_id;
+    IF v_user_role IS DISTINCT FROM 'owner' THEN
+      RAISE EXCEPTION 'Only the Owner can delete recipe versions' USING ERRCODE = '42501';
+    END IF;
   END IF;
 
+  SELECT * INTO v_recipe FROM recipes WHERE id = p_recipe_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Recipe % not found', p_recipe_id USING ERRCODE = 'P0002';
+  END IF;
+
+  -- 1. Check if referenced in production batches
   SELECT COUNT(*) INTO v_batch_count FROM production_batches WHERE recipe_id = p_recipe_id;
   IF v_batch_count > 0 THEN
-    UPDATE recipes SET status = 'archived', is_default = false, updated_at = NOW() WHERE id = p_recipe_id;
+    -- Used in production: Cannot permanently delete. Archive instead.
+    UPDATE recipes 
+    SET status = 'archived', is_default = false, updated_at = NOW() 
+    WHERE id = p_recipe_id;
+
+    INSERT INTO audit_logs (
+      table_name, record_id, action, new_data, reason, performed_by, performed_at
+    ) VALUES (
+      'recipes', p_recipe_id, 'ARCHIVE_USED_RECIPE',
+      jsonb_build_object('product_id', v_recipe.product_id, 'version_number', v_recipe.version_number, 'batches_count', v_batch_count),
+      'Recipe referenced by production batches cannot be deleted and was archived',
+      v_caller_id, NOW()
+    );
+
     RETURN jsonb_build_object(
-      'success', true,
+      'success', false,
       'archived', true,
-      'message', 'Recipe is referenced by historical production batches and has been safely archived.'
+      'message', 'यह रेसिपी उत्पादन इतिहास में प्रयुक्त है, इसलिए इसे हटाया नहीं जा सकता। इसे संग्रहीत (Archived) कर दिया गया है।'
     );
   END IF;
 
+  -- 2. Check if active
+  IF v_recipe.status = 'active' THEN
+    RAISE EXCEPTION 'सक्रिय रेसिपी (Active Recipe) को सीधे हटाया नहीं जा सकता। कृपया पहले अन्य संस्करण सक्रिय करें अथवा इसे संग्रहीत करें।'
+      USING ERRCODE = '22023';
+  END IF;
+
+  -- 3. Permanent delete unused draft/archived recipe
   DELETE FROM recipe_items WHERE recipe_id = p_recipe_id;
   DELETE FROM recipes WHERE id = p_recipe_id;
+
+  INSERT INTO audit_logs (
+    table_name, record_id, action, old_data, reason, performed_by, performed_at
+  ) VALUES (
+    'recipes', p_recipe_id, 'DELETE_UNUSED_RECIPE',
+    jsonb_build_object('product_id', v_recipe.product_id, 'version_number', v_recipe.version_number, 'name', v_recipe.name),
+    'Permanently deleted unused draft/archived recipe version',
+    v_caller_id, NOW()
+  );
 
   RETURN jsonb_build_object(
     'success', true,
     'deleted', true,
-    'message', 'Draft recipe deleted permanently.'
+    'message', 'रेसिपी संस्करण सफलतापूर्वक स्थायी रूप से हटाया गया'
   );
 END;
 $$;
 
--- 6.4 Raw Material Physical Stock Count Correction
+CREATE OR REPLACE FUNCTION delete_production_batch_transaction(
+  p_batch_id UUID,
+  p_reason TEXT DEFAULT 'Deleted by Owner',
+  p_user_id UUID DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_batch RECORD;
+  v_item RECORD;
+  v_prod_loc_id UUID;
+  v_freezer_loc_id UUID;
+  v_closing RECORD;
+BEGIN
+  SELECT * INTO v_batch FROM production_batches WHERE id = p_batch_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Production batch not found.';
+  END IF;
+
+  SELECT * INTO v_closing FROM daily_closings WHERE business_date = v_batch.production_date;
+  IF FOUND AND v_closing.status = 'closed' THEN
+    RAISE EXCEPTION 'Business day (%) is closed. Reopen the business day before deleting this record.', v_batch.production_date;
+  END IF;
+
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
+  v_prod_loc_id := get_or_create_stock_location('production', NULL, 'Production Floor');
+
+  IF v_batch.status = 'completed' THEN
+    FOR v_item IN SELECT * FROM production_items WHERE batch_id = p_batch_id LOOP
+      IF COALESCE(v_item.saleable_quantity, 0) > 0 THEN
+        INSERT INTO stock_movements (
+          movement_date,
+          product_id,
+          source_location_id,
+          destination_location_id,
+          quantity,
+          movement_type,
+          reference_table,
+          reference_id,
+          notes,
+          created_by
+        ) VALUES (
+          NOW(),
+          v_item.product_id,
+          v_freezer_loc_id,
+          v_prod_loc_id,
+          v_item.saleable_quantity,
+          'production_reversal',
+          'production_batches',
+          p_batch_id,
+          'Reversal for deleted production batch ' || v_batch.batch_number || ': ' || COALESCE(p_reason, 'Deleted'),
+          p_user_id
+        );
+      END IF;
+    END LOOP;
+  END IF;
+
+  -- Unlink self-referencing pointers
+  UPDATE production_batches SET correction_of_id = NULL WHERE correction_of_id = p_batch_id;
+  UPDATE production_batches SET superseded_by_id = NULL WHERE superseded_by_id = p_batch_id;
+
+  DELETE FROM production_batch_ingredients WHERE batch_id = p_batch_id;
+  DELETE FROM production_items WHERE batch_id = p_batch_id;
+  DELETE FROM production_batches WHERE id = p_batch_id;
+
+  RETURN jsonb_build_object('success', true, 'message', 'Production batch deleted successfully');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION correct_completed_production(
+  p_batch_id UUID,
+  p_cost NUMERIC DEFAULT 0.00,
+  p_date DATE DEFAULT CURRENT_DATE,
+  p_items JSONB DEFAULT '[]'::jsonb,
+  p_notes TEXT DEFAULT '',
+  p_reason TEXT DEFAULT '',
+  p_user_id UUID DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_old_batch RECORD;
+  v_new_batch_id UUID;
+  v_new_batch_number TEXT;
+  v_new_item JSONB;
+  v_product_id UUID;
+  v_produced_qty INTEGER;
+  v_damaged_qty INTEGER;
+  v_saleable_qty INTEGER;
+  v_allocated_cost NUMERIC(12,2);
+  v_unit_cost NUMERIC(12,2);
+  v_total_saleable INTEGER := 0;
+  v_prod_loc_id UUID;
+  v_freezer_loc_id UUID;
+  v_closing RECORD;
+  v_original_saleable INTEGER;
+  v_net_stock_diff INTEGER;
+BEGIN
+  -- 1. Validate Reason
+  IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN
+    RAISE EXCEPTION 'A valid explanation is required for correcting a completed batch.';
+  END IF;
+
+  -- 2. Lock & Load Original Batch
+  SELECT * INTO v_old_batch FROM production_batches WHERE id = p_batch_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Production batch not found.';
+  END IF;
+
+  IF v_old_batch.status != 'completed' OR v_old_batch.is_current_version = false THEN
+    RAISE EXCEPTION 'Only active, completed production batches can be corrected.';
+  END IF;
+
+  -- 3. Check Closed Day
+  SELECT * INTO v_closing FROM daily_closings WHERE business_date = v_old_batch.production_date;
+  IF FOUND AND v_closing.status = 'closed' THEN
+    RAISE EXCEPTION 'Business day (%) is closed. You must reopen the business day first before correcting this record.', v_old_batch.production_date;
+  END IF;
+
+  -- 4. Calculate Total Saleable Pieces
+  FOR v_new_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_produced_qty := COALESCE((v_new_item->>'produced_quantity')::INTEGER, 0);
+    v_damaged_qty := COALESCE((v_new_item->>'damaged_quantity')::INTEGER, 0);
+    IF v_damaged_qty > v_produced_qty THEN
+      RAISE EXCEPTION 'Damaged quantity (%) cannot exceed produced quantity (%)', v_damaged_qty, v_produced_qty;
+    END IF;
+    v_total_saleable := v_total_saleable + (v_produced_qty - v_damaged_qty);
+  END LOOP;
+
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
+  v_prod_loc_id := get_or_create_stock_location('production', NULL, 'Production Floor');
+
+  -- Generate new revision batch number
+  v_new_batch_number := split_part(v_old_batch.batch_number, '-R', 1) || '-R' || (COALESCE(v_old_batch.version_number, 1) + 1);
+
+  -- 5. Insert New Revised Production Batch
+  INSERT INTO production_batches (
+    batch_number,
+    production_date,
+    status,
+    total_ingredient_cost,
+    notes,
+    version_number,
+    is_current_version,
+    correction_of_id,
+    correction_reason,
+    corrected_by,
+    corrected_at,
+    completed_at,
+    created_by,
+    created_at,
+    updated_at
+  ) VALUES (
+    v_new_batch_number,
+    p_date,
+    'completed',
+    COALESCE(p_cost, 0.00),
+    p_notes,
+    COALESCE(v_old_batch.version_number, 1) + 1,
+    true,
+    p_batch_id,
+    p_reason,
+    p_user_id,
+    NOW(),
+    NOW(),
+    v_old_batch.created_by,
+    NOW(),
+    NOW()
+  ) RETURNING id INTO v_new_batch_id;
+
+  -- 6. Insert Revised Items & Rebalance Stock
+  FOR v_new_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_product_id := (v_new_item->>'product_id')::UUID;
+    v_produced_qty := COALESCE((v_new_item->>'produced_quantity')::INTEGER, 0);
+    v_damaged_qty := COALESCE((v_new_item->>'damaged_quantity')::INTEGER, 0);
+    v_saleable_qty := v_produced_qty - v_damaged_qty;
+
+    IF v_total_saleable > 0 AND v_saleable_qty > 0 THEN
+      v_allocated_cost := ROUND((COALESCE(p_cost, 0.00) * v_saleable_qty::NUMERIC / v_total_saleable::NUMERIC), 2);
+      v_unit_cost := ROUND(v_allocated_cost / v_saleable_qty::NUMERIC, 2);
+    ELSE
+      v_allocated_cost := 0.00;
+      v_unit_cost := 0.00;
+    END IF;
+
+    INSERT INTO production_items (
+      batch_id,
+      product_id,
+      produced_quantity,
+      damaged_quantity,
+      saleable_quantity,
+      allocated_ingredient_cost,
+      unit_production_cost,
+      notes
+    ) VALUES (
+      v_new_batch_id,
+      v_product_id,
+      v_produced_qty,
+      v_damaged_qty,
+      v_saleable_qty,
+      v_allocated_cost,
+      v_unit_cost,
+      v_new_item->>'notes'
+    );
+
+    SELECT COALESCE(saleable_quantity, 0) INTO v_original_saleable
+    FROM production_items
+    WHERE batch_id = p_batch_id AND product_id = v_product_id;
+
+    v_net_stock_diff := v_saleable_qty - COALESCE(v_original_saleable, 0);
+
+    IF v_net_stock_diff != 0 THEN
+      INSERT INTO stock_movements (
+        movement_date,
+        product_id,
+        source_location_id,
+        destination_location_id,
+        quantity,
+        movement_type,
+        reference_table,
+        reference_id,
+        notes,
+        created_by
+      ) VALUES (
+        NOW(),
+        v_product_id,
+        CASE WHEN v_net_stock_diff > 0 THEN v_prod_loc_id ELSE v_freezer_loc_id END,
+        CASE WHEN v_net_stock_diff > 0 THEN v_freezer_loc_id ELSE v_prod_loc_id END,
+        ABS(v_net_stock_diff),
+        'correction_replacement',
+        'production_batches',
+        v_new_batch_id,
+        'Stock adjustment for production batch correction ' || v_old_batch.batch_number || ' -> ' || v_new_batch_number,
+        p_user_id
+      );
+    END IF;
+  END LOOP;
+
+  -- 7. Mark Old Batch as Superseded
+  UPDATE production_batches
+  SET
+    status = 'superseded',
+    is_current_version = false,
+    superseded_by_id = v_new_batch_id,
+    updated_at = NOW()
+  WHERE id = p_batch_id;
+
+  -- 8. Audit Log
+  INSERT INTO audit_logs (
+    table_name,
+    record_id,
+    action,
+    old_values,
+    new_values,
+    change_reason,
+    user_id,
+    created_at
+  ) VALUES (
+    'production_batches',
+    v_new_batch_id,
+    'CORRECT_COMPLETED_PRODUCTION',
+    jsonb_build_object('id', p_batch_id, 'batch_number', v_old_batch.batch_number, 'cost', v_old_batch.total_ingredient_cost),
+    jsonb_build_object('id', v_new_batch_id, 'batch_number', v_new_batch_number, 'cost', p_cost),
+    p_reason,
+    p_user_id,
+    NOW()
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'new_batch_id', v_new_batch_id,
+    'new_batch_number', v_new_batch_number,
+    'version_number', COALESCE(v_old_batch.version_number, 1) + 1,
+    'message', 'Production batch corrected successfully'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION public.sync_completed_production_batches_stock()
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_caller_id uuid := auth.uid();
+  v_role text;
+  v_production_id uuid;
+  v_freezer_id uuid;
+  v_item record;
+  v_synced integer := 0;
+  v_checked integer := 0;
+BEGIN
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Authentication required' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT role::text INTO v_role
+  FROM public.profiles
+  WHERE id = v_caller_id AND is_active = true;
+
+  IF v_role IS DISTINCT FROM 'owner' THEN
+    RAISE EXCEPTION 'Only the Owner can synchronize stock'
+      USING ERRCODE = '42501';
+  END IF;
+
+  v_production_id := public.get_or_create_stock_location(
+    'production'::stock_location_type, NULL, 'Production Floor'
+  );
+  v_freezer_id := public.get_or_create_stock_location(
+    'main_freezer'::stock_location_type, NULL, 'Main Cold Storage Freezer'
+  );
+
+  FOR v_item IN
+    SELECT
+      pb.id AS batch_id,
+      pb.batch_number,
+      pb.production_date,
+      pb.completed_at,
+      pi.product_id,
+      pi.saleable_quantity
+    FROM public.production_batches pb
+    JOIN public.production_items pi ON pi.batch_id = pb.id
+    WHERE pb.status = 'completed'
+      AND COALESCE(pb.is_current_version, true) = true
+      AND pi.saleable_quantity > 0
+  LOOP
+    v_checked := v_checked + 1;
+
+    IF NOT EXISTS (
+      SELECT 1
+      FROM public.stock_movements sm
+      WHERE sm.reference_table = 'production_batches'
+        AND sm.reference_id = v_item.batch_id
+        AND sm.product_id = v_item.product_id
+        AND sm.movement_type = 'production_completed'
+    ) THEN
+      INSERT INTO public.stock_movements (
+        movement_date, product_id, source_location_id, destination_location_id,
+        quantity, movement_type, reference_table, reference_id, notes, created_by
+      ) VALUES (
+        COALESCE(v_item.completed_at, v_item.production_date::timestamptz, now()),
+        v_item.product_id, v_production_id, v_freezer_id,
+        v_item.saleable_quantity, 'production_completed',
+        'production_batches', v_item.batch_id,
+        'Repaired missing stock movement for batch ' || v_item.batch_number,
+        v_caller_id
+      );
+      v_synced := v_synced + 1;
+    END IF;
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'synced_count', v_synced,
+    'batches_checked', v_checked,
+    'message', CASE WHEN v_synced = 0
+      THEN 'Stock already synchronized—no changes required.'
+      ELSE format('Synchronized %s missing stock movements.', v_synced)
+    END,
+    'message_hi', CASE WHEN v_synced = 0
+      THEN 'स्टॉक पहले से सिंक है—कोई बदलाव आवश्यक नहीं।'
+      ELSE format('%s छूटी हुई स्टॉक प्रविष्टियां जोड़ी गईं।', v_synced)
+    END
+  );
+END;
+$$;
+
+
+-- ----------------------------------------------------------------------------
+-- 6.3 Raw Material Inventory & Purchases
+-- ----------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.confirm_material_purchase_transaction(
+  p_purchase_date DATE,
+  p_supplier_id TEXT,
+  p_invoice_number TEXT,
+  p_payment_method TEXT,
+  p_paid_amount NUMERIC,
+  p_credit_amount NUMERIC,
+  p_bill_image_url TEXT,
+  p_notes TEXT,
+  p_items JSONB,
+  p_user_id TEXT DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_purchase_id UUID;
+  v_purchase_number TEXT;
+  v_item JSONB;
+  v_ing RECORD;
+  v_purchased_qty NUMERIC(12,3);
+  v_free_qty NUMERIC(12,3);
+  v_total_rec_qty NUMERIC(12,3);
+  v_unit_price NUMERIC(12,2);
+  v_item_price NUMERIC(12,2);
+  v_discount NUMERIC(12,2);
+  v_tax NUMERIC(12,2);
+  v_charge NUMERIC(12,2);
+  v_net_item_cost NUMERIC(12,2);
+  v_unit_acq_cost NUMERIC(12,4);
+  v_total_purchase_cost NUMERIC(12,2) := 0.00;
+  v_supplier_uuid UUID := NULL;
+  v_user_uuid UUID := NULL;
+  v_ing_uuid UUID;
+BEGIN
+  -- Safe UUID conversions
+  IF p_supplier_id IS NOT NULL AND p_supplier_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_supplier_uuid := p_supplier_id::UUID;
+    IF NOT EXISTS (SELECT 1 FROM suppliers WHERE id = v_supplier_uuid) THEN
+      v_supplier_uuid := NULL;
+    END IF;
+  END IF;
+
+  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_user_uuid := p_user_id::UUID;
+  END IF;
+
+  v_purchase_number := 'PUR-' || TO_CHAR(COALESCE(p_purchase_date, CURRENT_DATE), 'YYYYMMDD') || '-' || LPAD(FLOOR(RANDOM() * 9000 + 1000)::TEXT, 4, '0');
+
+  -- Calculate total cost
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_purchased_qty := COALESCE((v_item->>'purchased_quantity')::NUMERIC, 0);
+    v_unit_price := COALESCE((v_item->>'unit_price')::NUMERIC, 0);
+    v_discount := COALESCE((v_item->>'discount')::NUMERIC, 0);
+    v_tax := COALESCE((v_item->>'tax')::NUMERIC, 0);
+    v_charge := COALESCE((v_item->>'allocated_charge')::NUMERIC, 0);
+    v_item_price := ROUND(v_purchased_qty * v_unit_price, 2);
+    v_net_item_cost := v_item_price - v_discount + v_tax + v_charge;
+    v_total_purchase_cost := v_total_purchase_cost + v_net_item_cost;
+  END LOOP;
+
+  -- 1. Insert Material Purchase Header
+  INSERT INTO material_purchases (
+    purchase_number, purchase_date, supplier_id, invoice_number, payment_method,
+    total_amount, discount_amount, tax_amount, transport_charges,
+    paid_amount, credit_amount, status, bill_image_url, notes, created_by
+  ) VALUES (
+    v_purchase_number,
+    COALESCE(p_purchase_date, CURRENT_DATE),
+    v_supplier_uuid,
+    p_invoice_number,
+    COALESCE(p_payment_method, 'cash'),
+    v_total_purchase_cost,
+    0, 0, 0,
+    COALESCE(p_paid_amount, 0),
+    COALESCE(p_credit_amount, 0),
+    'received',
+    p_bill_image_url,
+    p_notes,
+    v_user_uuid
+  ) RETURNING id INTO v_purchase_id;
+
+  -- 2. Insert Items & Movements
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    IF (v_item->>'ingredient_id') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+      v_ing_uuid := (v_item->>'ingredient_id')::UUID;
+    ELSE
+      SELECT id INTO v_ing_uuid FROM ingredients WHERE id::TEXT = (v_item->>'ingredient_id') OR code ILIKE (v_item->>'ingredient_id') LIMIT 1;
+    END IF;
+
+    IF v_ing_uuid IS NOT NULL THEN
+      SELECT * INTO v_ing FROM ingredients WHERE id = v_ing_uuid;
+      
+      v_purchased_qty := COALESCE((v_item->>'purchased_quantity')::NUMERIC, 0);
+      v_free_qty := COALESCE((v_item->>'free_quantity')::NUMERIC, 0);
+      v_total_rec_qty := v_purchased_qty + v_free_qty;
+      v_unit_price := COALESCE((v_item->>'unit_price')::NUMERIC, 0);
+      v_discount := COALESCE((v_item->>'discount')::NUMERIC, 0);
+      v_tax := COALESCE((v_item->>'tax')::NUMERIC, 0);
+      v_charge := COALESCE((v_item->>'allocated_charge')::NUMERIC, 0);
+      v_item_price := ROUND(v_purchased_qty * v_unit_price, 2);
+      v_net_item_cost := v_item_price - v_discount + v_tax + v_charge;
+      v_unit_acq_cost := CASE WHEN v_total_rec_qty > 0 THEN ROUND(v_net_item_cost / v_total_rec_qty, 4) ELSE v_unit_price END;
+
+      INSERT INTO material_purchase_items (
+        purchase_id, ingredient_id, purchased_quantity, purchase_unit,
+        free_quantity, unit_price, discount_amount, tax_amount, allocated_charge,
+        item_total_cost, lot_number, manufacturing_date, expiry_date
+      ) VALUES (
+        v_purchase_id, v_ing_uuid, v_purchased_qty, COALESCE(v_item->>'purchase_unit', v_ing.base_unit),
+        v_free_qty, v_unit_price, v_discount, v_tax, v_charge,
+        v_net_item_cost, v_item->>'lot_number',
+        NULLIF(v_item->>'manufacturing_date', '')::DATE,
+        NULLIF(v_item->>'expiry_date', '')::DATE
+      );
+
+      -- Stock In Movement
+      INSERT INTO raw_material_movements (
+        ingredient_id, movement_type, quantity, base_unit,
+        unit_cost_snapshot, total_value_snapshot, reference_table, reference_id,
+        movement_date, source_location, destination_location, reason, created_by
+      ) VALUES (
+        v_ing_uuid, 'purchase_received', v_total_rec_qty, v_ing.base_unit,
+        v_unit_acq_cost, v_net_item_cost, 'material_purchases', v_purchase_id,
+        COALESCE(p_purchase_date, CURRENT_DATE), 'Supplier', 'Main Store',
+        'Material purchase: ' || v_purchase_number, v_user_uuid
+      );
+
+      -- Update current rate on ingredient
+      UPDATE ingredients SET current_rate = v_unit_price WHERE id = v_ing_uuid;
+    END IF;
+  END LOOP;
+
+  -- 3. If paid amount > 0, insert into expenses
+  IF COALESCE(p_paid_amount, 0) > 0 THEN
+    INSERT INTO expenses (
+      expense_date, category, amount, payment_method, paid_to, description, bill_url, created_by
+    ) VALUES (
+      COALESCE(p_purchase_date, CURRENT_DATE), 'raw_materials', p_paid_amount,
+      CASE WHEN p_payment_method = 'credit' THEN 'cash' ELSE p_payment_method END,
+      'Material Supplier', 'Raw material purchase ' || v_purchase_number, p_bill_image_url, v_user_uuid
+    );
+  END IF;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'purchase_id', v_purchase_id,
+    'purchase_number', v_purchase_number,
+    'total_amount', v_total_purchase_cost,
+    'message', 'सामग्री खरीद सफलतापूर्वक दर्ज की गई'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION reverse_material_purchase_transaction(
+  p_purchase_id UUID,
+  p_reason TEXT DEFAULT 'Purchase cancelled',
+  p_user_id TEXT DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_purch RECORD;
+  v_item RECORD;
+  v_user_uuid UUID := NULL;
+  v_qty NUMERIC;
+  v_cost NUMERIC;
+BEGIN
+  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_user_uuid := p_user_id::UUID;
+  END IF;
+
+  SELECT * INTO v_purch FROM material_purchases WHERE id = p_purchase_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Material purchase not found';
+  END IF;
+
+  IF v_purch.status = 'cancelled' THEN
+    RAISE EXCEPTION 'Purchase is already cancelled';
+  END IF;
+
+  -- 1. Update purchase status
+  UPDATE material_purchases
+  SET status = 'cancelled',
+      notes = COALESCE(notes, '') || ' [Cancelled: ' || COALESCE(p_reason, 'No reason') || ']',
+      updated_at = NOW()
+  WHERE id = p_purchase_id;
+
+  -- 2. Reverse stock movements for each item
+  FOR v_item IN SELECT * FROM material_purchase_items WHERE purchase_id = p_purchase_id LOOP
+    v_qty := COALESCE(v_item.purchased_quantity, 0) + COALESCE(v_item.free_quantity, 0);
+    v_cost := COALESCE(v_item.item_total_cost, v_item.net_item_cost, v_qty * COALESCE(v_item.unit_price, 0));
+
+    INSERT INTO raw_material_movements (
+      ingredient_id,
+      movement_type,
+      quantity,
+      base_unit,
+      unit_cost_snapshot,
+      total_value_snapshot,
+      reference_table,
+      reference_id,
+      movement_date,
+      source_location,
+      notes,
+      created_by
+    ) VALUES (
+      v_item.ingredient_id,
+      'purchase_reversal',
+      -ABS(v_qty),
+      COALESCE(v_item.purchase_unit, 'unit'),
+      v_item.unit_price,
+      -ABS(v_cost),
+      'material_purchases',
+      p_purchase_id,
+      CURRENT_DATE,
+      'Main Store',
+      COALESCE(p_reason, 'Purchase cancelled/reversed'),
+      v_user_uuid
+    );
+  END LOOP;
+
+  -- 3. Audit log
+  INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
+  VALUES (
+    'material_purchases',
+    p_purchase_id,
+    'REVERSE_PURCHASE',
+    row_to_json(v_purch)::jsonb,
+    jsonb_build_object('status', 'cancelled', 'reason', p_reason),
+    p_reason,
+    v_user_uuid
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'purchase_id', p_purchase_id,
+    'message', 'खरीद प्रविष्टि सफलतापूर्वक रद्द कर दी गई'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 CREATE OR REPLACE FUNCTION correct_raw_material_stock_transaction(
   p_ingredient_id UUID,
   p_new_quantity NUMERIC,
@@ -1253,7 +2752,6 @@ BEGIN
 END;
 $$;
 
--- 6.5 Safe Raw Material Deletion
 CREATE OR REPLACE FUNCTION delete_ingredient_transaction(
   p_ingredient_id UUID,
   p_reason TEXT DEFAULT NULL,
@@ -1285,301 +2783,6 @@ BEGIN
 END;
 $$;
 
--- 6.5b Backward Compatible Production Completion with Raw Materials
-CREATE OR REPLACE FUNCTION complete_production_with_raw_materials_transaction(
-  p_batch_id UUID,
-  p_raw_materials JSONB,
-  p_allow_emergency_override BOOLEAN DEFAULT false,
-  p_override_reason TEXT DEFAULT NULL,
-  p_user_id UUID DEFAULT NULL
-) RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-DECLARE
-  v_batch RECORD;
-  v_mat JSONB;
-  v_ing RECORD;
-  v_used_qty NUMERIC(12,3);
-  v_base_qty NUMERIC(12,3);
-  v_avail_qty NUMERIC(12,3);
-  v_unit_rate NUMERIC(12,4);
-  v_item_cost NUMERIC(12,2);
-  v_total_raw_cost NUMERIC(12,2) := 0.00;
-  v_freezer_loc_id UUID := 'a0000000-0000-0000-0000-000000000002';
-BEGIN
-  SELECT * INTO v_batch FROM production_batches WHERE id = p_batch_id FOR UPDATE;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Production batch not found' USING ERRCODE = 'P0002';
-  END IF;
-
-  IF v_batch.status = 'completed' THEN
-    RETURN jsonb_build_object('success', true, 'message', 'Batch already completed.');
-  END IF;
-
-  -- Process Raw Material Deductions
-  FOR v_mat IN SELECT * FROM jsonb_array_elements(p_raw_materials) LOOP
-    IF (v_mat->>'ingredient_id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
-      SELECT * INTO v_ing FROM ingredients WHERE id = (v_mat->>'ingredient_id')::UUID;
-    ELSE
-      SELECT * INTO v_ing FROM ingredients WHERE code ILIKE (v_mat->>'ingredient_id') LIMIT 1;
-    END IF;
-
-    IF NOT FOUND OR v_ing.id IS NULL THEN
-      CONTINUE;
-    END IF;
-
-    v_used_qty := COALESCE((v_mat->>'quantity_used')::NUMERIC, 0);
-    v_base_qty := v_used_qty * COALESCE(v_ing.conversion_factor, 1.0000);
-    v_unit_rate := COALESCE(v_ing.current_rate, 0.00);
-    v_item_cost := ROUND(v_base_qty * v_unit_rate, 2);
-    v_total_raw_cost := v_total_raw_cost + v_item_cost;
-
-    INSERT INTO raw_material_movements (
-      ingredient_id, movement_date, source_location, destination_location,
-      quantity, base_unit, movement_type, reference_id, reference_type,
-      unit_cost_snapshot, total_value_snapshot, reason, performed_by
-    ) VALUES (
-      v_ing.id, NOW(), COALESCE(v_ing.storage_location, 'Kitchen Area'),
-      'Production Batch ' || v_batch.batch_number,
-      -v_base_qty, v_ing.base_unit, 'production_consumption',
-      p_batch_id, 'production_batches', v_unit_rate, v_item_cost,
-      'Batch ' || v_batch.batch_number || ' raw material consumption', p_user_id
-    );
-  END LOOP;
-
-  UPDATE production_batches
-  SET status = 'completed',
-      total_ingredient_cost = CASE WHEN total_ingredient_cost > 0 THEN total_ingredient_cost ELSE v_total_raw_cost END,
-      completed_at = NOW(),
-      updated_at = NOW()
-  WHERE id = p_batch_id;
-
-  RETURN jsonb_build_object(
-    'success', true,
-    'batch_id', p_batch_id,
-    'total_ingredient_cost', v_total_raw_cost,
-    'message', 'Production completed and raw materials deducted successfully.'
-  );
-END;
-$$;
-
--- 6.5.1 Confirm Material Purchase Transaction (Resilient & Schema-Safe)
-CREATE OR REPLACE FUNCTION confirm_material_purchase_transaction(
-  p_purchase_date DATE,
-  p_supplier_id TEXT,
-  p_invoice_number TEXT,
-  p_payment_method TEXT,
-  p_paid_amount NUMERIC,
-  p_credit_amount NUMERIC,
-  p_bill_image_url TEXT,
-  p_notes TEXT,
-  p_items JSONB,
-  p_user_id TEXT DEFAULT NULL
-) RETURNS JSONB AS $$
-DECLARE
-  v_purchase_id UUID;
-  v_purchase_number TEXT;
-  v_item JSONB;
-  v_ing RECORD;
-  v_purchased_qty NUMERIC(12,3);
-  v_free_qty NUMERIC(12,3);
-  v_total_rec_qty NUMERIC(12,3);
-  v_base_qty NUMERIC(12,3);
-  v_unit_price NUMERIC(12,2);
-  v_item_price NUMERIC(12,2);
-  v_discount NUMERIC(12,2);
-  v_tax NUMERIC(12,2);
-  v_charge NUMERIC(12,2);
-  v_net_item_cost NUMERIC(12,2);
-  v_unit_acq_cost NUMERIC(12,4);
-  v_total_purchase_cost NUMERIC(12,2) := 0.00;
-  v_expense_id UUID := NULL;
-  v_lot_id UUID;
-  v_purchase_item_id UUID;
-  v_curr_qty NUMERIC(12,3);
-  v_curr_rate NUMERIC(12,4);
-  v_new_wac NUMERIC(12,4);
-  v_effective_supplier_id UUID := NULL;
-  v_effective_user_id UUID := NULL;
-BEGIN
-  -- Safe UUID conversions
-  IF p_supplier_id IS NOT NULL AND p_supplier_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
-    v_effective_supplier_id := p_supplier_id::UUID;
-    IF NOT EXISTS (SELECT 1 FROM suppliers WHERE id = v_effective_supplier_id) THEN
-      v_effective_supplier_id := NULL;
-    END IF;
-  END IF;
-
-  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
-    v_effective_user_id := p_user_id::UUID;
-  END IF;
-
-  v_purchase_number := 'PUR-' || TO_CHAR(COALESCE(p_purchase_date, CURRENT_DATE), 'YYYYMMDD') || '-' || LPAD(FLOOR(RANDOM() * 9000 + 1000)::TEXT, 4, '0');
-
-  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
-    v_purchased_qty := COALESCE((v_item->>'purchased_quantity')::NUMERIC, 0);
-    v_unit_price := COALESCE((v_item->>'unit_price')::NUMERIC, 0);
-    v_discount := COALESCE((v_item->>'discount')::NUMERIC, 0);
-    v_tax := COALESCE((v_item->>'tax')::NUMERIC, 0);
-    v_charge := COALESCE((v_item->>'allocated_charge')::NUMERIC, 0);
-    v_item_price := ROUND(v_purchased_qty * v_unit_price, 2);
-    v_net_item_cost := v_item_price - v_discount + v_tax + v_charge;
-    v_total_purchase_cost := v_total_purchase_cost + v_net_item_cost;
-  END LOOP;
-
-  IF v_total_purchase_cost > 0 AND COALESCE(p_paid_amount, 0) > 0 THEN
-    INSERT INTO expenses (
-      expense_date, category, amount, payment_method, vendor_name, paid_to, description, bill_image_path, bill_url, status, created_by
-    ) VALUES (
-      COALESCE(p_purchase_date, CURRENT_DATE),
-      'raw_materials',
-      p_paid_amount,
-      CASE WHEN p_payment_method = 'credit' THEN 'cash'::payment_method ELSE p_payment_method::payment_method END,
-      COALESCE((SELECT name FROM suppliers WHERE id = v_effective_supplier_id), 'Raw Material Supplier'),
-      COALESCE((SELECT name FROM suppliers WHERE id = v_effective_supplier_id), 'Raw Material Supplier'),
-      'Material Purchase ' || v_purchase_number || ' (Invoice: ' || COALESCE(p_invoice_number, 'N/A') || ')',
-      p_bill_image_url,
-      p_bill_image_url,
-      'active',
-      v_effective_user_id
-    ) RETURNING id INTO v_expense_id;
-  END IF;
-
-  INSERT INTO material_purchases (
-    purchase_number, purchase_date, supplier_id, invoice_number, payment_method,
-    paid_amount, credit_amount, total_amount, bill_image_url, notes, status,
-    expense_id, created_by
-  ) VALUES (
-    v_purchase_number,
-    COALESCE(p_purchase_date, CURRENT_DATE),
-    v_effective_supplier_id,
-    p_invoice_number,
-    p_payment_method,
-    COALESCE(p_paid_amount, v_total_purchase_cost),
-    COALESCE(p_credit_amount, 0.00),
-    v_total_purchase_cost,
-    p_bill_image_url,
-    p_notes,
-    'received',
-    v_expense_id,
-    v_effective_user_id
-  ) RETURNING id INTO v_purchase_id;
-
-  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
-    IF (v_item->>'ingredient_id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
-      SELECT * INTO v_ing FROM ingredients WHERE id = (v_item->>'ingredient_id')::UUID;
-    ELSE
-      SELECT * INTO v_ing FROM ingredients WHERE code ILIKE (v_item->>'ingredient_id') LIMIT 1;
-    END IF;
-
-    IF NOT FOUND OR v_ing.id IS NULL THEN
-      SELECT * INTO v_ing FROM ingredients WHERE code ILIKE (v_item->>'ingredient_id') OR name_en ILIKE (v_item->>'ingredient_id') LIMIT 1;
-    END IF;
-
-    IF NOT FOUND OR v_ing.id IS NULL THEN
-      SELECT * INTO v_ing FROM ingredients LIMIT 1;
-      IF NOT FOUND OR v_ing.id IS NULL THEN
-        CONTINUE;
-      END IF;
-    END IF;
-
-    v_purchased_qty := COALESCE((v_item->>'purchased_quantity')::NUMERIC, 0);
-    v_free_qty := COALESCE((v_item->>'free_quantity')::NUMERIC, 0);
-    v_total_rec_qty := v_purchased_qty + v_free_qty;
-    v_unit_price := COALESCE((v_item->>'unit_price')::NUMERIC, 0);
-    v_discount := COALESCE((v_item->>'discount')::NUMERIC, 0);
-    v_tax := COALESCE((v_item->>'tax')::NUMERIC, 0);
-    v_charge := COALESCE((v_item->>'allocated_charge')::NUMERIC, 0);
-    v_item_price := ROUND(v_purchased_qty * v_unit_price, 2);
-    v_net_item_cost := v_item_price - v_discount + v_tax + v_charge;
-
-    v_base_qty := v_total_rec_qty * COALESCE(v_ing.conversion_factor, 1.0000);
-    IF v_base_qty > 0 THEN
-      v_unit_acq_cost := ROUND(v_net_item_cost / v_base_qty, 4);
-    ELSE
-      v_unit_acq_cost := 0.0000;
-    END IF;
-
-    INSERT INTO material_purchase_items (
-      purchase_id, ingredient_id, purchased_quantity, purchase_unit, free_quantity,
-      total_received_quantity, base_quantity, base_unit, unit_price, item_price,
-      discount, tax, allocated_charge, net_item_cost, unit_acquisition_cost,
-      lot_number, manufacturing_date, expiry_date
-    ) VALUES (
-      v_purchase_id, v_ing.id, v_purchased_qty,
-      COALESCE(v_item->>'purchase_unit', v_ing.purchase_unit),
-      v_free_qty, v_total_rec_qty, v_base_qty, v_ing.base_unit,
-      v_unit_price, v_item_price, v_discount, v_tax, v_charge,
-      v_net_item_cost, v_unit_acq_cost,
-      v_item->>'lot_number',
-      (v_item->>'manufacturing_date')::DATE,
-      (v_item->>'expiry_date')::DATE
-    ) RETURNING id INTO v_purchase_item_id;
-
-    IF v_ing.track_lots OR v_ing.track_expiry OR (v_item->>'lot_number') IS NOT NULL THEN
-      INSERT INTO inventory_lots (
-        ingredient_id, lot_number, purchase_item_id, supplier_id, initial_quantity,
-        remaining_quantity, base_unit, unit_cost, manufacturing_date, expiry_date, status
-      ) VALUES (
-        v_ing.id,
-        COALESCE(v_item->>'lot_number', 'LOT-' || TO_CHAR(COALESCE(p_purchase_date, CURRENT_DATE), 'YYYYMMDD') || '-' || LPAD(FLOOR(RANDOM()*1000)::TEXT, 3, '0')),
-        v_purchase_item_id, v_effective_supplier_id, v_base_qty, v_base_qty, v_ing.base_unit, v_unit_acq_cost,
-        (v_item->>'manufacturing_date')::DATE, (v_item->>'expiry_date')::DATE, 'active'
-      ) RETURNING id INTO v_lot_id;
-    ELSE
-      v_lot_id := NULL;
-    END IF;
-
-    INSERT INTO raw_material_movements (
-      ingredient_id, movement_date, source_location, destination_location,
-      quantity, base_unit, movement_type, reference_type, reference_id,
-      unit_cost_snapshot, total_value_snapshot, reason, performed_by
-    ) VALUES (
-      v_ing.id, NOW(),
-      COALESCE((SELECT name FROM suppliers WHERE id = v_effective_supplier_id), 'Supplier'),
-      COALESCE(v_ing.storage_location, 'Main Raw Material Store'),
-      v_base_qty, v_ing.base_unit, 'purchase_received',
-      'material_purchases', v_purchase_id,
-      v_unit_acq_cost, v_net_item_cost,
-      'Purchase ' || v_purchase_number, p_user_id
-    );
-
-    SELECT COALESCE(SUM(quantity), 0) INTO v_curr_qty 
-    FROM raw_material_movements 
-    WHERE ingredient_id = v_ing.id AND id NOT IN (SELECT id FROM raw_material_movements WHERE reference_id = v_purchase_id);
-    v_curr_qty := GREATEST(0, v_curr_qty);
-
-    v_curr_rate := COALESCE(v_ing.current_rate, 0.00);
-    IF (v_curr_qty + v_base_qty) > 0 THEN
-      v_new_wac := ROUND(((v_curr_qty * v_curr_rate) + (v_base_qty * v_unit_acq_cost)) / (v_curr_qty + v_base_qty), 2);
-    ELSE
-      v_new_wac := v_unit_acq_cost;
-    END IF;
-
-    UPDATE ingredients 
-    SET current_rate = v_new_wac,
-        rate_unit = v_ing.base_unit,
-        updated_at = NOW()
-    WHERE id = v_ing.id;
-
-    INSERT INTO ingredient_prices (
-      ingredient_id, rate, unit, effective_from, created_by
-    ) VALUES (
-      v_ing.id, v_new_wac, v_ing.base_unit, NOW(), p_user_id
-    );
-  END LOOP;
-
-  RETURN jsonb_build_object(
-    'success', true,
-    'purchase_id', v_purchase_id,
-    'purchase_number', v_purchase_number,
-    'total_amount', v_total_purchase_cost
-  );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- 6.5.2 Authoritative Raw Material Available Stock RPC
 CREATE OR REPLACE FUNCTION get_available_raw_material_stock(p_ingredient_id UUID)
 RETURNS NUMERIC(12,3)
 LANGUAGE plpgsql
@@ -1595,7 +2798,2142 @@ BEGIN
 END;
 $$;
 
--- 6.6 Helper to format running duration into clean Hindi/English text
+CREATE OR REPLACE FUNCTION approve_physical_stock_count_transaction(
+  p_count_id UUID,
+  p_approved_by TEXT DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_count RECORD;
+  v_item RECORD;
+  v_user_uuid UUID := NULL;
+  v_discrepancy NUMERIC;
+BEGIN
+  IF p_approved_by IS NOT NULL AND p_approved_by ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_user_uuid := p_approved_by::UUID;
+  END IF;
+
+  SELECT * INTO v_count FROM physical_stock_counts WHERE id = p_count_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Physical stock count record not found';
+  END IF;
+
+  IF v_count.status = 'approved' THEN
+    RETURN jsonb_build_object('success', true, 'message', 'Stock count already approved.');
+  END IF;
+
+  -- 1. Mark approved
+  UPDATE physical_stock_counts
+  SET status = 'approved',
+      approved_by = v_user_uuid,
+      approved_at = NOW(),
+      updated_at = NOW()
+  WHERE id = p_count_id;
+
+  -- 2. Reconcile differences
+  FOR v_item IN SELECT * FROM physical_stock_count_items WHERE physical_stock_count_id = p_count_id LOOP
+    v_discrepancy := COALESCE(v_item.discrepancy, v_item.physical_stock - v_item.system_stock);
+
+    IF v_discrepancy <> 0 THEN
+      INSERT INTO raw_material_movements (
+        ingredient_id,
+        movement_type,
+        quantity,
+        reference_table,
+        reference_id,
+        movement_date,
+        source_location,
+        notes,
+        created_by
+      ) VALUES (
+        v_item.ingredient_id,
+        'stock_audit_reconciliation',
+        v_discrepancy,
+        'physical_stock_counts',
+        p_count_id,
+        CURRENT_DATE,
+        'Main Store',
+        COALESCE(v_item.reason, 'Physical audit adjustment: ' || v_discrepancy),
+        v_user_uuid
+      );
+    END IF;
+  END LOOP;
+
+  -- 3. Audit log
+  INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
+  VALUES (
+    'physical_stock_counts',
+    p_count_id,
+    'APPROVE_STOCK_COUNT',
+    row_to_json(v_count)::jsonb,
+    jsonb_build_object('status', 'approved', 'approved_by', v_user_uuid),
+    'Physical stock count audit approved',
+    v_user_uuid
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'count_id', p_count_id,
+    'message', 'स्टॉक सत्यापन सफलतापूर्वक स्वीकृत हुआ'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- ----------------------------------------------------------------------------
+-- 6.4 Cold Storage & Freezer Stock
+-- ----------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.get_freezer_balances()
+RETURNS JSONB AS $$
+DECLARE
+  v_result JSONB;
+BEGIN
+  SELECT jsonb_object_agg(p.id::text, COALESCE(cls.quantity, 0))
+  INTO v_result
+  FROM public.products p
+  LEFT JOIN public.current_location_stock cls
+    ON cls.product_id = p.id
+    AND cls.location_id = 'a0000000-0000-0000-0000-000000000002'::uuid;
+
+  RETURN COALESCE(v_result, '{}'::jsonb);
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION public.get_available_freezer_stock(p_product_id UUID)
+RETURNS INTEGER AS $$
+DECLARE
+  v_qty NUMERIC;
+BEGIN
+  SELECT quantity INTO v_qty
+  FROM public.current_location_stock
+  WHERE location_id = 'a0000000-0000-0000-0000-000000000002'::uuid
+    AND product_id = p_product_id;
+  
+  RETURN COALESCE(v_qty::integer, 0);
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION adjust_stock(
+  p_product_id UUID,
+  p_location_id UUID,
+  p_quantity INTEGER,
+  p_movement_type stock_movement_type,
+  p_reason TEXT,
+  p_user_id UUID
+) RETURNS JSONB AS $$
+DECLARE
+  v_movement_id UUID;
+BEGIN
+  IF p_quantity <= 0 THEN
+    RAISE EXCEPTION 'Quantity must be positive';
+  END IF;
+
+  IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN
+    RAISE EXCEPTION 'Reason is required for manual stock adjustment';
+  END IF;
+
+  INSERT INTO stock_movements (
+    product_id,
+    destination_location_id,
+    quantity,
+    movement_type,
+    notes,
+    created_by
+  ) VALUES (
+    p_product_id,
+    p_location_id,
+    p_quantity,
+    p_movement_type,
+    p_reason,
+    p_user_id
+  ) RETURNING id INTO v_movement_id;
+
+  INSERT INTO audit_logs (table_name, record_id, action, new_data, reason, performed_by)
+  VALUES (
+    'stock_movements',
+    v_movement_id,
+    'ADJUST_STOCK',
+    jsonb_build_object('product_id', p_product_id, 'location_id', p_location_id, 'quantity', p_quantity),
+    p_reason,
+    p_user_id
+  );
+
+  RETURN jsonb_build_object('success', true, 'movement_id', v_movement_id);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION public.adjust_freezer_stock_transaction(
+  p_product_id UUID,
+  p_new_quantity INTEGER,
+  p_reason TEXT DEFAULT 'Manual Adjustment',
+  p_user_id UUID DEFAULT NULL
+) RETURNS JSONB AS $$
+BEGIN
+  RETURN public.reconcile_freezer_stock_transaction(
+    jsonb_build_object(p_product_id::text, p_new_quantity),
+    COALESCE(p_reason, 'Manual Adjustment'),
+    NULL
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION public.reconcile_freezer_stock_transaction(
+  p_counts jsonb,
+  p_reason text,
+  p_idempotency_key uuid DEFAULT NULL
+) RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_caller_id uuid := auth.uid();
+  v_role text;
+  v_freezer_id uuid;
+  v_adjustment_id uuid;
+  v_operation_id uuid := COALESCE(p_idempotency_key, uuid_generate_v4());
+  v_product_id uuid;
+  v_value text;
+  v_current integer;
+  v_target integer;
+  v_difference integer;
+  v_old_balances jsonb := '{}'::jsonb;
+  v_new_balances jsonb := '{}'::jsonb;
+  v_adjustments jsonb := '[]'::jsonb;
+  v_adjusted_count integer := 0;
+BEGIN
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Authentication required' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT role::text INTO v_role
+  FROM public.profiles
+  WHERE id = v_caller_id AND is_active = true;
+
+  IF v_role IS DISTINCT FROM 'owner' THEN
+    RAISE EXCEPTION 'Only the Owner can reconcile freezer stock'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF p_counts IS NULL OR jsonb_typeof(p_counts) <> 'object' THEN
+    RAISE EXCEPTION 'p_counts must be a JSON object'
+      USING ERRCODE = '22023';
+  END IF;
+
+  IF NULLIF(btrim(p_reason), '') IS NULL THEN
+    RAISE EXCEPTION 'A reconciliation reason is required'
+      USING ERRCODE = '22023';
+  END IF;
+
+  IF p_idempotency_key IS NOT NULL AND EXISTS (
+    SELECT 1 FROM public.audit_logs
+    WHERE record_id = p_idempotency_key
+      AND action = 'OWNER_STOCK_RECONCILIATION'
+  ) THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'idempotent', true,
+      'message', 'This reconciliation was already applied',
+      'total_adjusted_products', 0,
+      'old_balances', '{}'::jsonb,
+      'new_balances', public.get_freezer_balances(),
+      'adjustments', '[]'::jsonb
+    );
+  END IF;
+
+  v_freezer_id := public.get_or_create_stock_location(
+    'main_freezer'::stock_location_type, NULL, 'Main Cold Storage Freezer'
+  );
+  v_adjustment_id := public.get_or_create_stock_location(
+    'damaged'::stock_location_type, NULL, 'Inventory Adjustment'
+  );
+
+  FOR v_product_id, v_value IN
+    SELECT key::uuid, value
+    FROM jsonb_each_text(p_counts)
+  LOOP
+    IF v_value !~ '^[0-9]+$' THEN
+      RAISE EXCEPTION 'Invalid physical count for product %', v_product_id
+        USING ERRCODE = '22023';
+    END IF;
+
+    v_target := v_value::integer;
+
+    PERFORM 1 FROM public.products WHERE id = v_product_id FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Product % does not exist', v_product_id
+        USING ERRCODE = 'P0002';
+    END IF;
+
+    SELECT COALESCE(SUM(
+      CASE
+        WHEN destination_location_id = v_freezer_id THEN quantity
+        WHEN source_location_id = v_freezer_id THEN -quantity
+        ELSE 0
+      END
+    ), 0)::integer
+    INTO v_current
+    FROM public.stock_movements
+    WHERE product_id = v_product_id
+      AND (source_location_id = v_freezer_id OR destination_location_id = v_freezer_id);
+
+    v_difference := v_target - v_current;
+    v_old_balances := jsonb_set(v_old_balances, ARRAY[v_product_id::text], to_jsonb(v_current), true);
+    v_new_balances := jsonb_set(v_new_balances, ARRAY[v_product_id::text], to_jsonb(v_target), true);
+
+    IF v_difference <> 0 THEN
+      INSERT INTO public.stock_movements (
+        movement_date, product_id, source_location_id, destination_location_id,
+        quantity, movement_type, reference_table, reference_id, notes, created_by
+      ) VALUES (
+        now(),
+        v_product_id,
+        CASE WHEN v_difference < 0 THEN v_freezer_id ELSE v_adjustment_id END,
+        CASE WHEN v_difference < 0 THEN v_adjustment_id ELSE v_freezer_id END,
+        abs(v_difference),
+        'stock_correction'::stock_movement_type,
+        'stock_reconciliations',
+        v_operation_id,
+        format('Physical stock reconciliation: %s -> %s. Reason: %s',
+          v_current, v_target, btrim(p_reason)),
+        v_caller_id
+      );
+
+      v_adjustments := v_adjustments || jsonb_build_array(jsonb_build_object(
+        'product_id', v_product_id,
+        'previous_quantity', v_current,
+        'new_quantity', v_target,
+        'difference', v_difference
+      ));
+      v_adjusted_count := v_adjusted_count + 1;
+    END IF;
+  END LOOP;
+
+  INSERT INTO public.audit_logs (
+    table_name, record_id, action, old_data, new_data,
+    reason, performed_by, performed_at
+  ) VALUES (
+    'stock_reconciliations', v_operation_id, 'OWNER_STOCK_RECONCILIATION',
+    v_old_balances,
+    jsonb_build_object('counts', v_new_balances, 'adjustments', v_adjustments),
+    btrim(p_reason), v_caller_id, now()
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'message', 'Stock reconciliation completed successfully',
+    'operation_id', v_operation_id,
+    'total_adjusted_products', v_adjusted_count,
+    'old_balances', v_old_balances,
+    'new_balances', v_new_balances,
+    'adjustments', v_adjustments
+  );
+END;
+$$;
+
+
+-- ----------------------------------------------------------------------------
+-- 6.5 Seller Operations & Settlements
+-- ----------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION issue_seller_stock(
+  p_seller_id UUID,
+  p_cart_id UUID,
+  p_issue_date DATE,
+  p_items JSONB, -- Array of { product_id, issued_quantity }
+  p_notes TEXT,
+  p_user_id UUID
+) RETURNS JSONB AS $$
+DECLARE
+  v_issue_id UUID;
+  v_issue_number TEXT;
+  v_item JSONB;
+  v_product_id UUID;
+  v_quantity INTEGER;
+  v_available_qty INTEGER;
+  v_price RECORD;
+  v_freezer_loc_id UUID;
+  v_seller_loc_id UUID;
+  v_today_code TEXT;
+  v_seq INTEGER;
+BEGIN
+  IF jsonb_array_length(p_items) = 0 THEN
+    RAISE EXCEPTION 'Cannot create an empty stock issue. At least one product is required.';
+  END IF;
+
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
+  v_seller_loc_id := get_or_create_stock_location('seller', p_seller_id);
+
+  -- Generate readable issue number: IS-YYYYMMDD-001
+  v_today_code := 'IS-' || TO_CHAR(COALESCE(p_issue_date, CURRENT_DATE), 'YYYYMMDD');
+  SELECT COUNT(*) + 1 INTO v_seq FROM seller_issues WHERE issue_number LIKE v_today_code || '%';
+  v_issue_number := v_today_code || '-' || LPAD(v_seq::TEXT, 3, '0');
+
+  -- Create Issue Header
+  INSERT INTO seller_issues (
+    issue_number,
+    seller_id,
+    cart_id,
+    issue_date,
+    status,
+    issued_at,
+    notes,
+    created_by
+  ) VALUES (
+    v_issue_number,
+    p_seller_id,
+    p_cart_id,
+    COALESCE(p_issue_date, CURRENT_DATE),
+    'issued',
+    NOW(),
+    p_notes,
+    p_user_id
+  ) RETURNING id INTO v_issue_id;
+
+  -- Process and Validate each item
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_product_id := (v_item->>'product_id')::UUID;
+    v_quantity := (v_item->>'issued_quantity')::INTEGER;
+
+    IF v_quantity <= 0 THEN
+      RAISE EXCEPTION 'Issued quantity must be greater than zero';
+    END IF;
+
+    -- Validate Available Freezer Stock
+    SELECT available_quantity INTO v_available_qty 
+    FROM v_freezer_stock 
+    WHERE product_id = v_product_id;
+
+    IF v_available_qty IS NULL OR v_available_qty < v_quantity THEN
+      RAISE EXCEPTION 'Insufficient freezer stock for product % (Available: %, Requested: %)', 
+        v_product_id, COALESCE(v_available_qty, 0), v_quantity;
+    END IF;
+
+    -- Get Active Price and Commission Snapshot
+    SELECT selling_price, commission_type, commission_value INTO v_price
+    FROM product_prices
+    WHERE product_id = v_product_id
+      AND effective_from <= NOW()
+      AND (effective_to IS NULL OR effective_to > NOW())
+    ORDER BY effective_from DESC
+    LIMIT 1;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'No active price configuration found for product %', v_product_id;
+    END IF;
+
+    -- Insert Issue Item with Snapshots
+    INSERT INTO seller_issue_items (
+      seller_issue_id,
+      product_id,
+      issued_quantity,
+      unit_selling_price_snapshot,
+      commission_type_snapshot,
+      commission_value_snapshot
+    ) VALUES (
+      v_issue_id,
+      v_product_id,
+      v_quantity,
+      v_price.selling_price,
+      v_price.commission_type::TEXT,
+      v_price.commission_value
+    );
+
+    -- Record Authoritative Stock Movement from Freezer to Seller
+    INSERT INTO stock_movements (
+      product_id,
+      source_location_id,
+      destination_location_id,
+      quantity,
+      movement_type,
+      reference_table,
+      reference_id,
+      notes,
+      created_by
+    ) VALUES (
+      v_product_id,
+      v_freezer_loc_id,
+      v_seller_loc_id,
+      v_quantity,
+      'seller_issued',
+      'seller_issues',
+      v_issue_id,
+      'Stock issue: ' || v_issue_number,
+      p_user_id
+    );
+  END LOOP;
+
+  -- Audit Log
+  INSERT INTO audit_logs (table_name, record_id, action, new_data, reason, performed_by)
+  VALUES (
+    'seller_issues',
+    v_issue_id,
+    'ISSUE_SELLER_STOCK',
+    jsonb_build_object('issue_number', v_issue_number, 'seller_id', p_seller_id, 'items', p_items),
+    'Stock issued to seller',
+    p_user_id
+  );
+
+  RETURN jsonb_build_object('success', true, 'issue_id', v_issue_id, 'issue_number', v_issue_number);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION correct_issued_stock(
+  p_issue_id UUID,
+  p_date DATE,
+  p_seller_id UUID,
+  p_cart_id UUID,
+  p_items JSONB,
+  p_notes TEXT,
+  p_reason TEXT,
+  p_user_id UUID
+) RETURNS JSONB AS $$
+DECLARE
+  v_old_issue RECORD;
+  v_new_issue_id UUID;
+  v_new_issue_number TEXT;
+  v_old_item RECORD;
+  v_new_item JSONB;
+  v_product_id UUID;
+  v_issued_qty INTEGER;
+  v_price_snapshot NUMERIC(12,2);
+  v_comm_type TEXT;
+  v_comm_val NUMERIC(12,2);
+  v_seller_loc_id UUID;
+  v_freezer_loc_id UUID;
+  v_old_movement RECORD;
+  v_closing RECORD;
+  v_active_price RECORD;
+  v_current_freezer_balance INTEGER;
+  v_original_issued INTEGER;
+  v_net_diff INTEGER;
+  v_settlement_count INTEGER;
+BEGIN
+  -- 1. Owner Permission Check
+  IF NOT (SELECT role = 'owner' FROM profiles WHERE id = p_user_id) THEN
+    RAISE EXCEPTION 'Access Denied: Only Owners can correct stock issues.';
+  END IF;
+
+  -- 2. Validate Reason
+  IF p_reason IS NULL OR length(trim(p_reason)) < 5 THEN
+    RAISE EXCEPTION 'A valid correction reason of at least 5 characters is required.';
+  END IF;
+
+  -- 3. Lock & Load Original Issue
+  SELECT * INTO v_old_issue FROM seller_issues WHERE id = p_issue_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Stock issue record not found.';
+  END IF;
+
+  IF v_old_issue.is_current_version = false OR v_old_issue.status NOT IN ('issued', 'draft') THEN
+    RAISE EXCEPTION 'Only active issued or draft records can be corrected.';
+  END IF;
+
+  -- 4. Block if already partially or fully settled
+  SELECT COUNT(*) INTO v_settlement_count
+  FROM seller_settlements
+  WHERE seller_issue_id = p_issue_id AND status != 'cancelled';
+
+  IF v_settlement_count > 0 THEN
+    RAISE EXCEPTION 'This stock issue has a settlement. Correct or reverse the related settlement before changing this issue.';
+  END IF;
+
+  -- 5. Check Closed Day
+  SELECT * INTO v_closing FROM daily_closings WHERE business_date = v_old_issue.issue_date;
+  IF FOUND AND v_closing.status = 'closed' THEN
+    RAISE EXCEPTION 'Business day (%) is closed. Please reopen the business day first.', v_old_issue.issue_date;
+  END IF;
+
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
+  v_seller_loc_id := get_or_create_stock_location('seller', p_seller_id, 'Seller Cart');
+
+  -- 6. Validate Available Freezer Stock for New Quantities
+  FOR v_new_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_product_id := (v_new_item->>'product_id')::UUID;
+    v_issued_qty := COALESCE((v_new_item->>'issued_quantity')::INTEGER, 0);
+
+    SELECT COALESCE(issued_quantity, 0) INTO v_original_issued
+    FROM seller_issue_items
+    WHERE seller_issue_id = p_issue_id AND product_id = v_product_id;
+
+    v_net_diff := v_issued_qty - COALESCE(v_original_issued, 0);
+
+    IF v_net_diff > 0 THEN
+      SELECT COALESCE(SUM(
+        CASE WHEN destination_location_id = v_freezer_loc_id THEN quantity
+             WHEN source_location_id = v_freezer_loc_id THEN -quantity
+             ELSE 0 END
+      ), 0) INTO v_current_freezer_balance
+      FROM stock_movements
+      WHERE product_id = v_product_id;
+
+      IF v_current_freezer_balance < v_net_diff THEN
+        RAISE EXCEPTION 'Insufficient freezer stock for product. Available: %, Required additional: %', v_current_freezer_balance, v_net_diff;
+      END IF;
+    END IF;
+  END LOOP;
+
+  -- 7. Reverse Original Stock Movements (from Seller back to Freezer)
+  FOR v_old_movement IN
+    SELECT * FROM stock_movements
+    WHERE reference_table = 'seller_issues'
+      AND reference_id = p_issue_id
+      AND movement_type = 'seller_issued'
+  LOOP
+    INSERT INTO stock_movements (
+      movement_date,
+      product_id,
+      source_location_id,
+      destination_location_id,
+      quantity,
+      movement_type,
+      reference_table,
+      reference_id,
+      reversal_of_movement_id,
+      notes,
+      created_by
+    ) VALUES (
+      NOW(),
+      v_old_movement.product_id,
+      v_old_movement.destination_location_id,
+      v_old_movement.source_location_id,
+      v_old_movement.quantity,
+      'issue_reversal',
+      'seller_issues',
+      p_issue_id,
+      v_old_movement.id,
+      'Reversal for issue correction: ' || p_reason,
+      p_user_id
+    );
+  END LOOP;
+
+  -- 8. Create Revised Issue Record (Version N+1)
+  v_new_issue_number := v_old_issue.issue_number || '-V' || (v_old_issue.version_number + 1);
+
+  INSERT INTO seller_issues (
+    issue_number,
+    seller_id,
+    cart_id,
+    issue_date,
+    status,
+    issued_at,
+    notes,
+    version_number,
+    is_current_version,
+    correction_of_id,
+    correction_reason,
+    corrected_by,
+    corrected_at,
+    created_by,
+    created_at,
+    updated_at
+  ) VALUES (
+    v_new_issue_number,
+    p_seller_id,
+    p_cart_id,
+    p_date,
+    'issued',
+    NOW(),
+    p_notes,
+    v_old_issue.version_number + 1,
+    true,
+    v_old_issue.id,
+    p_reason,
+    p_user_id,
+    NOW(),
+    v_old_issue.created_by,
+    v_old_issue.created_at,
+    NOW()
+  ) RETURNING id INTO v_new_issue_id;
+
+  -- 9. Insert Revised Items with Price Snapshots and New Movements
+  FOR v_new_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_product_id := (v_new_item->>'product_id')::UUID;
+    v_issued_qty := COALESCE((v_new_item->>'issued_quantity')::INTEGER, 0);
+
+    -- Get active product price snapshot
+    SELECT selling_price, commission_type, commission_value
+    INTO v_price_snapshot, v_comm_type, v_comm_val
+    FROM product_prices
+    WHERE product_id = v_product_id AND is_active = true
+    LIMIT 1;
+
+    INSERT INTO seller_issue_items (
+      seller_issue_id,
+      product_id,
+      issued_quantity,
+      unit_selling_price_snapshot,
+      commission_type_snapshot,
+      commission_value_snapshot
+    ) VALUES (
+      v_new_issue_id,
+      v_product_id,
+      v_issued_qty,
+      COALESCE(v_price_snapshot, 0.00),
+      COALESCE(v_comm_type, 'fixed'),
+      COALESCE(v_comm_val, 0.00)
+    );
+
+    IF v_issued_qty > 0 THEN
+      INSERT INTO stock_movements (
+        movement_date,
+        product_id,
+        source_location_id,
+        destination_location_id,
+        quantity,
+        movement_type,
+        reference_table,
+        reference_id,
+        notes,
+        created_by
+      ) VALUES (
+        NOW(),
+        v_product_id,
+        v_freezer_loc_id,
+        v_seller_loc_id,
+        v_issued_qty,
+        'seller_issued',
+        'seller_issues',
+        v_new_issue_id,
+        'Corrected stock issue: ' || v_new_issue_number,
+        p_user_id
+      );
+    END IF;
+  END LOOP;
+
+  -- 10. Mark Old Issue as Superseded
+  UPDATE seller_issues
+  SET status = 'superseded',
+      is_current_version = false,
+      superseded_by_id = v_new_issue_id,
+      updated_at = NOW()
+  WHERE id = p_issue_id;
+
+  -- 11. Write Audit Log
+  INSERT INTO audit_logs (
+    table_name,
+    record_id,
+    action,
+    old_values,
+    new_values,
+    change_reason,
+    user_id,
+    created_at
+  ) VALUES (
+    'seller_issues',
+    v_new_issue_id,
+    'CORRECT_RECORD',
+    jsonb_build_object('id', v_old_issue.id, 'issue_number', v_old_issue.issue_number),
+    jsonb_build_object('id', v_new_issue_id, 'issue_number', v_new_issue_number, 'version', v_old_issue.version_number + 1),
+    p_reason,
+    p_user_id,
+    NOW()
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'new_issue_id', v_new_issue_id,
+    'new_issue_number', v_new_issue_number,
+    'message', 'Stock issue corrected successfully'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION delete_seller_issue_transaction(
+  p_issue_id UUID,
+  p_reason TEXT DEFAULT 'Deleted by Owner',
+  p_user_id UUID DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_issue RECORD;
+  v_item RECORD;
+  v_seller_loc_id UUID;
+  v_freezer_loc_id UUID;
+  v_closing RECORD;
+  v_active_settlement RECORD;
+BEGIN
+  SELECT * INTO v_issue FROM seller_issues WHERE id = p_issue_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Stock issue not found.';
+  END IF;
+
+  SELECT settlement_number INTO v_active_settlement
+  FROM seller_settlements
+  WHERE (seller_issue_id = p_issue_id OR issue_id = p_issue_id)
+    AND status IN ('approved', 'pending_approval', 'draft')
+  LIMIT 1;
+
+  IF FOUND THEN
+    RAISE EXCEPTION 'Cannot delete stock issue because an active settlement (%) is linked to it. Please delete the settlement first.', v_active_settlement.settlement_number;
+  END IF;
+
+  SELECT * INTO v_closing FROM daily_closings WHERE business_date = v_issue.issue_date;
+  IF FOUND AND v_closing.status = 'closed' THEN
+    RAISE EXCEPTION 'Business day (%) is closed. Reopen the business day before deleting this record.', v_issue.issue_date;
+  END IF;
+
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
+  v_seller_loc_id := get_or_create_stock_location('seller', v_issue.seller_id, 'Seller Cart');
+
+  IF v_issue.status = 'issued' THEN
+    FOR v_item IN SELECT * FROM seller_issue_items WHERE seller_issue_id = p_issue_id LOOP
+      IF COALESCE(v_item.issued_quantity, 0) > 0 THEN
+        INSERT INTO stock_movements (
+          movement_date,
+          product_id,
+          source_location_id,
+          destination_location_id,
+          quantity,
+          movement_type,
+          reference_table,
+          reference_id,
+          notes,
+          created_by
+        ) VALUES (
+          NOW(),
+          v_item.product_id,
+          v_seller_loc_id,
+          v_freezer_loc_id,
+          v_item.issued_quantity,
+          'issue_reversal',
+          'seller_issues',
+          p_issue_id,
+          'Reversal for deleted stock issue ' || v_issue.issue_number || ': ' || COALESCE(p_reason, 'Deleted'),
+          p_user_id
+        );
+      END IF;
+    END LOOP;
+  END IF;
+
+  -- Clean up any inactive/superseded/cancelled settlement records
+  DELETE FROM settlement_items WHERE settlement_id IN (
+    SELECT id FROM seller_settlements WHERE seller_issue_id = p_issue_id OR issue_id = p_issue_id
+  );
+  DELETE FROM seller_settlements WHERE seller_issue_id = p_issue_id OR issue_id = p_issue_id;
+
+  -- Unlink self-referencing correction chains
+  UPDATE seller_issues SET correction_of_id = NULL WHERE correction_of_id = p_issue_id;
+  UPDATE seller_issues SET superseded_by_id = NULL WHERE superseded_by_id = p_issue_id;
+
+  DELETE FROM seller_issue_items WHERE seller_issue_id = p_issue_id;
+  DELETE FROM seller_issues WHERE id = p_issue_id;
+
+  RETURN jsonb_build_object('success', true, 'message', 'Stock issue deleted successfully');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION process_seller_settlement(
+  p_seller_issue_id UUID,
+  p_settlement_date DATE,
+  p_items JSONB, -- Array of { issue_item_id, returned_qty, damaged_qty, comp_qty, damage_reason, comp_reason }
+  p_cash NUMERIC(12,2),
+  p_upi NUMERIC(12,2),
+  p_credit NUMERIC(12,2),
+  p_notes TEXT,
+  p_is_approved_by_owner BOOLEAN,
+  p_user_id UUID
+) RETURNS JSONB AS $$
+DECLARE
+  v_issue RECORD;
+  v_settlement_id UUID;
+  v_settlement_number TEXT;
+  v_item JSONB;
+  v_issue_item RECORD;
+  v_returned INT;
+  v_damaged INT;
+  v_comp INT;
+  v_sold INT;
+  v_item_gross NUMERIC(12,2);
+  v_item_commission NUMERIC(12,2);
+  v_tot_gross NUMERIC(12,2) := 0.00;
+  v_tot_commission NUMERIC(12,2) := 0.00;
+  v_expected_collection NUMERIC(12,2) := 0.00;
+  v_total_received NUMERIC(12,2) := 0.00;
+  v_accounted_amount NUMERIC(12,2) := 0.00;
+  v_diff NUMERIC(12,2) := 0.00;
+  v_shortage NUMERIC(12,2) := 0.00;
+  v_outstanding NUMERIC(12,2) := 0.00;
+  v_freezer_loc_id UUID;
+  v_seller_loc_id UUID;
+  v_damaged_loc_id UUID;
+  v_comp_loc_id UUID;
+  v_today_code TEXT;
+  v_seq INT;
+  v_status settlement_status;
+BEGIN
+  -- Validate Issue
+  SELECT * INTO v_issue FROM seller_issues WHERE id = p_seller_issue_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Stock issue not found';
+  END IF;
+
+  IF v_issue.status = 'settled' THEN
+    RAISE EXCEPTION 'This issue is already fully settled';
+  END IF;
+
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer');
+  v_seller_loc_id := get_or_create_stock_location('seller', v_issue.seller_id);
+  v_damaged_loc_id := get_or_create_stock_location('damaged');
+  v_comp_loc_id := get_or_create_stock_location('complimentary');
+
+  -- Generate Settlement Number: ST-YYYYMMDD-001
+  v_today_code := 'ST-' || TO_CHAR(COALESCE(p_settlement_date, CURRENT_DATE), 'YYYYMMDD');
+  SELECT COUNT(*) + 1 INTO v_seq FROM seller_settlements WHERE settlement_number LIKE v_today_code || '%';
+  v_settlement_number := v_today_code || '-' || LPAD(v_seq::TEXT, 3, '0');
+
+  v_status := CASE WHEN p_is_approved_by_owner THEN 'approved'::settlement_status ELSE 'pending_approval'::settlement_status END;
+
+  -- Create Settlement Draft Header
+  INSERT INTO seller_settlements (
+    settlement_number,
+    seller_issue_id,
+    seller_id,
+    settlement_date,
+    status,
+    cash_received,
+    upi_received,
+    credit_amount,
+    gross_sales,
+    total_commission,
+    expected_collection,
+    total_received,
+    outstanding_amount,
+    shortage_amount,
+    notes,
+    submitted_by,
+    approved_by,
+    submitted_at,
+    approved_at
+  ) VALUES (
+    v_settlement_number,
+    p_seller_issue_id,
+    v_issue.seller_id,
+    COALESCE(p_settlement_date, CURRENT_DATE),
+    v_status,
+    COALESCE(p_cash, 0.00),
+    COALESCE(p_upi, 0.00),
+    COALESCE(p_credit, 0.00),
+    0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+    p_notes,
+    p_user_id,
+    CASE WHEN p_is_approved_by_owner THEN p_user_id ELSE NULL END,
+    NOW(),
+    CASE WHEN p_is_approved_by_owner THEN NOW() ELSE NULL END
+  ) RETURNING id INTO v_settlement_id;
+
+  -- Process Items and Calculate Server-Side Totals
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    SELECT * INTO v_issue_item 
+    FROM seller_issue_items 
+    WHERE id = (v_item->>'issue_item_id')::UUID AND seller_issue_id = p_seller_issue_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Issue item % does not match issue %', (v_item->>'issue_item_id'), p_seller_issue_id;
+    END IF;
+
+    v_returned := COALESCE((v_item->>'returned_qty')::INT, 0);
+    v_damaged := COALESCE((v_item->>'damaged_qty')::INT, 0);
+    v_comp := COALESCE((v_item->>'comp_qty')::INT, 0);
+
+    IF v_returned < 0 OR v_damaged < 0 OR v_comp < 0 THEN
+      RAISE EXCEPTION 'Returned, damaged and complimentary quantities cannot be negative';
+    END IF;
+
+    IF (v_returned + v_damaged + v_comp) > v_issue_item.issued_quantity THEN
+      RAISE EXCEPTION 'Total of return, damage, and complimentary (%) cannot exceed issued quantity (%) for product %',
+        (v_returned + v_damaged + v_comp), v_issue_item.issued_quantity, v_issue_item.product_id;
+    END IF;
+
+    -- Require reasons if damage or complimentary is recorded
+    IF v_damaged > 0 AND (v_item->>'damage_reason' IS NULL OR length(trim(v_item->>'damage_reason')) = 0) THEN
+      RAISE EXCEPTION 'Damage reason is required when damaged quantity > 0';
+    END IF;
+    IF v_comp > 0 AND (v_item->>'comp_reason' IS NULL OR length(trim(v_item->>'comp_reason')) = 0) THEN
+      RAISE EXCEPTION 'Complimentary reason is required when complimentary quantity > 0';
+    END IF;
+
+    -- Sold Quantity calculation
+    v_sold := v_issue_item.issued_quantity - (v_returned + v_damaged + v_comp);
+    v_item_gross := v_sold * v_issue_item.unit_selling_price_snapshot;
+
+    -- Commission calculation
+    IF v_issue_item.commission_type_snapshot = 'percentage' THEN
+      v_item_commission := ROUND((v_item_gross * v_issue_item.commission_value_snapshot) / 100.0, 2);
+    ELSE
+      v_item_commission := v_sold * v_issue_item.commission_value_snapshot;
+    END IF;
+
+    v_tot_gross := v_tot_gross + v_item_gross;
+    v_tot_commission := v_tot_commission + v_item_commission;
+
+    -- Insert Settlement Item
+    INSERT INTO settlement_items (
+      settlement_id,
+      seller_issue_item_id,
+      product_id,
+      issued_quantity_snapshot,
+      returned_quantity,
+      damaged_quantity,
+      complimentary_quantity,
+      sold_quantity,
+      selling_price_snapshot,
+      gross_sales,
+      commission_amount,
+      damage_reason,
+      complimentary_reason
+    ) VALUES (
+      v_settlement_id,
+      v_issue_item.id,
+      v_issue_item.product_id,
+      v_issue_item.issued_quantity,
+      v_returned,
+      v_damaged,
+      v_comp,
+      v_sold,
+      v_issue_item.unit_selling_price_snapshot,
+      v_item_gross,
+      v_item_commission,
+      v_item->>'damage_reason',
+      v_item->>'comp_reason'
+    );
+
+    -- If approved immediately by Owner, commit stock movements
+    IF p_is_approved_by_owner THEN
+      -- Unsold returned stock moves back to Main Freezer
+      IF v_returned > 0 THEN
+        INSERT INTO stock_movements (
+          product_id, source_location_id, destination_location_id, quantity, movement_type, reference_table, reference_id, notes, created_by
+        ) VALUES (
+          v_issue_item.product_id, v_seller_loc_id, v_freezer_loc_id, v_returned, 'seller_returned', 'seller_settlements', v_settlement_id, 'Returned to freezer: ' || v_settlement_number, p_user_id
+        );
+      END IF;
+
+      -- Damaged stock moves to damaged stock location
+      IF v_damaged > 0 THEN
+        INSERT INTO stock_movements (
+          product_id, source_location_id, destination_location_id, quantity, movement_type, reference_table, reference_id, notes, created_by
+        ) VALUES (
+          v_issue_item.product_id, v_seller_loc_id, v_damaged_loc_id, v_damaged, 'damaged', 'seller_settlements', v_settlement_id, 'Seller damaged: ' || COALESCE(v_item->>'damage_reason', ''), p_user_id
+        );
+      END IF;
+
+      -- Complimentary pieces move to complimentary location
+      IF v_comp > 0 THEN
+        INSERT INTO stock_movements (
+          product_id, source_location_id, destination_location_id, quantity, movement_type, reference_table, reference_id, notes, created_by
+        ) VALUES (
+          v_issue_item.product_id, v_seller_loc_id, v_comp_loc_id, v_comp, 'complimentary', 'seller_settlements', v_settlement_id, 'Complimentary: ' || COALESCE(v_item->>'comp_reason', ''), p_user_id
+        );
+      END IF;
+    END IF;
+  END LOOP;
+
+  -- Financial Calculations
+  v_expected_collection := GREATEST(0.00, v_tot_gross - v_tot_commission);
+  v_total_received := COALESCE(p_cash, 0.00) + COALESCE(p_upi, 0.00);
+  v_accounted_amount := v_total_received + COALESCE(p_credit, 0.00);
+  v_diff := v_accounted_amount - v_expected_collection;
+
+  IF v_diff < 0 THEN
+    v_shortage := ABS(v_diff);
+  ELSE
+    v_shortage := 0.00;
+  END IF;
+
+  v_outstanding := COALESCE(p_credit, 0.00) + v_shortage;
+
+  -- Update Settlement Header with Server Calculated Totals
+  UPDATE seller_settlements
+  SET gross_sales = v_tot_gross,
+      total_commission = v_tot_commission,
+      expected_collection = v_expected_collection,
+      total_received = v_total_received,
+      outstanding_amount = v_outstanding,
+      shortage_amount = v_shortage,
+      updated_at = NOW()
+  WHERE id = v_settlement_id;
+
+  IF p_is_approved_by_owner THEN
+    UPDATE seller_issues SET status = 'settled', updated_at = NOW() WHERE id = p_seller_issue_id;
+  ELSE
+    UPDATE seller_issues SET status = 'partially_settled', updated_at = NOW() WHERE id = p_seller_issue_id;
+  END IF;
+
+  -- Audit Log
+  INSERT INTO audit_logs (table_name, record_id, action, new_data, reason, performed_by)
+  VALUES (
+    'seller_settlements',
+    v_settlement_id,
+    CASE WHEN p_is_approved_by_owner THEN 'APPROVE_SETTLEMENT' ELSE 'SUBMIT_SETTLEMENT' END,
+    jsonb_build_object('settlement_number', v_settlement_number, 'gross_sales', v_tot_gross, 'status', v_status),
+    'Seller settlement processed',
+    p_user_id
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'settlement_id', v_settlement_id,
+    'settlement_number', v_settlement_number,
+    'gross_sales', v_tot_gross,
+    'total_commission', v_tot_commission,
+    'expected_collection', v_expected_collection,
+    'total_received', v_total_received,
+    'shortage_amount', v_shortage,
+    'status', v_status
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION approve_pending_settlement(
+  p_settlement_id UUID,
+  p_user_id UUID
+) RETURNS JSONB AS $$
+DECLARE
+  v_settlement RECORD;
+  v_item RECORD;
+  v_freezer_loc_id UUID;
+  v_seller_loc_id UUID;
+  v_damaged_loc_id UUID;
+  v_comp_loc_id UUID;
+BEGIN
+  SELECT * INTO v_settlement FROM seller_settlements WHERE id = p_settlement_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Settlement not found';
+  END IF;
+
+  IF v_settlement.status = 'approved' THEN
+    RAISE EXCEPTION 'Settlement is already approved';
+  END IF;
+
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer');
+  v_seller_loc_id := get_or_create_stock_location('seller', v_settlement.seller_id);
+  v_damaged_loc_id := get_or_create_stock_location('damaged');
+  v_comp_loc_id := get_or_create_stock_location('complimentary');
+
+  -- Move stock for each settlement item
+  FOR v_item IN SELECT * FROM settlement_items WHERE settlement_id = p_settlement_id LOOP
+    IF v_item.returned_quantity > 0 THEN
+      INSERT INTO stock_movements (
+        product_id, source_location_id, destination_location_id, quantity, movement_type, reference_table, reference_id, notes, created_by
+      ) VALUES (
+        v_item.product_id, v_seller_loc_id, v_freezer_loc_id, v_item.returned_quantity, 'seller_returned', 'seller_settlements', p_settlement_id, 'Returned stock: ' || v_settlement.settlement_number, p_user_id
+      );
+    END IF;
+
+    IF v_item.damaged_quantity > 0 THEN
+      INSERT INTO stock_movements (
+        product_id, source_location_id, destination_location_id, quantity, movement_type, reference_table, reference_id, notes, created_by
+      ) VALUES (
+        v_item.product_id, v_seller_loc_id, v_damaged_loc_id, v_item.damaged_quantity, 'damaged', 'seller_settlements', p_settlement_id, 'Damaged stock approved: ' || COALESCE(v_item.damage_reason, ''), p_user_id
+      );
+    END IF;
+
+    IF v_item.complimentary_quantity > 0 THEN
+      INSERT INTO stock_movements (
+        product_id, source_location_id, destination_location_id, quantity, movement_type, reference_table, reference_id, notes, created_by
+      ) VALUES (
+        v_item.product_id, v_seller_loc_id, v_comp_loc_id, v_item.complimentary_quantity, 'complimentary', 'seller_settlements', p_settlement_id, 'Complimentary approved: ' || COALESCE(v_item.complimentary_reason, ''), p_user_id
+      );
+    END IF;
+  END LOOP;
+
+  -- Update Settlement Status
+  UPDATE seller_settlements
+  SET status = 'approved',
+      approved_by = p_user_id,
+      approved_at = NOW(),
+      updated_at = NOW()
+  WHERE id = p_settlement_id;
+
+  -- Update Issue Status
+  UPDATE seller_issues
+  SET status = 'settled',
+      updated_at = NOW()
+  WHERE id = v_settlement.seller_issue_id;
+
+  -- Audit Log
+  INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
+  VALUES (
+    'seller_settlements',
+    p_settlement_id,
+    'APPROVE_SETTLEMENT',
+    row_to_json(v_settlement)::jsonb,
+    jsonb_build_object('status', 'approved', 'approved_by', p_user_id),
+    'Owner approved settlement',
+    p_user_id
+  );
+
+  RETURN jsonb_build_object('success', true, 'settlement_id', p_settlement_id, 'status', 'approved');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION correct_approved_settlement(
+  p_settlement_id UUID,
+  p_date DATE,
+  p_cash NUMERIC(12,2),
+  p_upi NUMERIC(12,2),
+  p_credit NUMERIC(12,2),
+  p_items JSONB,
+  p_notes TEXT,
+  p_reason TEXT,
+  p_user_id UUID
+) RETURNS JSONB AS $$
+DECLARE
+  v_old_settlement RECORD;
+  v_new_settlement_id UUID;
+  v_new_settlement_number TEXT;
+  v_new_item JSONB;
+  v_item_id UUID;
+  v_product_id UUID;
+  v_issued_snap INTEGER;
+  v_returned_qty INTEGER;
+  v_damaged_qty INTEGER;
+  v_comp_qty INTEGER;
+  v_sold_qty INTEGER;
+  v_price_snap NUMERIC(12,2);
+  v_comm_val NUMERIC(12,2);
+  v_comm_type TEXT;
+  v_gross_sales NUMERIC(12,2) := 0.00;
+  v_total_commission NUMERIC(12,2) := 0.00;
+  v_item_gross NUMERIC(12,2);
+  v_item_comm NUMERIC(12,2);
+  v_expected_coll NUMERIC(12,2);
+  v_total_received NUMERIC(12,2);
+  v_shortage NUMERIC(12,2);
+  v_seller_loc_id UUID;
+  v_freezer_loc_id UUID;
+  v_returned_loc_id UUID;
+  v_damaged_loc_id UUID;
+  v_comp_loc_id UUID;
+  v_old_movement RECORD;
+  v_closing RECORD;
+BEGIN
+  -- 1. Owner Permission Check
+  IF NOT (SELECT role = 'owner' FROM profiles WHERE id = p_user_id) THEN
+    RAISE EXCEPTION 'Access Denied: Only Owners can correct approved settlements.';
+  END IF;
+
+  -- 2. Validate Reason
+  IF p_reason IS NULL OR length(trim(p_reason)) < 5 THEN
+    RAISE EXCEPTION 'A valid correction reason of at least 5 characters is required.';
+  END IF;
+
+  -- 3. Lock & Load Original Settlement
+  SELECT * INTO v_old_settlement FROM seller_settlements WHERE id = p_settlement_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Settlement record not found.';
+  END IF;
+
+  IF v_old_settlement.is_current_version = false THEN
+    RAISE EXCEPTION 'Only current version of settlement can be corrected.';
+  END IF;
+
+  -- 4. Check Closed Day
+  SELECT * INTO v_closing FROM daily_closings WHERE business_date = v_old_settlement.settlement_date;
+  IF FOUND AND v_closing.status = 'closed' THEN
+    RAISE EXCEPTION 'Business day (%) is closed. Please reopen the business day first.', v_old_settlement.settlement_date;
+  END IF;
+
+  v_seller_loc_id := get_or_create_stock_location('seller', v_old_settlement.seller_id, 'Seller Cart');
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
+  v_returned_loc_id := get_or_create_stock_location('returned', NULL, 'Returned Unsold');
+  v_damaged_loc_id := get_or_create_stock_location('damaged', NULL, 'Damaged Stock');
+  v_comp_loc_id := get_or_create_stock_location('complimentary', NULL, 'Complimentary Stock');
+
+  -- 5. Reverse Old Stock Movements from Original Settlement
+  FOR v_old_movement IN
+    SELECT * FROM stock_movements
+    WHERE reference_table = 'seller_settlements'
+      AND reference_id = p_settlement_id
+  LOOP
+    INSERT INTO stock_movements (
+      movement_date,
+      product_id,
+      source_location_id,
+      destination_location_id,
+      quantity,
+      movement_type,
+      reference_table,
+      reference_id,
+      reversal_of_movement_id,
+      notes,
+      created_by
+    ) VALUES (
+      NOW(),
+      v_old_movement.product_id,
+      v_old_movement.destination_location_id,
+      v_old_movement.source_location_id,
+      v_old_movement.quantity,
+      'settlement_reversal',
+      'seller_settlements',
+      p_settlement_id,
+      v_old_movement.id,
+      'Reversal for settlement correction: ' || p_reason,
+      p_user_id
+    );
+  END LOOP;
+
+  -- 6. Calculate Gross Sales & Commission from Items
+  FOR v_new_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_issued_snap := COALESCE((v_new_item->>'issued_quantity_snapshot')::INTEGER, 0);
+    v_returned_qty := COALESCE((v_new_item->>'returned_quantity')::INTEGER, 0);
+    v_damaged_qty := COALESCE((v_new_item->>'damaged_quantity')::INTEGER, 0);
+    v_comp_qty := COALESCE((v_new_item->>'complimentary_quantity')::INTEGER, 0);
+    v_price_snap := COALESCE((v_new_item->>'selling_price_snapshot')::NUMERIC, 0.00);
+    v_comm_val := COALESCE((v_new_item->>'commission_value_snapshot')::NUMERIC, 0.00);
+    v_comm_type := COALESCE(v_new_item->>'commission_type_snapshot', 'fixed');
+
+    v_sold_qty := v_issued_snap - v_returned_qty - v_damaged_qty - v_comp_qty;
+    IF v_sold_qty < 0 THEN
+      RAISE EXCEPTION 'Total returns, damages and complimentaries exceed issued quantity for item.';
+    END IF;
+
+    v_item_gross := ROUND(v_sold_qty * v_price_snap, 2);
+    IF v_comm_type = 'percentage' THEN
+      v_item_comm := ROUND((v_item_gross * v_comm_val) / 100.0, 2);
+    ELSE
+      v_item_comm := ROUND(v_sold_qty * v_comm_val, 2);
+    END IF;
+
+    v_gross_sales := v_gross_sales + v_item_gross;
+    v_total_commission := v_total_commission + v_item_comm;
+  END LOOP;
+
+  v_expected_coll := v_gross_sales - v_total_commission;
+  v_total_received := COALESCE(p_cash, 0.00) + COALESCE(p_upi, 0.00);
+  v_shortage := v_expected_coll - (v_total_received + COALESCE(p_credit, 0.00));
+
+  -- 7. Create Revised Settlement Record (Version N+1)
+  v_new_settlement_number := v_old_settlement.settlement_number || '-V' || (v_old_settlement.version_number + 1);
+
+  INSERT INTO seller_settlements (
+    settlement_number,
+    seller_issue_id,
+    seller_id,
+    settlement_date,
+    status,
+    cash_received,
+    upi_received,
+    credit_amount,
+    gross_sales,
+    total_commission,
+    expected_collection,
+    total_received,
+    outstanding_amount,
+    shortage_amount,
+    notes,
+    submitted_by,
+    approved_by,
+    submitted_at,
+    approved_at,
+    version_number,
+    is_current_version,
+    correction_of_id,
+    correction_reason,
+    corrected_by,
+    corrected_at,
+    created_at,
+    updated_at
+  ) VALUES (
+    v_new_settlement_number,
+    v_old_settlement.seller_issue_id,
+    v_old_settlement.seller_id,
+    p_date,
+    'approved',
+    COALESCE(p_cash, 0.00),
+    COALESCE(p_upi, 0.00),
+    COALESCE(p_credit, 0.00),
+    v_gross_sales,
+    v_total_commission,
+    v_expected_coll,
+    v_total_received,
+    COALESCE(p_credit, 0.00),
+    GREATEST(0.00, v_shortage),
+    p_notes,
+    v_old_settlement.submitted_by,
+    p_user_id,
+    v_old_settlement.submitted_at,
+    NOW(),
+    v_old_settlement.version_number + 1,
+    true,
+    v_old_settlement.id,
+    p_reason,
+    p_user_id,
+    NOW(),
+    v_old_settlement.created_at,
+    NOW()
+  ) RETURNING id INTO v_new_settlement_id;
+
+  -- 8. Insert Settlement Items and Replacement Stock Movements
+  FOR v_new_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_product_id := (v_new_item->>'product_id')::UUID;
+    v_issued_snap := COALESCE((v_new_item->>'issued_quantity_snapshot')::INTEGER, 0);
+    v_returned_qty := COALESCE((v_new_item->>'returned_quantity')::INTEGER, 0);
+    v_damaged_qty := COALESCE((v_new_item->>'damaged_quantity')::INTEGER, 0);
+    v_comp_qty := COALESCE((v_new_item->>'complimentary_quantity')::INTEGER, 0);
+    v_price_snap := COALESCE((v_new_item->>'selling_price_snapshot')::NUMERIC, 0.00);
+    v_comm_val := COALESCE((v_new_item->>'commission_value_snapshot')::NUMERIC, 0.00);
+    v_comm_type := COALESCE(v_new_item->>'commission_type_snapshot', 'fixed');
+
+    v_sold_qty := v_issued_snap - v_returned_qty - v_damaged_qty - v_comp_qty;
+    v_item_gross := ROUND(v_sold_qty * v_price_snap, 2);
+    IF v_comm_type = 'percentage' THEN
+      v_item_comm := ROUND((v_item_gross * v_comm_val) / 100.0, 2);
+    ELSE
+      v_item_comm := ROUND(v_sold_qty * v_comm_val, 2);
+    END IF;
+
+    INSERT INTO settlement_items (
+      settlement_id,
+      seller_issue_item_id,
+      product_id,
+      issued_quantity_snapshot,
+      returned_quantity,
+      damaged_quantity,
+      complimentary_quantity,
+      sold_quantity,
+      selling_price_snapshot,
+      gross_sales,
+      commission_amount,
+      damage_reason,
+      complimentary_reason
+    ) VALUES (
+      v_new_settlement_id,
+      (v_new_item->>'seller_issue_item_id')::UUID,
+      v_product_id,
+      v_issued_snap,
+      v_returned_qty,
+      v_damaged_qty,
+      v_comp_qty,
+      v_sold_qty,
+      v_price_snap,
+      v_item_gross,
+      v_item_comm,
+      v_new_item->>'damage_reason',
+      v_new_item->>'complimentary_reason'
+    );
+
+    -- Stock Movements for returned/damaged/complimentary items
+    IF v_returned_qty > 0 THEN
+      INSERT INTO stock_movements (movement_date, product_id, source_location_id, destination_location_id, quantity, movement_type, reference_table, reference_id, notes, created_by)
+      VALUES (NOW(), v_product_id, v_seller_loc_id, v_freezer_loc_id, v_returned_qty, 'seller_returned', 'seller_settlements', v_new_settlement_id, 'Returned stock from settlement V' || (v_old_settlement.version_number + 1), p_user_id);
+    END IF;
+
+    IF v_damaged_qty > 0 THEN
+      INSERT INTO stock_movements (movement_date, product_id, source_location_id, destination_location_id, quantity, movement_type, reference_table, reference_id, notes, created_by)
+      VALUES (NOW(), v_product_id, v_seller_loc_id, v_damaged_loc_id, v_damaged_qty, 'damaged', 'seller_settlements', v_new_settlement_id, 'Damaged stock recorded in settlement V' || (v_old_settlement.version_number + 1), p_user_id);
+    END IF;
+
+    IF v_comp_qty > 0 THEN
+      INSERT INTO stock_movements (movement_date, product_id, source_location_id, destination_location_id, quantity, movement_type, reference_table, reference_id, notes, created_by)
+      VALUES (NOW(), v_product_id, v_seller_loc_id, v_comp_loc_id, v_comp_qty, 'complimentary', 'seller_settlements', v_new_settlement_id, 'Complimentary stock recorded in settlement V' || (v_old_settlement.version_number + 1), p_user_id);
+    END IF;
+  END LOOP;
+
+  -- 9. Mark Old Settlement as Superseded
+  UPDATE seller_settlements
+  SET status = 'superseded',
+      is_current_version = false,
+      superseded_by_id = v_new_settlement_id,
+      updated_at = NOW()
+  WHERE id = p_settlement_id;
+
+  -- 10. Write Audit Log
+  INSERT INTO audit_logs (
+    table_name,
+    record_id,
+    action,
+    old_values,
+    new_values,
+    change_reason,
+    user_id,
+    created_at
+  ) VALUES (
+    'seller_settlements',
+    v_new_settlement_id,
+    'CORRECT_RECORD',
+    jsonb_build_object('id', v_old_settlement.id, 'settlement_number', v_old_settlement.settlement_number, 'gross_sales', v_old_settlement.gross_sales),
+    jsonb_build_object('id', v_new_settlement_id, 'settlement_number', v_new_settlement_number, 'gross_sales', v_gross_sales, 'version', v_old_settlement.version_number + 1),
+    p_reason,
+    p_user_id,
+    NOW()
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'new_settlement_id', v_new_settlement_id,
+    'new_settlement_number', v_new_settlement_number,
+    'message', 'Settlement corrected successfully'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION delete_seller_settlement_transaction(
+  p_settlement_id UUID,
+  p_reason TEXT DEFAULT 'Deleted by Owner',
+  p_user_id UUID DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_settlement RECORD;
+  v_item RECORD;
+  v_seller_loc_id UUID;
+  v_freezer_loc_id UUID;
+  v_damaged_loc_id UUID;
+  v_comp_loc_id UUID;
+  v_closing RECORD;
+BEGIN
+  SELECT * INTO v_settlement FROM seller_settlements WHERE id = p_settlement_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Settlement not found.';
+  END IF;
+
+  SELECT * INTO v_closing FROM daily_closings WHERE business_date = v_settlement.settlement_date;
+  IF FOUND AND v_closing.status = 'closed' THEN
+    RAISE EXCEPTION 'Business day (%) is closed. Reopen the business day before deleting this record.', v_settlement.settlement_date;
+  END IF;
+
+  v_freezer_loc_id := get_or_create_stock_location('main_freezer', NULL, 'Main Freezer');
+  v_seller_loc_id := get_or_create_stock_location('seller', v_settlement.seller_id, 'Seller Cart');
+  v_damaged_loc_id := get_or_create_stock_location('damaged', NULL, 'Damaged Stock');
+  v_comp_loc_id := get_or_create_stock_location('complimentary', NULL, 'Complimentary Stock');
+
+  IF v_settlement.status = 'approved' THEN
+    FOR v_item IN SELECT * FROM settlement_items WHERE settlement_id = p_settlement_id LOOP
+      IF COALESCE(v_item.returned_quantity, 0) > 0 THEN
+        INSERT INTO stock_movements (
+          movement_date,
+          product_id,
+          source_location_id,
+          destination_location_id,
+          quantity,
+          movement_type,
+          reference_table,
+          reference_id,
+          notes,
+          created_by
+        ) VALUES (
+          NOW(),
+          v_item.product_id,
+          v_freezer_loc_id,
+          v_seller_loc_id,
+          v_item.returned_quantity,
+          'settlement_reversal',
+          'seller_settlements',
+          p_settlement_id,
+          'Returned stock reversed for deleted settlement ' || v_settlement.settlement_number,
+          p_user_id
+        );
+      END IF;
+
+      IF COALESCE(v_item.damaged_quantity, 0) > 0 THEN
+        INSERT INTO stock_movements (
+          movement_date,
+          product_id,
+          source_location_id,
+          destination_location_id,
+          quantity,
+          movement_type,
+          reference_table,
+          reference_id,
+          notes,
+          created_by
+        ) VALUES (
+          NOW(),
+          v_item.product_id,
+          v_damaged_loc_id,
+          v_seller_loc_id,
+          v_item.damaged_quantity,
+          'settlement_reversal',
+          'seller_settlements',
+          p_settlement_id,
+          'Damaged stock reversed for deleted settlement ' || v_settlement.settlement_number,
+          p_user_id
+        );
+      END IF;
+
+      IF COALESCE(v_item.complimentary_quantity, 0) > 0 THEN
+        INSERT INTO stock_movements (
+          movement_date,
+          product_id,
+          source_location_id,
+          destination_location_id,
+          quantity,
+          movement_type,
+          reference_table,
+          reference_id,
+          notes,
+          created_by
+        ) VALUES (
+          NOW(),
+          v_item.product_id,
+          v_comp_loc_id,
+          v_seller_loc_id,
+          v_item.complimentary_quantity,
+          'settlement_reversal',
+          'seller_settlements',
+          p_settlement_id,
+          'Complimentary stock reversed for deleted settlement ' || v_settlement.settlement_number,
+          p_user_id
+        );
+      END IF;
+    END LOOP;
+
+    UPDATE seller_issues
+    SET status = 'issued', updated_at = NOW()
+    WHERE id = v_settlement.seller_issue_id OR id = v_settlement.issue_id;
+  END IF;
+
+  -- Unlink self-referencing correction chains
+  UPDATE seller_settlements SET correction_of_id = NULL WHERE correction_of_id = p_settlement_id;
+  UPDATE seller_settlements SET superseded_by_id = NULL WHERE superseded_by_id = p_settlement_id;
+
+  DELETE FROM settlement_items WHERE settlement_id = p_settlement_id;
+  DELETE FROM seller_settlements WHERE id = p_settlement_id;
+
+  RETURN jsonb_build_object('success', true, 'message', 'Settlement deleted successfully');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- ----------------------------------------------------------------------------
+-- 6.6 Daily Business & Expenses
+-- ----------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION close_business_day(
+  p_business_date DATE,
+  p_notes TEXT,
+  p_user_id UUID
+) RETURNS JSONB AS $$
+DECLARE
+  v_unsettled_count INT;
+  v_draft_batch_count INT;
+  v_pending_settlement_count INT;
+  v_tot_produced INT := 0;
+  v_tot_sold INT := 0;
+  v_tot_returned INT := 0;
+  v_tot_damaged INT := 0;
+  v_tot_comp INT := 0;
+  v_gross_sales NUMERIC(12,2) := 0.00;
+  v_tot_commission NUMERIC(12,2) := 0.00;
+  v_net_sales NUMERIC(12,2) := 0.00;
+  v_cash_received NUMERIC(12,2) := 0.00;
+  v_upi_received NUMERIC(12,2) := 0.00;
+  v_credit_sales NUMERIC(12,2) := 0.00;
+  v_tot_expenses NUMERIC(12,2) := 0.00;
+  v_tot_ingredient_cost NUMERIC(12,2) := 0.00;
+  v_estimated_profit NUMERIC(12,2) := 0.00;
+  v_closing_stock_val NUMERIC(12,2) := 0.00;
+  v_closing_id UUID;
+  v_existing RECORD;
+BEGIN
+  -- 1. Pre-closing Blocking Checks
+  SELECT COUNT(*) INTO v_draft_batch_count 
+  FROM production_batches 
+  WHERE production_date = p_business_date AND status = 'draft';
+
+  IF v_draft_batch_count > 0 THEN
+    RAISE EXCEPTION 'Cannot close day. There are % draft production batches that must be completed or cancelled first.', v_draft_batch_count;
+  END IF;
+
+  SELECT COUNT(*) INTO v_unsettled_count 
+  FROM seller_issues 
+  WHERE issue_date = p_business_date AND status IN ('issued', 'partially_settled');
+
+  IF v_unsettled_count > 0 THEN
+    RAISE EXCEPTION 'Cannot close day. There are % unsettled seller issues for this date.', v_unsettled_count;
+  END IF;
+
+  SELECT COUNT(*) INTO v_pending_settlement_count
+  FROM seller_settlements
+  WHERE settlement_date = p_business_date AND status = 'pending_approval';
+
+  IF v_pending_settlement_count > 0 THEN
+    RAISE EXCEPTION 'Cannot close day. There are % settlements awaiting owner approval.', v_pending_settlement_count;
+  END IF;
+
+  -- 2. Aggregate Production for the day
+  SELECT 
+    COALESCE(SUM(pi.produced_quantity), 0),
+    COALESCE(SUM(pb.total_ingredient_cost), 0)
+  INTO v_tot_produced, v_tot_ingredient_cost
+  FROM production_batches pb
+  JOIN production_items pi ON pb.id = pi.batch_id
+  WHERE pb.production_date = p_business_date AND pb.status = 'completed';
+
+  -- 3. Aggregate Approved Settlements for the day
+  SELECT
+    COALESCE(SUM(si.sold_quantity), 0),
+    COALESCE(SUM(si.returned_quantity), 0),
+    COALESCE(SUM(si.damaged_quantity), 0),
+    COALESCE(SUM(si.complimentary_quantity), 0),
+    COALESCE(SUM(ss.gross_sales), 0.00),
+    COALESCE(SUM(ss.total_commission), 0.00),
+    COALESCE(SUM(ss.cash_received), 0.00),
+    COALESCE(SUM(ss.upi_received), 0.00),
+    COALESCE(SUM(ss.credit_amount), 0.00)
+  INTO 
+    v_tot_sold,
+    v_tot_returned,
+    v_tot_damaged,
+    v_tot_comp,
+    v_gross_sales,
+    v_tot_commission,
+    v_cash_received,
+    v_upi_received,
+    v_credit_sales
+  FROM seller_settlements ss
+  JOIN settlement_items si ON ss.id = si.settlement_id
+  WHERE ss.settlement_date = p_business_date AND ss.status = 'approved';
+
+  v_net_sales := v_gross_sales - v_tot_commission;
+
+  -- 4. Aggregate Active Operating Expenses (excluding seller commission if already accounted)
+  SELECT COALESCE(SUM(amount), 0.00) INTO v_tot_expenses
+  FROM expenses
+  WHERE expense_date = p_business_date 
+    AND status = 'active'
+    AND category != 'seller_commission'; -- Avoid double counting commission
+
+  -- 5. Calculate Estimated Daily Profit
+  -- Formula: Gross sales - seller commissions - allocated production ingredient costs - other operating expenses
+  v_estimated_profit := v_gross_sales - v_tot_commission - v_tot_ingredient_cost - v_tot_expenses;
+
+  -- 6. Calculate Closing Stock Value in Freezer
+  SELECT COALESCE(SUM(
+    fs.available_quantity * COALESCE(
+      (SELECT selling_price FROM product_prices WHERE product_id = fs.product_id ORDER BY effective_from DESC LIMIT 1), 0
+    )
+  ), 0.00) INTO v_closing_stock_val
+  FROM v_freezer_stock fs;
+
+  -- 7. Upsert Daily Closing Record
+  SELECT * INTO v_existing FROM daily_closings WHERE business_date = p_business_date;
+
+  IF FOUND THEN
+    IF v_existing.status = 'closed' THEN
+      RAISE EXCEPTION 'Business day % is already closed', p_business_date;
+    END IF;
+
+    UPDATE daily_closings
+    SET status = 'closed',
+        total_produced = v_tot_produced,
+        total_sold = v_tot_sold,
+        total_returned = v_tot_returned,
+        total_damaged = v_tot_damaged,
+        total_complimentary = v_tot_comp,
+        gross_sales = v_gross_sales,
+        total_commission = v_tot_commission,
+        net_sales = v_net_sales,
+        cash_received = v_cash_received,
+        upi_received = v_upi_received,
+        credit_sales = v_credit_sales,
+        total_expenses = v_tot_expenses,
+        estimated_profit = v_estimated_profit,
+        closing_stock_value = v_closing_stock_val,
+        notes = p_notes,
+        closed_by = p_user_id,
+        closed_at = NOW(),
+        reopened_by = NULL,
+        reopened_at = NULL,
+        reopen_reason = NULL
+    WHERE business_date = p_business_date
+    RETURNING id INTO v_closing_id;
+  ELSE
+    INSERT INTO daily_closings (
+      business_date,
+      status,
+      total_produced,
+      total_sold,
+      total_returned,
+      total_damaged,
+      total_complimentary,
+      gross_sales,
+      total_commission,
+      net_sales,
+      cash_received,
+      upi_received,
+      credit_sales,
+      total_expenses,
+      estimated_profit,
+      closing_stock_value,
+      notes,
+      closed_by,
+      closed_at
+    ) VALUES (
+      p_business_date,
+      'closed',
+      v_tot_produced,
+      v_tot_sold,
+      v_tot_returned,
+      v_tot_damaged,
+      v_tot_comp,
+      v_gross_sales,
+      v_tot_commission,
+      v_net_sales,
+      v_cash_received,
+      v_upi_received,
+      v_credit_sales,
+      v_tot_expenses,
+      v_estimated_profit,
+      v_closing_stock_val,
+      p_notes,
+      p_user_id,
+      NOW()
+    ) RETURNING id INTO v_closing_id;
+  END IF;
+
+  -- Audit Log
+  INSERT INTO audit_logs (table_name, record_id, action, new_data, reason, performed_by)
+  VALUES (
+    'daily_closings',
+    v_closing_id,
+    'CLOSE_BUSINESS_DAY',
+    jsonb_build_object('business_date', p_business_date, 'estimated_profit', v_estimated_profit),
+    'Daily closing finalized',
+    p_user_id
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'closing_id', v_closing_id,
+    'business_date', p_business_date,
+    'gross_sales', v_gross_sales,
+    'net_sales', v_net_sales,
+    'total_expenses', v_tot_expenses,
+    'estimated_profit', v_estimated_profit
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION reopen_business_day(
+  p_business_date DATE,
+  p_reason TEXT,
+  p_user_id UUID
+) RETURNS JSONB AS $$
+DECLARE
+  v_closing RECORD;
+BEGIN
+  IF p_reason IS NULL OR length(trim(p_reason)) < 5 THEN
+    RAISE EXCEPTION 'A clear, mandatory reason of at least 5 characters is required to reopen a closed business day.';
+  END IF;
+
+  SELECT * INTO v_closing FROM daily_closings WHERE business_date = p_business_date FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'No closing record found for business date %', p_business_date;
+  END IF;
+
+  IF v_closing.status = 'reopened' THEN
+    RAISE EXCEPTION 'Business day % is already reopened', p_business_date;
+  END IF;
+
+  UPDATE daily_closings
+  SET status = 'reopened',
+      reopened_by = p_user_id,
+      reopened_at = NOW(),
+      reopen_reason = p_reason
+  WHERE business_date = p_business_date;
+
+  INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
+  VALUES (
+    'daily_closings',
+    v_closing.id,
+    'REOPEN_BUSINESS_DAY',
+    row_to_json(v_closing)::jsonb,
+    jsonb_build_object('status', 'reopened', 'reopen_reason', p_reason),
+    p_reason,
+    p_user_id
+  );
+
+  RETURN jsonb_build_object('success', true, 'business_date', p_business_date, 'status', 'reopened');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION void_expense(
+  p_expense_id UUID,
+  p_reason TEXT,
+  p_user_id UUID
+) RETURNS JSONB AS $$
+DECLARE
+  v_expense RECORD;
+BEGIN
+  IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN
+    RAISE EXCEPTION 'A valid reason is required to void an expense.';
+  END IF;
+
+  SELECT * INTO v_expense FROM expenses WHERE id = p_expense_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Expense not found';
+  END IF;
+
+  IF v_expense.status = 'voided' THEN
+    RAISE EXCEPTION 'Expense is already voided';
+  END IF;
+
+  UPDATE expenses
+  SET status = 'voided',
+      void_reason = p_reason,
+      updated_at = NOW()
+  WHERE id = p_expense_id;
+
+  INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
+  VALUES (
+    'expenses',
+    p_expense_id,
+    'VOID_EXPENSE',
+    row_to_json(v_expense)::jsonb,
+    jsonb_build_object('status', 'voided', 'void_reason', p_reason),
+    p_reason,
+    p_user_id
+  );
+
+  RETURN jsonb_build_object('success', true, 'expense_id', p_expense_id, 'status', 'voided');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION delete_or_archive_expense_head(
+  p_head_id UUID,
+  p_user_id TEXT DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_head RECORD;
+  v_usage_count INTEGER;
+  v_user_uuid UUID := NULL;
+BEGIN
+  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_user_uuid := p_user_id::UUID;
+  END IF;
+
+  SELECT * INTO v_head FROM expense_heads WHERE id = p_head_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Expense head not found';
+  END IF;
+
+  -- Check if referenced in expenses
+  SELECT COUNT(*) INTO v_usage_count FROM expenses WHERE expense_head_id = p_head_id;
+
+  IF v_usage_count = 0 THEN
+    -- Completely unused -> Hard delete
+    DELETE FROM expense_heads WHERE id = p_head_id;
+
+    INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
+    VALUES (
+      'expense_heads',
+      p_head_id,
+      'DELETE_EXPENSE_HEAD',
+      row_to_json(v_head)::jsonb,
+      NULL,
+      'Unused expense head permanently deleted',
+      v_user_uuid
+    );
+
+    RETURN jsonb_build_object('success', true, 'action', 'deleted', 'message', 'Expense head permanently deleted');
+  ELSE
+    -- Referenced by expenses -> Archive (soft deactivate)
+    UPDATE expense_heads
+    SET is_archived = true,
+        is_active = false,
+        updated_at = NOW()
+    WHERE id = p_head_id;
+
+    INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
+    VALUES (
+      'expense_heads',
+      p_head_id,
+      'ARCHIVE_EXPENSE_HEAD',
+      row_to_json(v_head)::jsonb,
+      jsonb_build_object('is_archived', true, 'is_active', false),
+      'Expense head archived because it has past transactions',
+      v_user_uuid
+    );
+
+    RETURN jsonb_build_object('success', true, 'action', 'archived', 'message', 'Expense head archived because it has past transactions');
+  END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION correct_paid_expense(
+  p_expense_id UUID,
+  p_new_amount NUMERIC,
+  p_new_payment_method TEXT,
+  p_new_date DATE,
+  p_new_description TEXT,
+  p_reason TEXT,
+  p_user_id TEXT DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_old_expense RECORD;
+  v_new_expense_id UUID;
+  v_user_uuid UUID := NULL;
+BEGIN
+  IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN
+    RAISE EXCEPTION 'A valid correction reason is required.';
+  END IF;
+
+  IF p_new_amount <= 0 THEN
+    RAISE EXCEPTION 'Expense amount must be greater than zero.';
+  END IF;
+
+  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_user_uuid := p_user_id::UUID;
+  END IF;
+
+  SELECT * INTO v_old_expense FROM expenses WHERE id = p_expense_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Expense not found';
+  END IF;
+
+  -- 1. Void old expense
+  UPDATE expenses
+  SET status = 'voided',
+      void_reason = 'Correction: ' || p_reason,
+      updated_at = NOW()
+  WHERE id = p_expense_id;
+
+  -- 2. Insert corrected replacement expense
+  INSERT INTO expenses (
+    expense_date,
+    category,
+    amount,
+    payment_method,
+    description,
+    vendor_name,
+    status,
+    expense_head_id,
+    expense_month,
+    due_date,
+    corrected_from_expense_id,
+    is_monthly_fixed,
+    created_by
+  ) VALUES (
+    COALESCE(p_new_date, v_old_expense.expense_date),
+    v_old_expense.category,
+    p_new_amount,
+    COALESCE(p_new_payment_method::payment_method, v_old_expense.payment_method),
+    COALESCE(p_new_description, v_old_expense.description),
+    v_old_expense.vendor_name,
+    'active',
+    v_old_expense.expense_head_id,
+    v_old_expense.expense_month,
+    v_old_expense.due_date,
+    p_expense_id,
+    v_old_expense.is_monthly_fixed,
+    v_user_uuid
+  ) RETURNING id INTO v_new_expense_id;
+
+  -- 3. Audit Log
+  INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
+  VALUES (
+    'expenses',
+    v_new_expense_id,
+    'CORRECT_EXPENSE',
+    row_to_json(v_old_expense)::jsonb,
+    jsonb_build_object('id', v_new_expense_id, 'amount', p_new_amount, 'corrected_from', p_expense_id),
+    p_reason,
+    v_user_uuid
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'old_expense_id', p_expense_id,
+    'new_expense_id', v_new_expense_id,
+    'amount', p_new_amount,
+    'message', 'Expense corrected and replacement recorded'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION copy_previous_month_fixed_expenses(
+  p_source_month TEXT,
+  p_target_month TEXT,
+  p_user_id TEXT DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_rec RECORD;
+  v_copied_count INTEGER := 0;
+  v_user_uuid UUID := NULL;
+  v_target_due_date DATE;
+BEGIN
+  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_user_uuid := p_user_id::UUID;
+  END IF;
+
+  -- Loop through active fixed expense heads
+  FOR v_rec IN 
+    SELECT 
+      eh.id AS head_id,
+      eh.code,
+      eh.name_en,
+      eh.name_hi,
+      eh.due_day,
+      eh.default_amount,
+      COALESCE(prev_exp.amount, eh.default_amount) AS amount_to_copy,
+      COALESCE(prev_exp.payment_method, 'cash'::payment_method) AS payment_method,
+      COALESCE(prev_exp.vendor_name, eh.name_en) AS vendor_name
+    FROM expense_heads eh
+    LEFT JOIN (
+      SELECT DISTINCT ON (expense_head_id) *
+      FROM expenses
+      WHERE expense_month = p_source_month AND status = 'active'
+      ORDER BY expense_head_id, created_at DESC
+    ) prev_exp ON prev_exp.expense_head_id = eh.id
+    WHERE eh.expense_group = 'monthly_fixed' AND eh.is_active = true AND eh.is_archived = false
+  LOOP
+    -- Calculate due date in target month (e.g. '2026-09-05')
+    BEGIN
+      v_target_due_date := TO_DATE(p_target_month || '-' || LPAD(v_rec.due_day::TEXT, 2, '0'), 'YYYY-MM-DD');
+    EXCEPTION WHEN OTHERS THEN
+      v_target_due_date := TO_DATE(p_target_month || '-01', 'YYYY-MM-DD');
+    END;
+
+    -- Only insert if not already confirmed/active for target month
+    IF NOT EXISTS (
+      SELECT 1 FROM expenses 
+      WHERE expense_head_id = v_rec.head_id AND expense_month = p_target_month AND status = 'active'
+    ) THEN
+      INSERT INTO expenses (
+        expense_date,
+        category,
+        amount,
+        payment_method,
+        description,
+        vendor_name,
+        status,
+        expense_head_id,
+        expense_month,
+        due_date,
+        is_monthly_fixed,
+        created_by
+      ) VALUES (
+        v_target_due_date,
+        'other'::expense_category,
+        v_rec.amount_to_copy,
+        v_rec.payment_method,
+        v_rec.name_hi || ' (' || p_target_month || ')',
+        v_rec.vendor_name,
+        'active',
+        v_rec.head_id,
+        p_target_month,
+        v_target_due_date,
+        true,
+        v_user_uuid
+      );
+      v_copied_count := v_copied_count + 1;
+    END IF;
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'copied_count', v_copied_count,
+    'target_month', p_target_month
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- ----------------------------------------------------------------------------
+-- 6.7 Simple LPG Cylinder Register
+-- ----------------------------------------------------------------------------
+
 CREATE OR REPLACE FUNCTION format_lpg_duration(p_hours NUMERIC)
 RETURNS TEXT AS $$
 DECLARE
@@ -1620,10 +4958,6 @@ BEGIN
   END IF;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
-
--- 6.6.1 Add LPG Cylinder Transaction
-DROP FUNCTION IF EXISTS add_lpg_cylinder_transaction(TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, UUID, TEXT);
-DROP FUNCTION IF EXISTS add_lpg_cylinder_transaction(TEXT, TEXT, TEXT, TEXT, TEXT, DATE, TEXT, UUID, TEXT);
 
 CREATE OR REPLACE FUNCTION add_lpg_cylinder_transaction(
   p_cylinder_code TEXT,
@@ -1735,10 +5069,6 @@ BEGIN
   );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- 6.6.2 Record LPG Cylinder Movement Transaction
-DROP FUNCTION IF EXISTS record_lpg_cylinder_movement_transaction(UUID, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT, UUID, TEXT);
-DROP FUNCTION IF EXISTS record_lpg_cylinder_movement_transaction(UUID, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, UUID, TEXT);
 
 CREATE OR REPLACE FUNCTION record_lpg_cylinder_movement_transaction(
   p_cylinder_id UUID,
@@ -1910,10 +5240,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 6.6.3 Correct LPG Cylinder Movement Transaction
-DROP FUNCTION IF EXISTS correct_lpg_cylinder_movement_transaction(UUID, TEXT, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT);
-DROP FUNCTION IF EXISTS correct_lpg_cylinder_movement_transaction(UUID, TEXT, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, UUID, TEXT);
-
 CREATE OR REPLACE FUNCTION correct_lpg_cylinder_movement_transaction(
   p_movement_id UUID,
   p_reason TEXT,
@@ -2023,9 +5349,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 6.6.4 Delete or Archive LPG Cylinder Transaction
-DROP FUNCTION IF EXISTS delete_or_archive_lpg_cylinder_transaction(UUID, TEXT, TEXT);
-
 CREATE OR REPLACE FUNCTION delete_or_archive_lpg_cylinder_transaction(
   p_cylinder_id UUID,
   p_reason TEXT DEFAULT NULL,
@@ -2105,9 +5428,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 6.6.5 Reactivate LPG Cylinder Transaction
-DROP FUNCTION IF EXISTS reactivate_lpg_cylinder_transaction(UUID, TEXT, TEXT);
-
 CREATE OR REPLACE FUNCTION reactivate_lpg_cylinder_transaction(
   p_cylinder_id UUID,
   p_status TEXT DEFAULT 'full',
@@ -2167,320 +5487,77 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 6.7 Authoritative Stock Balances RPC
-CREATE OR REPLACE FUNCTION get_freezer_balances() 
-RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
+
+-- ----------------------------------------------------------------------------
+-- 6.8 Backup & Audit
+-- ----------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION log_backup_operation(
+  p_backup_type TEXT,
+  p_file_name TEXT,
+  p_table_counts JSONB,
+  p_checksums JSONB,
+  p_status TEXT,
+  p_error_summary TEXT,
+  p_user_id UUID
+)
+RETURNS UUID AS $$
 DECLARE
-  v_balances JSONB := '{}'::jsonb;
-  v_row RECORD;
+  v_history_id UUID;
 BEGIN
-  FOR v_row IN 
-    SELECT product_id, current_quantity 
-    FROM current_location_stock 
-    WHERE location_id = 'a0000000-0000-0000-0000-000000000002'
-  LOOP
-    v_balances := jsonb_set(v_balances, ARRAY[v_row.product_id::TEXT], to_jsonb(v_row.current_quantity));
-  END LOOP;
-  RETURN v_balances;
-END;
-$$;
-
--- 6.8 Safe Expense Voiding
-CREATE OR REPLACE FUNCTION void_expense(
-  p_expense_id UUID,
-  p_reason TEXT,
-  p_user_id TEXT DEFAULT NULL
-) RETURNS JSONB AS $$
-DECLARE
-  v_expense RECORD;
-  v_user_uuid UUID := NULL;
-BEGIN
-  IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN
-    RAISE EXCEPTION 'A valid reason is required to void an expense.';
+  -- Verify Owner permission
+  IF NOT (SELECT role = 'owner' FROM profiles WHERE id = p_user_id) THEN
+    RAISE EXCEPTION 'Access Denied: Only Owner role is authorized to perform or record backups.';
   END IF;
 
-  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
-    v_user_uuid := p_user_id::UUID;
-  END IF;
-
-  SELECT * INTO v_expense FROM expenses WHERE id = p_expense_id FOR UPDATE;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Expense not found';
-  END IF;
-
-  IF v_expense.status = 'voided' THEN
-    RAISE EXCEPTION 'Expense is already voided';
-  END IF;
-
-  UPDATE expenses
-  SET status = 'voided',
-      void_reason = p_reason,
-      updated_at = NOW()
-  WHERE id = p_expense_id;
-
-  INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
-  VALUES (
-    'expenses',
-    p_expense_id,
-    'VOID_EXPENSE',
-    row_to_json(v_expense)::jsonb,
-    jsonb_build_object('status', 'voided', 'void_reason', p_reason),
-    p_reason,
-    v_user_uuid
-  );
-
-  RETURN jsonb_build_object(
-    'success', true,
-    'expense_id', p_expense_id,
-    'message', 'Expense voided successfully'
-  );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- 6.9 Delete or Archive Expense Head
-CREATE OR REPLACE FUNCTION delete_or_archive_expense_head(
-  p_head_id UUID,
-  p_user_id TEXT DEFAULT NULL
-) RETURNS JSONB AS $$
-DECLARE
-  v_head RECORD;
-  v_usage_count INTEGER;
-  v_user_uuid UUID := NULL;
-BEGIN
-  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
-    v_user_uuid := p_user_id::UUID;
-  END IF;
-
-  SELECT * INTO v_head FROM expense_heads WHERE id = p_head_id;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Expense head not found';
-  END IF;
-
-  -- Check if referenced in expenses
-  SELECT COUNT(*) INTO v_usage_count FROM expenses WHERE expense_head_id = p_head_id;
-
-  IF v_usage_count = 0 THEN
-    -- Completely unused -> Hard delete
-    DELETE FROM expense_heads WHERE id = p_head_id;
-
-    INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
-    VALUES (
-      'expense_heads',
-      p_head_id,
-      'DELETE_EXPENSE_HEAD',
-      row_to_json(v_head)::jsonb,
-      NULL,
-      'Unused expense head permanently deleted',
-      v_user_uuid
-    );
-
-    RETURN jsonb_build_object('success', true, 'action', 'deleted', 'message', 'Expense head permanently deleted');
-  ELSE
-    -- Referenced by expenses -> Archive (soft deactivate)
-    UPDATE expense_heads
-    SET is_archived = true,
-        is_active = false,
-        updated_at = NOW()
-    WHERE id = p_head_id;
-
-    INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
-    VALUES (
-      'expense_heads',
-      p_head_id,
-      'ARCHIVE_EXPENSE_HEAD',
-      row_to_json(v_head)::jsonb,
-      jsonb_build_object('is_archived', true, 'is_active', false),
-      'Expense head archived because it has past transactions',
-      v_user_uuid
-    );
-
-    RETURN jsonb_build_object('success', true, 'action', 'archived', 'message', 'Expense head archived because it has past transactions');
-  END IF;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- 6.10 Correct Paid Expense (Void Old Record & Create Linked Replacement)
-CREATE OR REPLACE FUNCTION correct_paid_expense(
-  p_expense_id UUID,
-  p_new_amount NUMERIC,
-  p_new_payment_method TEXT,
-  p_new_date DATE,
-  p_new_description TEXT,
-  p_reason TEXT,
-  p_user_id TEXT DEFAULT NULL
-) RETURNS JSONB AS $$
-DECLARE
-  v_old_expense RECORD;
-  v_new_expense_id UUID;
-  v_user_uuid UUID := NULL;
-BEGIN
-  IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN
-    RAISE EXCEPTION 'A valid correction reason is required.';
-  END IF;
-
-  IF p_new_amount <= 0 THEN
-    RAISE EXCEPTION 'Expense amount must be greater than zero.';
-  END IF;
-
-  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
-    v_user_uuid := p_user_id::UUID;
-  END IF;
-
-  SELECT * INTO v_old_expense FROM expenses WHERE id = p_expense_id FOR UPDATE;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Expense not found';
-  END IF;
-
-  -- 1. Void old expense
-  UPDATE expenses
-  SET status = 'voided',
-      void_reason = 'Correction: ' || p_reason,
-      updated_at = NOW()
-  WHERE id = p_expense_id;
-
-  -- 2. Insert corrected replacement expense
-  INSERT INTO expenses (
-    expense_date,
-    category,
-    amount,
-    payment_method,
-    description,
-    vendor_name,
+  INSERT INTO backup_history (
+    backup_type,
+    file_name,
+    table_counts,
+    checksum_summary,
     status,
-    expense_head_id,
-    expense_month,
-    due_date,
-    corrected_from_expense_id,
-    is_monthly_fixed,
-    created_by
+    error_summary,
+    created_by,
+    created_at
   ) VALUES (
-    COALESCE(p_new_date, v_old_expense.expense_date),
-    v_old_expense.category,
-    p_new_amount,
-    COALESCE(p_new_payment_method::payment_method, v_old_expense.payment_method),
-    COALESCE(p_new_description, v_old_expense.description),
-    v_old_expense.vendor_name,
-    'active',
-    v_old_expense.expense_head_id,
-    v_old_expense.expense_month,
-    v_old_expense.due_date,
-    p_expense_id,
-    v_old_expense.is_monthly_fixed,
-    v_user_uuid
-  ) RETURNING id INTO v_new_expense_id;
+    p_backup_type,
+    p_file_name,
+    p_table_counts,
+    p_checksums,
+    p_status,
+    p_error_summary,
+    p_user_id,
+    NOW()
+  ) RETURNING id INTO v_history_id;
 
-  -- 3. Audit Log
-  INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
-  VALUES (
-    'expenses',
-    v_new_expense_id,
-    'CORRECT_EXPENSE',
-    row_to_json(v_old_expense)::jsonb,
-    jsonb_build_object('id', v_new_expense_id, 'amount', p_new_amount, 'corrected_from', p_expense_id),
-    p_reason,
-    v_user_uuid
+  -- Add audit log entry
+  INSERT INTO audit_logs (
+    table_name,
+    record_id,
+    action,
+    new_values,
+    change_reason,
+    user_id,
+    created_at
+  ) VALUES (
+    'backup_history',
+    v_history_id,
+    'CREATE_BACKUP',
+    jsonb_build_object(
+      'backup_type', p_backup_type,
+      'file_name', p_file_name,
+      'status', p_status,
+      'tables', p_table_counts
+    ),
+    'Manual offline backup generated and verified',
+    p_user_id,
+    NOW()
   );
 
-  RETURN jsonb_build_object(
-    'success', true,
-    'old_expense_id', p_expense_id,
-    'new_expense_id', v_new_expense_id,
-    'amount', p_new_amount,
-    'message', 'Expense corrected and replacement recorded'
-  );
+  RETURN v_history_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 6.11 Copy Previous Month Fixed Expenses
-CREATE OR REPLACE FUNCTION copy_previous_month_fixed_expenses(
-  p_source_month TEXT,
-  p_target_month TEXT,
-  p_user_id TEXT DEFAULT NULL
-) RETURNS JSONB AS $$
-DECLARE
-  v_rec RECORD;
-  v_copied_count INTEGER := 0;
-  v_user_uuid UUID := NULL;
-  v_target_due_date DATE;
-BEGIN
-  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
-    v_user_uuid := p_user_id::UUID;
-  END IF;
-
-  -- Loop through active fixed expense heads
-  FOR v_rec IN 
-    SELECT 
-      eh.id AS head_id,
-      eh.code,
-      eh.name_en,
-      eh.name_hi,
-      eh.due_day,
-      eh.default_amount,
-      COALESCE(prev_exp.amount, eh.default_amount) AS amount_to_copy,
-      COALESCE(prev_exp.payment_method, 'cash'::payment_method) AS payment_method,
-      COALESCE(prev_exp.vendor_name, eh.name_en) AS vendor_name
-    FROM expense_heads eh
-    LEFT JOIN (
-      SELECT DISTINCT ON (expense_head_id) *
-      FROM expenses
-      WHERE expense_month = p_source_month AND status = 'active'
-      ORDER BY expense_head_id, created_at DESC
-    ) prev_exp ON prev_exp.expense_head_id = eh.id
-    WHERE eh.expense_group = 'monthly_fixed' AND eh.is_active = true AND eh.is_archived = false
-  LOOP
-    -- Calculate due date in target month (e.g. '2026-09-05')
-    BEGIN
-      v_target_due_date := TO_DATE(p_target_month || '-' || LPAD(v_rec.due_day::TEXT, 2, '0'), 'YYYY-MM-DD');
-    EXCEPTION WHEN OTHERS THEN
-      v_target_due_date := TO_DATE(p_target_month || '-01', 'YYYY-MM-DD');
-    END;
-
-    -- Only insert if not already confirmed/active for target month
-    IF NOT EXISTS (
-      SELECT 1 FROM expenses 
-      WHERE expense_head_id = v_rec.head_id AND expense_month = p_target_month AND status = 'active'
-    ) THEN
-      INSERT INTO expenses (
-        expense_date,
-        category,
-        amount,
-        payment_method,
-        description,
-        vendor_name,
-        status,
-        expense_head_id,
-        expense_month,
-        due_date,
-        is_monthly_fixed,
-        created_by
-      ) VALUES (
-        v_target_due_date,
-        'other'::expense_category,
-        v_rec.amount_to_copy,
-        v_rec.payment_method,
-        v_rec.name_hi || ' (' || p_target_month || ')',
-        v_rec.vendor_name,
-        'active',
-        v_rec.head_id,
-        p_target_month,
-        v_target_due_date,
-        true,
-        v_user_uuid
-      );
-      v_copied_count := v_copied_count + 1;
-    END IF;
-  END LOOP;
-
-  RETURN jsonb_build_object(
-    'success', true,
-    'copied_count', v_copied_count,
-    'target_month', p_target_month
-  );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- ============================================================================
 -- 7. ROW LEVEL SECURITY (RLS) POLICIES
