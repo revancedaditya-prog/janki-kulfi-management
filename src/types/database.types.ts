@@ -837,6 +837,114 @@ export interface Database {
           reason?: string | null;
         };
       };
+      lpg_cylinders: {
+        Row: {
+          id: string;
+          cylinder_code: string;
+          status: string;
+          current_place: string | null;
+          connected_at: string | null;
+          last_movement_at: string | null;
+          supplier_id: string | null;
+          supplier_name: string | null;
+          notes: string | null;
+          is_active: boolean;
+          sort_order: number;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          cylinder_code: string;
+          status?: string;
+          current_place?: string | null;
+          connected_at?: string | null;
+          last_movement_at?: string | null;
+          supplier_id?: string | null;
+          supplier_name?: string | null;
+          notes?: string | null;
+          is_active?: boolean;
+          sort_order?: number;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          cylinder_code?: string;
+          status?: string;
+          current_place?: string | null;
+          connected_at?: string | null;
+          last_movement_at?: string | null;
+          supplier_id?: string | null;
+          supplier_name?: string | null;
+          notes?: string | null;
+          is_active?: boolean;
+          sort_order?: number;
+          updated_at?: string;
+        };
+      };
+      lpg_cylinder_movements: {
+        Row: {
+          id: string;
+          cylinder_id: string;
+          movement_date: string;
+          movement_type: string;
+          previous_status: string | null;
+          new_status: string | null;
+          bhatti_place: string | null;
+          connected_at: string | null;
+          empty_removed_at: string | null;
+          running_duration_text: string | null;
+          running_duration_minutes: number | null;
+          supplier_name: string | null;
+          bill_number: string | null;
+          notes: string | null;
+          is_correction: boolean;
+          corrected_movement_id: string | null;
+          created_by: string | null;
+          created_by_name: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          cylinder_id: string;
+          movement_date?: string;
+          movement_type: string;
+          previous_status?: string | null;
+          new_status?: string | null;
+          bhatti_place?: string | null;
+          connected_at?: string | null;
+          empty_removed_at?: string | null;
+          running_duration_text?: string | null;
+          running_duration_minutes?: number | null;
+          supplier_name?: string | null;
+          bill_number?: string | null;
+          notes?: string | null;
+          is_correction?: boolean;
+          corrected_movement_id?: string | null;
+          created_by?: string | null;
+          created_by_name?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          cylinder_id?: string;
+          movement_date?: string;
+          movement_type?: string;
+          previous_status?: string | null;
+          new_status?: string | null;
+          bhatti_place?: string | null;
+          connected_at?: string | null;
+          empty_removed_at?: string | null;
+          running_duration_text?: string | null;
+          running_duration_minutes?: number | null;
+          supplier_name?: string | null;
+          bill_number?: string | null;
+          notes?: string | null;
+          is_correction?: boolean;
+          corrected_movement_id?: string | null;
+        };
+      };
     };
     Views: {
       v_freezer_stock: {
@@ -933,6 +1041,66 @@ export interface Database {
           p_movement_type: StockMovementType;
           p_reason: string;
           p_user_id: string;
+        };
+        Returns: Json;
+      };
+      add_lpg_cylinder_transaction: {
+        Args: {
+          p_cylinder_code: string;
+          p_status?: string;
+          p_supplier_id?: string | null;
+          p_supplier_name?: string | null;
+          p_starting_date?: string;
+          p_notes?: string | null;
+          p_user_id?: string | null;
+          p_idempotency_key?: string | null;
+        };
+        Returns: Json;
+      };
+      record_lpg_cylinder_movement_transaction: {
+        Args: {
+          p_cylinder_id: string;
+          p_movement_type: string;
+          p_movement_date?: string;
+          p_movement_time?: string | null;
+          p_bhatti_place?: string | null;
+          p_supplier_name?: string | null;
+          p_bill_number?: string | null;
+          p_notes?: string | null;
+          p_user_id?: string | null;
+          p_idempotency_key?: string | null;
+        };
+        Returns: Json;
+      };
+      correct_lpg_cylinder_movement_transaction: {
+        Args: {
+          p_movement_id: string;
+          p_reason: string;
+          p_corrected_movement_type?: string | null;
+          p_corrected_date?: string | null;
+          p_corrected_time?: string | null;
+          p_corrected_bhatti_place?: string | null;
+          p_corrected_supplier_name?: string | null;
+          p_corrected_bill_number?: string | null;
+          p_corrected_notes?: string | null;
+          p_user_id?: string | null;
+          p_idempotency_key?: string | null;
+        };
+        Returns: Json;
+      };
+      delete_or_archive_lpg_cylinder_transaction: {
+        Args: {
+          p_cylinder_id: string;
+          p_reason: string;
+          p_user_id?: string | null;
+        };
+        Returns: Json;
+      };
+      reactivate_lpg_cylinder_transaction: {
+        Args: {
+          p_cylinder_id: string;
+          p_reason?: string | null;
+          p_user_id?: string | null;
         };
         Returns: Json;
       };

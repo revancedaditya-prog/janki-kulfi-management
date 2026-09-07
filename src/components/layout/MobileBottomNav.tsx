@@ -17,6 +17,7 @@ import {
   Settings,
   Menu,
   Boxes,
+  Flame,
 } from 'lucide-react';
 import { Modal } from '@/components/common/Modal';
 
@@ -34,6 +35,7 @@ export const MobileBottomNav: React.FC = () => {
 
   const moreNavItems = [
     { to: '/inventory', label: 'कच्चा माल प्रबंधन', icon: Package, show: isProduction || isOwner },
+    { to: '/inventory/lpg', label: 'सिलेंडर रजिस्टर (LPG)', icon: Flame, show: isProduction || isOwner },
     { to: '/stock', label: t.navStock, icon: Boxes, show: isProduction || isOwner },
     { to: '/production/cost-calculator', label: 'रेसिपी और लागत कैलकुलेटर', icon: Calculator, show: isProduction || isOwner },
     { to: '/products', label: 'उत्पाद व मूल्य', icon: Package, show: isOwner },

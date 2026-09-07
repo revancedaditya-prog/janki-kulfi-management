@@ -272,13 +272,28 @@ export type RawMaterialMovementType =
   | 'adjustment_reversal';
 
 export type LpgCylinderType = 'commercial_19kg' | 'domestic_14kg' | 'other';
-export type LpgCylinderStatus =
+export type SimpleLpgCylinderStatus =
   | 'full'
+  | 'connected'
   | 'in_use'
-  | 'partially_used'
   | 'empty'
   | 'sent_for_refill'
+  | 'inactive'
   | 'damaged_inactive';
+
+export type LpgCylinderStatus = SimpleLpgCylinderStatus;
+
+export type SimpleLpgMovementType =
+  | 'cylinder_added'
+  | 'refill_received'
+  | 'connected'
+  | 'empty_removed'
+  | 'refill_sent'
+  | 'correction'
+  | 'reactivated'
+  | 'archived';
+
+export type LpgMovementType = SimpleLpgMovementType;
 
 export type InventoryWastageType =
   | 'spillage'
@@ -451,28 +466,76 @@ export interface PhysicalStockCountWithItems extends PhysicalStockCount {
   items: PhysicalStockCountItem[];
 }
 
-export interface LpgCylinder {
+export interface SimpleLpgCylinder {
   id: string;
   cylinder_code: string;
+  status: SimpleLpgCylinderStatus;
+  current_place?: string | null;
+  connected_at?: string | null;
+  last_movement_at?: string | null;
   supplier_id?: string | null;
   supplier_name?: string | null;
-  cylinder_type: LpgCylinderType;
-  rated_gas_capacity: number; // e.g. 19.00 kg
-  tare_weight: number; // TW printed on cylinder e.g. 15.20 kg
-  full_gross_weight: number; // e.g. 34.20 kg
-  current_gross_weight: number; // e.g. 28.50 kg
-  calculated_remaining_gas: number; // e.g. 13.30 kg
-  remaining_percentage: number; // e.g. 70%
-  status: LpgCylinderStatus;
+  notes?: string | null;
+  is_active: boolean;
+  sort_order?: number;
+  created_at?: string;
+  updated_at?: string;
+  // Backward compatibility optional fields
+  cylinder_type?: LpgCylinderType;
+  rated_gas_capacity?: number;
+  tare_weight?: number;
+  full_gross_weight?: number;
+  current_gross_weight?: number;
+  calculated_remaining_gas?: number;
+  remaining_percentage?: number;
   refill_date?: string | null;
-  refill_cost: number;
+  refill_cost?: number;
   connected_date?: string | null;
   empty_date?: string | null;
   storage_location?: string | null;
+}
+
+export type LpgCylinder = SimpleLpgCylinder;
+
+export interface SimpleLpgMovement {
+  id: string;
+  cylinder_id: string;
+  movement_date: string;
+  movement_time?: string | null;
+  movement_type: SimpleLpgMovementType;
+  previous_status?: string | null;
+  new_status?: string | null;
+  bhatti_place?: string | null;
+  connected_at?: string | null;
+  empty_removed_at?: string | null;
+  running_duration_display?: string | null;
+  running_duration_text?: string | null;
+  running_duration_minutes?: number | null;
+  supplier_name?: string | null;
+  bill_number?: string | null;
   notes?: string | null;
-  is_active: boolean;
+  is_correction: boolean;
+  corrected_movement_id?: string | null;
+  created_by?: string | null;
+  created_by_name?: string | null;
   created_at?: string;
-  updated_at?: string;
+  cylinder?: SimpleLpgCylinder;
+}
+
+export type LpgCylinderMovement = SimpleLpgMovement;
+
+export interface LpgSummaryKPIs {
+  totalActive: number;
+  full?: number;
+  fullCount: number;
+  connected?: number;
+  connectedCount: number;
+  empty?: number;
+  emptyCount: number;
+  sentForRefill?: number;
+  sentForRefillCount: number;
+  inactive?: number;
+  inactiveCount: number;
 }
 
 export interface LpgCylinderReading {
@@ -482,11 +545,14 @@ export interface LpgCylinderReading {
   reading_type: 'weighed' | 'estimated_batch_use' | 'refill_in' | 'empty_out';
   gross_weight: number;
   tare_weight: number;
-  remaining_gas_kg: number;
-  gas_consumed_kg: number;
+  remaining_gas_kg?: number;
+  net_gas_weight?: number;
+  gas_consumed_kg?: number;
+  remaining_percentage?: number;
   batch_id?: string | null;
   notes?: string | null;
   recorded_by?: string | null;
+  created_by?: string | null;
   created_at?: string;
 }
 

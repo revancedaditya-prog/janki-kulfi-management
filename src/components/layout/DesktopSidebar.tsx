@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Layers,
   FolderLock,
+  Flame,
 } from 'lucide-react';
 
 export const DesktopSidebar: React.FC = () => {
@@ -40,6 +41,7 @@ export const DesktopSidebar: React.FC = () => {
       title: 'Raw Materials / कच्चा माल',
       items: [
         { to: '/inventory', label: 'कच्चा माल प्रबंधन (Raw Materials)', icon: Layers, show: isProduction || isOwner },
+        { to: '/inventory/lpg', label: 'सिलेंडर रजिस्टर (LPG Register)', icon: Flame, show: isProduction || isOwner },
         { to: '/inventory/check', label: 'स्टॉक सत्यापन (Physical Check)', icon: CalendarCheck, show: isOwner },
         { to: '/inventory/wastage', label: 'खराबी / वेस्टेज (Wastage)', icon: Boxes, show: isOwner },
       ],

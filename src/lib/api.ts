@@ -27,6 +27,11 @@ import {
   PhysicalStockCountWithItems,
   LpgCylinder,
   LpgCylinderReading,
+  SimpleLpgCylinder,
+  SimpleLpgMovement,
+  SimpleLpgCylinderStatus,
+  SimpleLpgMovementType,
+  LpgSummaryKPIs,
   InventoryWastage,
   SupplierReturn,
   RawMaterialDashboardKPIs,
@@ -4284,146 +4289,295 @@ export const api = {
     return data?.success !== false;
   },
 
-  // --- LPG Cylinders ---
-  async getLpgCylinders(): Promise<LpgCylinder[]> {
+  // --- Simple LPG Cylinder Register Management ---
+  async getSimpleLpgCylinders(includeInactive: boolean = true): Promise<SimpleLpgCylinder[]> {
     if (useMockMode) {
-      return mockStore.getLpgCylinders();
+      const list = mockStore.getSimpleLpgCylinders();
+      return includeInactive ? list : list.filter((c) => c.is_active !== false);
     }
-    const { data, error } = await (supabase as any).from('lpg_cylinders').select('*').order('cylinder_code');
+    let query = (supabase as any).from('lpg_cylinders').select('*').order('sort_order', { ascending: true }).order('cylinder_code', { ascending: true });
+    if (!includeInactive) {
+      query = query.eq('is_active', true);
+    }
+    const { data, error } = await query;
     if (error) {
       throw new Error(`[LPG Cylinders ${error.code || ''}]: ${error.message}`);
     }
     return data || [];
   },
 
-  async getLpgCylinderById(id: string): Promise<LpgCylinder | undefined> {
+  async getSimpleLpgCylinderById(id: string): Promise<SimpleLpgCylinder | undefined> {
     if (useMockMode) {
-      return mockStore.getLpgCylinderById(id);
+      return mockStore.getSimpleLpgCylinderById(id);
     }
-    const { data, error } = await (supabase as any).from('lpg_cylinders').select('*').eq('id', id).maybeSingle();
+    const { data, error } = await (supabase as any)
+      .from('lpg_cylinders')
+      .select('*')
+      .or(`id.eq.${id},cylinder_code.eq.${id}`)
+      .maybeSingle();
     if (error) {
       throw new Error(`[LPG Cylinder ${error.code || ''}]: ${error.message}`);
     }
     return data || undefined;
   },
 
+  async getSimpleLpgMovements(cylinderId?: string): Promise<SimpleLpgMovement[]> {
+    if (useMockMode) {
+      return mockStore.getSimpleLpgMovements(cylinderId);
+    }
+    let query = (supabase as any)
+      .from('lpg_cylinder_movements')
+      .select('*, cylinder:lpg_cylinders(*)')
+      .order('created_at', { ascending: false });
+    if (cylinderId) {
+      query = query.eq('cylinder_id', cylinderId);
+    }
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`[LPG Movements ${error.code || ''}]: ${error.message}`);
+    }
+    return data || [];
+  },
+
+  async getLpgSummaryKPIs(): Promise<LpgSummaryKPIs> {
+    if (useMockMode) {
+      return mockStore.getLpgSummaryKPIs();
+    }
+    const { data, error } = await (supabase as any)
+      .from('lpg_cylinders')
+      .select('id, status, is_active');
+    if (error) {
+      throw new Error(`[LPG Summary ${error.code || ''}]: ${error.message}`);
+    }
+    const cylinders = data || [];
+    const active = cylinders.filter((c: any) => c.is_active !== false);
+    return {
+      totalActive: active.length,
+      fullCount: active.filter((c: any) => c.status === 'full').length,
+      connectedCount: active.filter((c: any) => c.status === 'connected' || c.status === 'in_use').length,
+      emptyCount: active.filter((c: any) => c.status === 'empty').length,
+      sentForRefillCount: active.filter((c: any) => c.status === 'sent_for_refill').length,
+      inactiveCount: cylinders.filter((c: any) => c.is_active === false || c.status === 'inactive' || c.status === 'damaged_inactive').length,
+    };
+  },
+
+  async addSimpleLpgCylinder(
+    data: {
+      cylinder_code: string;
+      status?: SimpleLpgCylinderStatus;
+      supplier_id?: string | null;
+      supplier_name?: string | null;
+      starting_date?: string;
+      notes?: string | null;
+      idempotency_key?: string;
+    },
+    userId?: string
+  ): Promise<{ success: boolean; cylinder: SimpleLpgCylinder; movement: SimpleLpgMovement }> {
+    if (useMockMode) {
+      const created = mockStore.addSimpleLpgCylinder(data, userId || 'usr-owner-001');
+      return { success: true, cylinder: created.cylinder, movement: created.movement };
+    }
+    const { data: res, error } = await (supabase as any).rpc('add_lpg_cylinder_transaction', {
+      p_cylinder_code: data.cylinder_code,
+      p_status: data.status || 'full',
+      p_supplier_id: toSafeUuid(data.supplier_id),
+      p_supplier_name: data.supplier_name || null,
+      p_starting_date: data.starting_date || new Date().toISOString().split('T')[0],
+      p_notes: data.notes || null,
+      p_user_id: toSafeUuid(userId),
+      p_idempotency_key: data.idempotency_key || null,
+    });
+    if (error) {
+      throw new Error(`[Add Cylinder ${error.code || ''}]: ${error.message}`);
+    }
+    return res;
+  },
+
+  async recordSimpleLpgMovement(
+    data: {
+      cylinder_id: string;
+      movement_type: SimpleLpgMovementType;
+      movement_date?: string;
+      movement_time?: string | null;
+      bhatti_place?: string | null;
+      supplier_name?: string | null;
+      bill_number?: string | null;
+      notes?: string | null;
+      idempotency_key?: string;
+    },
+    userId?: string
+  ): Promise<{ success: boolean; cylinder: SimpleLpgCylinder; movement: SimpleLpgMovement }> {
+    if (useMockMode) {
+      const res = mockStore.recordSimpleLpgMovement({
+        cylinder_id: data.cylinder_id,
+        movement_type: data.movement_type,
+        movement_date: data.movement_date,
+        movement_time: data.movement_time || undefined,
+        bhatti_place: data.bhatti_place || undefined,
+        supplier_name: data.supplier_name || undefined,
+        bill_number: data.bill_number || undefined,
+        notes: data.notes || undefined,
+      }, userId || 'usr-owner-001');
+      return { success: true, cylinder: res.cylinder, movement: res.movement };
+    }
+    const { data: res, error } = await (supabase as any).rpc('record_lpg_cylinder_movement_transaction', {
+      p_cylinder_id: data.cylinder_id,
+      p_movement_type: data.movement_type,
+      p_movement_date: data.movement_date || new Date().toISOString().split('T')[0],
+      p_movement_time: data.movement_time || null,
+      p_bhatti_place: data.bhatti_place || null,
+      p_supplier_name: data.supplier_name || null,
+      p_bill_number: data.bill_number || null,
+      p_notes: data.notes || null,
+      p_user_id: toSafeUuid(userId),
+      p_idempotency_key: data.idempotency_key || null,
+    });
+    if (error) {
+      throw new Error(`[Record Movement ${error.code || ''}]: ${error.message}`);
+    }
+    return res;
+  },
+
+  async correctSimpleLpgMovement(
+    data: {
+      movement_id: string;
+      reason: string;
+      corrected_movement_type?: SimpleLpgMovementType;
+      corrected_date?: string;
+      corrected_time?: string;
+      corrected_bhatti_place?: string;
+      corrected_supplier_name?: string;
+      corrected_bill_number?: string;
+      corrected_notes?: string;
+      idempotency_key?: string;
+    },
+    userId?: string
+  ): Promise<{ success: boolean; correction_movement: SimpleLpgMovement; cylinder: SimpleLpgCylinder }> {
+    if (useMockMode) {
+      const res = mockStore.correctSimpleLpgMovement(data, userId || 'usr-owner-001');
+      return { success: true, correction_movement: res.correction_movement, cylinder: res.cylinder };
+    }
+    const { data: res, error } = await (supabase as any).rpc('correct_lpg_cylinder_movement_transaction', {
+      p_movement_id: data.movement_id,
+      p_reason: data.reason,
+      p_corrected_movement_type: data.corrected_movement_type || null,
+      p_corrected_date: data.corrected_date || null,
+      p_corrected_time: data.corrected_time || null,
+      p_corrected_bhatti_place: data.corrected_bhatti_place || null,
+      p_corrected_supplier_name: data.corrected_supplier_name || null,
+      p_corrected_bill_number: data.corrected_bill_number || null,
+      p_corrected_notes: data.corrected_notes || null,
+      p_user_id: toSafeUuid(userId),
+      p_idempotency_key: data.idempotency_key || null,
+    });
+    if (error) {
+      throw new Error(`[Correct Movement ${error.code || ''}]: ${error.message}`);
+    }
+    return res;
+  },
+
+  async deleteOrArchiveSimpleLpgCylinder(
+    data: {
+      cylinder_id: string;
+      reason: string;
+    },
+    userId?: string
+  ): Promise<{ success: boolean; action: 'deleted' | 'archived'; cylinder_id: string; message: string }> {
+    if (useMockMode) {
+      const res = mockStore.deleteOrArchiveSimpleLpgCylinder(data, userId || 'usr-owner-001');
+      return { success: true, ...res };
+    }
+    const { data: res, error } = await (supabase as any).rpc('delete_or_archive_lpg_cylinder_transaction', {
+      p_cylinder_id: data.cylinder_id,
+      p_reason: data.reason,
+      p_user_id: toSafeUuid(userId),
+    });
+    if (error) {
+      throw new Error(`[Delete/Archive Cylinder ${error.code || ''}]: ${error.message}`);
+    }
+    return res;
+  },
+
+  async reactivateSimpleLpgCylinder(
+    data: {
+      cylinder_id: string;
+      reason?: string;
+    },
+    userId?: string
+  ): Promise<{ success: boolean; cylinder: SimpleLpgCylinder }> {
+    if (useMockMode) {
+      const res = mockStore.reactivateSimpleLpgCylinder(data.cylinder_id, data.reason, userId || 'usr-owner-001');
+      return { success: true, cylinder: res.cylinder };
+    }
+    const { data: res, error } = await (supabase as any).rpc('reactivate_lpg_cylinder_transaction', {
+      p_cylinder_id: data.cylinder_id,
+      p_reason: data.reason || null,
+      p_user_id: toSafeUuid(userId),
+    });
+    if (error) {
+      throw new Error(`[Reactivate Cylinder ${error.code || ''}]: ${error.message}`);
+    }
+    return res;
+  },
+
+  // --- Legacy Compatibility Wrappers ---
+  async getLpgCylinders(): Promise<LpgCylinder[]> {
+    return this.getSimpleLpgCylinders(true);
+  },
+
+  async getLpgCylinderById(id: string): Promise<LpgCylinder | undefined> {
+    return this.getSimpleLpgCylinderById(id);
+  },
+
   async createLpgCylinder(
-    data: Omit<LpgCylinder, 'id' | 'calculated_remaining_gas' | 'remaining_percentage' | 'created_at' | 'updated_at'>,
+    data: any,
     userId: string
   ): Promise<LpgCylinder> {
-    if (useMockMode) {
-      return mockStore.addLpgCylinder(data, userId);
-    }
-    const { data: created, error } = await (supabase as any).from('lpg_cylinders').insert(data).select().single();
-    if (error) {
-      throw new Error(`[Create LPG Cylinder ${error.code || ''}]: ${error.message}`);
-    }
-    return created;
+    const res = await this.addSimpleLpgCylinder(data, userId);
+    return res.cylinder || (res as any);
   },
 
   async recordLpgReading(
     cylinderId: string,
-    grossWeight: number,
-    readingType: 'weighed' | 'estimated_batch_use' | 'refill_in' | 'empty_out' = 'weighed',
-    batchId?: string,
-    notes?: string,
-    userId?: string
+    _grossWeight?: number,
+    _readingType: any = 'weighed',
+    _batchId?: string,
+    _notes?: string,
+    _userId?: string
   ): Promise<LpgCylinder> {
-    if (useMockMode) {
-      return mockStore.recordLpgReading(cylinderId, grossWeight, readingType, batchId, notes, userId);
-    }
-    const { error: readError } = await (supabase as any).from('lpg_cylinder_readings').insert({
-      cylinder_id: cylinderId,
-      gross_weight: grossWeight,
-      reading_type: readingType,
-      batch_id: batchId || null,
-      notes: notes || null,
-      recorded_by: userId || null,
-      reading_date: new Date().toISOString(),
-    }).select().single();
-    if (readError) {
-      throw new Error(`[Record LPG Reading ${readError.code || ''}]: ${readError.message}`);
-    }
-    const updated = await this.getLpgCylinderById(cylinderId);
-    if (!updated) {
-      throw new Error(`[LPG Cylinder]: Cylinder ${cylinderId} not found after reading`);
-    }
-    return updated;
+    const updated = await this.getSimpleLpgCylinderById(cylinderId);
+    return updated!;
   },
 
   async recordLpgRefill(
     cylinderId: string,
     refillCost: number,
-    fullGrossWeight?: number,
+    _fullGrossWeight?: number,
     userId?: string
   ): Promise<LpgCylinder> {
-    if (useMockMode) {
-      return mockStore.recordLpgRefill(cylinderId, refillCost, fullGrossWeight, userId);
-    }
-    const { error } = await (supabase as any).from('lpg_cylinders').update({
-      status: 'full',
-      current_gross_weight: fullGrossWeight || 30.5,
-      refill_cost: refillCost,
-      last_refill_date: new Date().toISOString().split('T')[0],
-    }).eq('id', cylinderId);
-    if (error) {
-      throw new Error(`[Record LPG Refill ${error.code || ''}]: ${error.message}`);
-    }
-    const updated = await this.getLpgCylinderById(cylinderId);
-    if (!updated) {
-      throw new Error(`[LPG Cylinder]: Cylinder ${cylinderId} not found after refill`);
-    }
-    return updated;
+    const res = await this.recordSimpleLpgMovement({
+      cylinder_id: cylinderId,
+      movement_type: 'refill_received',
+      notes: `Refilled for ₹${refillCost}`,
+    }, userId);
+    return res.cylinder;
   },
 
   async connectLpgCylinder(cylinderId: string, userId: string): Promise<LpgCylinder> {
-    if (useMockMode) {
-      return mockStore.connectLpgCylinder(cylinderId, userId);
-    }
-    const { error } = await (supabase as any).from('lpg_cylinders').update({
-      status: 'in_use',
-      connected_date: new Date().toISOString().split('T')[0],
-    }).eq('id', cylinderId);
-    if (error) {
-      throw new Error(`[Connect LPG Cylinder ${error.code || ''}]: ${error.message}`);
-    }
-    const updated = await this.getLpgCylinderById(cylinderId);
-    if (!updated) {
-      throw new Error(`[LPG Cylinder]: Cylinder ${cylinderId} not found after connecting`);
-    }
-    return updated;
+    const res = await this.recordSimpleLpgMovement({
+      cylinder_id: cylinderId,
+      movement_type: 'connected',
+    }, userId);
+    return res.cylinder;
   },
 
-  async getLpgReadings(cylinderId?: string): Promise<LpgCylinderReading[]> {
-    if (useMockMode) {
-      return mockStore.getLpgReadings(cylinderId);
-    }
-    let query = (supabase as any).from('lpg_cylinder_readings').select('*').order('reading_date', { ascending: false });
-    if (cylinderId) query = query.eq('cylinder_id', cylinderId);
-    const { data, error } = await query;
-    if (error) {
-      throw new Error(`[LPG Readings ${error.code || ''}]: ${error.message}`);
-    }
-    return data || [];
+  async getLpgReadings(_cylinderId?: string): Promise<LpgCylinderReading[]> {
+    return [];
   },
 
   async deleteLpgCylinder(id: string, userId: string = 'usr-owner-001'): Promise<{ success: boolean; cylinder_id?: string; message?: string }> {
-    if (useMockMode) {
-      return mockStore.deleteLpgCylinder(id, userId);
-    }
-    const { data, error } = await (supabase as any).rpc('delete_lpg_cylinder_transaction', {
-      p_cylinder_id: id,
-      p_user_id: userId,
-    });
-    if (!error && data) return data;
-    if (error) {
-      const { error: delError } = await (supabase as any).from('lpg_cylinders').delete().eq('id', id);
-      if (delError) {
-        throw new Error(`[Delete LPG Cylinder ${delError.code || ''}]: ${delError.message}`);
-      }
-      return { success: true, cylinder_id: id };
-    }
-    return { success: true, cylinder_id: id };
+    const res = await this.deleteOrArchiveSimpleLpgCylinder({ cylinder_id: id, reason: 'Owner deleted' }, userId);
+    return { success: true, cylinder_id: id, message: res.message };
   },
 
   // --- Inventory Wastage & Damage ---

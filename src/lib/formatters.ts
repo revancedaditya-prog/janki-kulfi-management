@@ -123,3 +123,47 @@ export function getBackupFilename(prefix = 'janki-kulfi-backup', date: Date = ne
 
   return `${prefix}-${y}-${m}-${d}-${hr}${min}.zip`;
 }
+
+/**
+ * Format LPG cylinder running duration from connected timestamp to end/now, or from minutes
+ */
+export function formatLpgDuration(
+  input?: string | number | null,
+  endedAt?: string | null
+): any {
+  if (input === null || input === undefined) return null;
+
+  let diffMinutes = 0;
+  if (typeof input === 'number') {
+    diffMinutes = Math.max(0, Math.floor(input));
+    const days = Math.floor(diffMinutes / (60 * 24));
+    const hours = Math.floor((diffMinutes % (60 * 24)) / 60);
+    const mins = diffMinutes % 60;
+
+    const parts: string[] = [];
+    if (days > 0) parts.push(`${days} दिन`);
+    if (hours > 0) parts.push(`${hours} घंटे`);
+    if (mins > 0 || parts.length === 0) parts.push(`${mins} मिनट`);
+    return parts.join(' ');
+  }
+
+  const start = new Date(input).getTime();
+  const end = endedAt ? new Date(endedAt).getTime() : Date.now();
+  if (isNaN(start) || isNaN(end) || end <= start) {
+    return { text: '0 मिनट', minutes: 0 };
+  }
+  diffMinutes = Math.floor((end - start) / (1000 * 60));
+  const days = Math.floor(diffMinutes / (60 * 24));
+  const hours = Math.floor((diffMinutes % (60 * 24)) / 60);
+  const mins = diffMinutes % 60;
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days} दिन`);
+  if (hours > 0) parts.push(`${hours} घंटे`);
+  if (mins > 0 || parts.length === 0) parts.push(`${mins} मिनट`);
+
+  return {
+    text: parts.join(' '),
+    minutes: diffMinutes,
+  };
+}

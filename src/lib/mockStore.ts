@@ -36,6 +36,11 @@ import {
   PhysicalStockCountWithItems,
   LpgCylinder,
   LpgCylinderReading,
+  SimpleLpgCylinder,
+  SimpleLpgMovement,
+  SimpleLpgCylinderStatus,
+  SimpleLpgMovementType,
+  LpgSummaryKPIs,
   InventoryWastage,
   SupplierReturn,
   ReorderItem,
@@ -53,11 +58,10 @@ import {
 import {
   convertQuantity,
   calculateWeightedAverageRate,
-  calculateLpgRemaining,
   getExpiryStatus,
 } from './inventoryService';
 import { generateId } from './utils';
-import { getTodayDateString } from './formatters';
+import { getTodayDateString, formatLpgDuration } from './formatters';
 
 const STORAGE_KEY = 'janki_local_store_v1';
 
@@ -75,7 +79,8 @@ interface LocalStoreState {
   stock_movements: StockMovement[];
   daily_closings: DailyClosing[];
   audit_logs: AuditLog[];
-  backup_history?: BackupHistory[];
+  backup_history: BackupHistory[];
+  revision_records: RevisionRecord[];
   ingredients?: Ingredient[];
   ingredient_prices?: IngredientPrice[];
   recipes?: Recipe[];
@@ -88,7 +93,8 @@ interface LocalStoreState {
   raw_material_movements?: RawMaterialMovement[];
   physical_stock_counts?: PhysicalStockCount[];
   physical_stock_count_items?: PhysicalStockCountItem[];
-  lpg_cylinders?: LpgCylinder[];
+  lpg_cylinders?: SimpleLpgCylinder[];
+  lpg_cylinder_movements?: SimpleLpgMovement[];
   lpg_cylinder_readings?: LpgCylinderReading[];
   inventory_wastage?: InventoryWastage[];
   supplier_returns?: SupplierReturn[];
@@ -98,6 +104,7 @@ interface LocalStoreState {
 
 const DEFAULT_STATE: LocalStoreState = {
   backup_history: [],
+  revision_records: [],
   profiles: [
     {
       id: 'usr-owner-001',
@@ -393,60 +400,145 @@ const DEFAULT_STATE: LocalStoreState = {
   lpg_cylinders: [
     {
       id: 'cyl-01',
-      cylinder_code: 'LPG-01',
-      supplier_id: 'sup-gas-03',
-      supplier_name: 'Bharat Gas Agency Mirehchi',
-      cylinder_type: 'commercial_19kg',
-      rated_gas_capacity: 19.0,
-      tare_weight: 15.2,
-      full_gross_weight: 34.2,
-      current_gross_weight: 29.5,
-      calculated_remaining_gas: 14.3,
-      remaining_percentage: 75.3,
-      status: 'in_use',
-      refill_date: '2026-08-28',
-      refill_cost: 1800.0,
-      connected_date: '2026-08-29',
-      storage_location: 'Main Production Kitchen',
+      cylinder_code: 'C-1',
+      status: 'connected',
+      current_place: 'Kulfi Bhatti 1',
+      connected_at: '2026-09-05T08:00:00.000Z',
+      last_movement_at: '2026-09-05T08:00:00.000Z',
+      supplier_name: 'Bharat Gas Agency',
       is_active: true,
-      created_at: '2026-08-28T00:00:00.000Z',
+      sort_order: 1,
+      notes: 'Initial operational cylinder',
+      created_at: '2026-09-01T00:00:00.000Z',
+      updated_at: '2026-09-05T08:00:00.000Z',
     },
     {
       id: 'cyl-02',
-      cylinder_code: 'LPG-02',
-      supplier_id: 'sup-gas-03',
-      supplier_name: 'Bharat Gas Agency Mirehchi',
-      cylinder_type: 'commercial_19kg',
-      rated_gas_capacity: 19.0,
-      tare_weight: 15.4,
-      full_gross_weight: 34.4,
-      current_gross_weight: 34.4,
-      calculated_remaining_gas: 19.0,
-      remaining_percentage: 100.0,
+      cylinder_code: 'C-2',
       status: 'full',
-      refill_date: '2026-09-01',
-      refill_cost: 1800.0,
-      storage_location: 'Cylinder Storage Yard',
+      current_place: 'Cylinder Storage Yard',
+      connected_at: null,
+      last_movement_at: '2026-09-06T10:00:00.000Z',
+      supplier_name: 'Bharat Gas Agency',
       is_active: true,
+      sort_order: 2,
+      notes: 'Standby full cylinder',
       created_at: '2026-09-01T00:00:00.000Z',
+      updated_at: '2026-09-06T10:00:00.000Z',
     },
     {
       id: 'cyl-03',
-      cylinder_code: 'LPG-03',
-      supplier_id: 'sup-gas-03',
-      supplier_name: 'Bharat Gas Agency Mirehchi',
-      cylinder_type: 'commercial_19kg',
-      rated_gas_capacity: 19.0,
-      tare_weight: 15.1,
-      full_gross_weight: 34.1,
-      current_gross_weight: 15.1,
-      calculated_remaining_gas: 0.0,
-      remaining_percentage: 0.0,
-      status: 'empty',
-      refill_cost: 1800.0,
-      storage_location: 'Empty Cylinder Bay',
+      cylinder_code: 'C-3',
+      status: 'sent_for_refill',
+      current_place: 'Bharat Gas Agency',
+      connected_at: null,
+      last_movement_at: '2026-09-06T15:30:00.000Z',
+      supplier_name: 'Bharat Gas Agency',
       is_active: true,
-      created_at: '2026-08-20T00:00:00.000Z',
+      sort_order: 3,
+      notes: 'Sent via Challan #4401',
+      created_at: '2026-09-01T00:00:00.000Z',
+      updated_at: '2026-09-06T15:30:00.000Z',
+    },
+    {
+      id: 'cyl-04',
+      cylinder_code: 'C-4',
+      status: 'empty',
+      current_place: 'Empty Yard',
+      connected_at: null,
+      last_movement_at: '2026-09-04T12:00:00.000Z',
+      supplier_name: 'Bharat Gas Agency',
+      is_active: true,
+      sort_order: 4,
+      notes: 'Removed from Bhatti 2',
+      created_at: '2026-09-01T00:00:00.000Z',
+      updated_at: '2026-09-04T12:00:00.000Z',
+    },
+  ],
+  lpg_cylinder_movements: [
+    {
+      id: 'mov-01',
+      cylinder_id: 'cyl-01',
+      movement_date: '2026-09-05',
+      movement_type: 'connected',
+      previous_status: 'full',
+      new_status: 'connected',
+      bhatti_place: 'Kulfi Bhatti 1',
+      connected_at: '2026-09-05T08:00:00.000Z',
+      empty_removed_at: null,
+      running_duration_text: null,
+      running_duration_minutes: null,
+      supplier_name: 'Bharat Gas Agency',
+      bill_number: null,
+      notes: 'Connected to Kulfi Bhatti 1',
+      is_correction: false,
+      corrected_movement_id: null,
+      created_by: 'usr-owner-001',
+      created_by_name: 'Aditya Kumar (मालिक)',
+      created_at: '2026-09-05T08:00:00.000Z',
+    },
+    {
+      id: 'mov-02',
+      cylinder_id: 'cyl-02',
+      movement_date: '2026-09-06',
+      movement_type: 'refill_received',
+      previous_status: 'sent_for_refill',
+      new_status: 'full',
+      bhatti_place: null,
+      connected_at: null,
+      empty_removed_at: null,
+      running_duration_text: null,
+      running_duration_minutes: null,
+      supplier_name: 'Bharat Gas Agency',
+      bill_number: 'BGA-9921',
+      notes: 'Full refill received',
+      is_correction: false,
+      corrected_movement_id: null,
+      created_by: 'usr-owner-001',
+      created_by_name: 'Aditya Kumar (मालिक)',
+      created_at: '2026-09-06T10:00:00.000Z',
+    },
+    {
+      id: 'mov-03',
+      cylinder_id: 'cyl-03',
+      movement_date: '2026-09-06',
+      movement_type: 'refill_sent',
+      previous_status: 'empty',
+      new_status: 'sent_for_refill',
+      bhatti_place: null,
+      connected_at: null,
+      empty_removed_at: null,
+      running_duration_text: null,
+      running_duration_minutes: null,
+      supplier_name: 'Bharat Gas Agency',
+      bill_number: 'CH-4401',
+      notes: 'Sent to agency for refill',
+      is_correction: false,
+      corrected_movement_id: null,
+      created_by: 'usr-owner-001',
+      created_by_name: 'Aditya Kumar (मालिक)',
+      created_at: '2026-09-06T15:30:00.000Z',
+    },
+    {
+      id: 'mov-04',
+      cylinder_id: 'cyl-04',
+      movement_date: '2026-09-04',
+      movement_type: 'empty_removed',
+      previous_status: 'connected',
+      new_status: 'empty',
+      bhatti_place: 'Kulfi Bhatti 2',
+      connected_at: '2026-08-30T09:00:00.000Z',
+      empty_removed_at: '2026-09-04T12:00:00.000Z',
+      running_duration_text: '5 दिन 3 घंटे (5 days 3 hrs)',
+      running_duration_minutes: 7380,
+      supplier_name: 'Bharat Gas Agency',
+      bill_number: null,
+      notes: 'Gas depleted during rabdi boiling',
+      is_correction: false,
+      corrected_movement_id: null,
+      created_by: 'usr-owner-001',
+      created_by_name: 'Aditya Kumar (मालिक)',
+      created_at: '2026-09-04T12:00:00.000Z',
     },
   ],
   raw_material_movements: [
@@ -785,6 +877,9 @@ class MockStore {
         }
         if (!parsed.lpg_cylinders || parsed.lpg_cylinders.length === 0) {
           parsed.lpg_cylinders = JSON.parse(JSON.stringify(DEFAULT_STATE.lpg_cylinders || []));
+        }
+        if (!parsed.lpg_cylinder_movements || parsed.lpg_cylinder_movements.length === 0) {
+          parsed.lpg_cylinder_movements = JSON.parse(JSON.stringify(DEFAULT_STATE.lpg_cylinder_movements || []));
         }
         if (!parsed.raw_material_movements || parsed.raw_material_movements.length === 0) {
           parsed.raw_material_movements = JSON.parse(JSON.stringify(DEFAULT_STATE.raw_material_movements || []));
@@ -2462,7 +2557,7 @@ class MockStore {
 
     const cylinders = this.getLpgCylinders();
     const lpg_full_count = cylinders.filter((c) => c.status === 'full').length;
-    const lpg_in_use_count = cylinders.filter((c) => c.status === 'in_use' || c.status === 'partially_used').length;
+    const lpg_in_use_count = cylinders.filter((c) => c.status === 'in_use' || c.status === 'connected').length;
     const lpg_empty_count = cylinders.filter((c) => c.status === 'empty' || c.status === 'sent_for_refill').length;
     const total_lpg_remaining_kg = cylinders.reduce((sum, c) => sum + (c.calculated_remaining_gas || 0), 0);
 
@@ -2978,234 +3073,591 @@ class MockStore {
     return true;
   }
 
-  // --- Dedicated LPG Cylinder Management ---
-  public getLpgCylinders(): LpgCylinder[] {
-    return (this.state.lpg_cylinders || []).map((cyl) => {
-      const calc = calculateLpgRemaining(cyl.current_gross_weight, cyl.tare_weight, cyl.rated_gas_capacity);
-      let status = cyl.status;
-      if (status !== 'sent_for_refill' && status !== 'damaged_inactive') {
-        if (calc.isEmpty) {
-          status = 'empty';
-        } else if (cyl.status === 'in_use') {
-          status = 'in_use';
-        } else if (calc.percentage >= 99) {
-          status = 'full';
-        } else {
-          status = 'partially_used';
-        }
-      }
-      return {
-        ...cyl,
-        calculated_remaining_gas: calc.remainingKg,
-        remaining_percentage: calc.percentage,
-        status,
-      };
+  // --- Simple LPG Cylinder Register Management ---
+  public getSimpleLpgCylinders(includeInactive: boolean = true): SimpleLpgCylinder[] {
+    if (!this.state.lpg_cylinders || this.state.lpg_cylinders.length === 0) {
+      this.state.lpg_cylinders = JSON.parse(JSON.stringify(DEFAULT_STATE.lpg_cylinders || []));
+      this.saveState();
+    }
+    let list = (this.state.lpg_cylinders || []).slice();
+    if (!includeInactive) {
+      list = list.filter((c) => c.is_active !== false && c.status !== 'inactive');
+    }
+    return list.sort((a, b) => {
+      const orderA = a.sort_order ?? 999;
+      const orderB = b.sort_order ?? 999;
+      if (orderA !== orderB) return orderA - orderB;
+      return (a.cylinder_code || '').localeCompare(b.cylinder_code || '', undefined, { numeric: true });
     });
   }
 
-  public getLpgCylinderById(id: string): LpgCylinder | undefined {
-    return this.getLpgCylinders().find((c) => c.id === id);
+  public getSimpleLpgCylinderById(id: string): SimpleLpgCylinder | undefined {
+    return this.getSimpleLpgCylinders().find((c) => c.id === id || c.cylinder_code === id);
   }
 
-  public addLpgCylinder(
-    data: Omit<LpgCylinder, 'id' | 'calculated_remaining_gas' | 'remaining_percentage' | 'created_at' | 'updated_at'>,
+  public getSimpleLpgMovements(cylinderId?: string): SimpleLpgMovement[] {
+    if (!this.state.lpg_cylinder_movements) {
+      this.state.lpg_cylinder_movements = JSON.parse(JSON.stringify(DEFAULT_STATE.lpg_cylinder_movements || []));
+      this.saveState();
+    }
+    const cylinders = this.getSimpleLpgCylinders();
+    const cylMap = new Map(cylinders.map((c) => [c.id, c]));
+
+    const list = this.state.lpg_cylinder_movements || [];
+    const filtered = cylinderId ? list.filter((m) => m.cylinder_id === cylinderId) : list;
+    return filtered
+      .map((m) => ({
+        ...m,
+        cylinder: cylMap.get(m.cylinder_id),
+      }))
+      .sort((a, b) => new Date(b.created_at || b.movement_date).getTime() - new Date(a.created_at || a.movement_date).getTime());
+  }
+
+  public getLpgSummaryKPIs(): LpgSummaryKPIs {
+    const cylinders = this.getSimpleLpgCylinders();
+    const active = cylinders.filter((c) => c.is_active !== false && c.status !== 'inactive');
+    const full = active.filter((c) => c.status === 'full').length;
+    const connected = active.filter((c) => c.status === 'connected' || c.status === 'in_use').length;
+    const empty = active.filter((c) => c.status === 'empty').length;
+    const sentForRefill = active.filter((c) => c.status === 'sent_for_refill').length;
+    const inactive = cylinders.filter((c) => c.is_active === false || c.status === 'inactive' || c.status === 'damaged_inactive').length;
+
+    return {
+      totalActive: active.length,
+      full,
+      fullCount: full,
+      connected,
+      connectedCount: connected,
+      empty,
+      emptyCount: empty,
+      sentForRefill,
+      sentForRefillCount: sentForRefill,
+      inactive,
+      inactiveCount: inactive,
+    };
+  }
+
+  public addSimpleLpgCylinder(
+    data: {
+      cylinder_code: string;
+      status?: SimpleLpgCylinderStatus;
+      supplier_id?: string | null;
+      supplier_name?: string | null;
+      starting_date?: string;
+      notes?: string | null;
+    },
     userId: string = 'usr-owner-001'
-  ): LpgCylinder {
+  ): { cylinder: SimpleLpgCylinder; movement: SimpleLpgMovement } {
+    const code = (data.cylinder_code || '').trim().toUpperCase();
+    if (!code) {
+      throw new Error('Cylinder code is required / सिलेंडर कोड अनिवार्य है');
+    }
+
+    const cylinders = this.getSimpleLpgCylinders();
+    const exists = cylinders.some((c) => c.cylinder_code.trim().toUpperCase() === code);
+    if (exists) {
+      throw new Error(`Cylinder code ${code} already exists / सिलेंडर कोड ${code} पहले से मौजूद है`);
+    }
+
     const id = `cyl-${generateId().slice(0, 8)}`;
     const now = new Date().toISOString();
-    const calc = calculateLpgRemaining(data.current_gross_weight, data.tare_weight, data.rated_gas_capacity);
+    const status = data.status || 'full';
+    const startDate = data.starting_date || getTodayDateString();
 
-    const newCyl: LpgCylinder = {
+    let place = 'Cylinder Storage Yard';
+    let connectedAt: string | null = null;
+    if (status === 'connected' || status === 'in_use') {
+      place = 'Kulfi Bhatti';
+      connectedAt = now;
+    } else if (status === 'sent_for_refill') {
+      place = data.supplier_name || 'Bharat Gas Agency';
+    } else if (status === 'empty') {
+      place = 'Empty Yard';
+    }
+
+    // Auto sort order
+    const maxSort = cylinders.reduce((max, c) => Math.max(max, c.sort_order || 0), 0);
+
+    const newCyl: SimpleLpgCylinder = {
       id,
-      ...data,
-      calculated_remaining_gas: calc.remainingKg,
-      remaining_percentage: calc.percentage,
+      cylinder_code: code,
+      status,
+      current_place: place,
+      connected_at: connectedAt,
+      last_movement_at: now,
+      supplier_id: data.supplier_id || null,
+      supplier_name: data.supplier_name || 'Bharat Gas Agency',
+      notes: data.notes || null,
+      is_active: status !== 'inactive',
+      sort_order: maxSort + 1,
       created_at: now,
       updated_at: now,
     };
 
     if (!this.state.lpg_cylinders) this.state.lpg_cylinders = [];
     this.state.lpg_cylinders.push(newCyl);
-    this.logAudit('lpg_cylinders', id, 'ADD_LPG_CYLINDER', null, newCyl, `Added LPG Cylinder ${newCyl.cylinder_code}`, userId);
+
+    // Initial movement
+    if (!this.state.lpg_cylinder_movements) this.state.lpg_cylinder_movements = [];
+    const profile = this.getProfiles().find((p) => p.id === userId);
+    const initialMov: SimpleLpgMovement = {
+      id: `mov-${generateId().slice(0, 8)}`,
+      cylinder_id: id,
+      movement_date: startDate,
+      movement_type: 'cylinder_added',
+      previous_status: null,
+      new_status: status,
+      bhatti_place: (status === 'connected' || status === 'in_use') ? place : null,
+      connected_at: connectedAt,
+      empty_removed_at: null,
+      running_duration_display: null,
+      running_duration_minutes: null,
+      supplier_name: data.supplier_name || null,
+      bill_number: null,
+      notes: data.notes || 'Initial cylinder added',
+      is_correction: false,
+      corrected_movement_id: null,
+      created_by: userId,
+      created_by_name: profile?.full_name || 'Owner',
+      created_at: now,
+    };
+    this.state.lpg_cylinder_movements.push(initialMov);
+
+    this.logAudit('lpg_cylinders', id, 'ADD_LPG_CYLINDER', null, newCyl, `Added LPG Cylinder ${code}`, userId);
     this.saveState();
-    return newCyl;
+    return { cylinder: newCyl, movement: initialMov };
+  }
+
+  public recordSimpleLpgMovement(
+    data: {
+      cylinder_id: string;
+      movement_type: SimpleLpgMovementType;
+      movement_date?: string;
+      movement_time?: string;
+      bhatti_place?: string;
+      supplier_name?: string;
+      bill_number?: string;
+      notes?: string;
+    },
+    userId: string = 'usr-owner-001'
+  ): { movement: SimpleLpgMovement; cylinder: SimpleLpgCylinder } {
+    const cyl = (this.state.lpg_cylinders || []).find((c) => c.id === data.cylinder_id);
+    if (!cyl) {
+      throw new Error(`Cylinder not found / सिलेंडर नहीं मिला`);
+    }
+
+    const prevStatus = cyl.status;
+    let newStatus: SimpleLpgCylinderStatus = prevStatus;
+    let durationText: string | null = null;
+    let durationMinutes: number | null = null;
+    let emptyRemovedAt: string | null = null;
+    let connectedAt: string | null = cyl.connected_at || null;
+    let newPlace: string | null = cyl.current_place || null;
+
+    const now = new Date().toISOString();
+    const movementDate = data.movement_date || getTodayDateString();
+    let movementDateTime = now;
+    if (data.movement_date && data.movement_time) {
+      movementDateTime = new Date(`${data.movement_date}T${data.movement_time}:00`).toISOString();
+    } else if (data.movement_date) {
+      movementDateTime = new Date(`${data.movement_date}T12:00:00`).toISOString();
+    }
+
+    // Validation rules
+    switch (data.movement_type) {
+      case 'connected':
+        if (prevStatus !== 'full') {
+          throw new Error(`Only Full cylinders can be connected / केवल भरा हुआ (Full) सिलेंडर भट्टी पर लगाया जा सकता है (Current status: ${prevStatus})`);
+        }
+        newStatus = 'connected';
+        newPlace = data.bhatti_place || 'Kulfi Bhatti';
+        connectedAt = movementDateTime;
+        break;
+
+      case 'empty_removed':
+        if (prevStatus !== 'connected' && prevStatus !== 'in_use') {
+          throw new Error(`Only Connected cylinders can be marked Empty / केवल भट्टी पर लगा सिलेंडर खाली मार्क किया जा सकता है`);
+        }
+        newStatus = 'empty';
+        newPlace = 'Empty Yard';
+        emptyRemovedAt = movementDateTime;
+        if (cyl.connected_at) {
+          const calcDuration = formatLpgDuration(cyl.connected_at, emptyRemovedAt);
+          if (calcDuration) {
+            durationText = calcDuration.text;
+            durationMinutes = calcDuration.minutes;
+          }
+        }
+        connectedAt = null;
+        break;
+
+      case 'refill_sent':
+        if (prevStatus !== 'empty') {
+          throw new Error(`Only Empty cylinders can be sent for refill / केवल खाली सिलेंडर रिफिल के लिए भेजा जा सकता है (Current status: ${prevStatus})`);
+        }
+        newStatus = 'sent_for_refill';
+        newPlace = data.supplier_name || 'Bharat Gas Agency';
+        break;
+
+      case 'refill_received':
+        if (prevStatus !== 'sent_for_refill' && prevStatus !== 'empty') {
+          throw new Error(`Cannot receive refill for cylinder in status ${prevStatus} / ${prevStatus} स्थिति वाले सिलेंडर के लिए रिफिल प्राप्त नहीं किया जा सकता`);
+        }
+        newStatus = 'full';
+        newPlace = 'Cylinder Storage Yard';
+        break;
+
+      case 'correction':
+        // General correction without changing status unless specified
+        break;
+
+      default:
+        throw new Error(`Unknown movement type: ${data.movement_type}`);
+    }
+
+    cyl.status = newStatus;
+    cyl.current_place = newPlace;
+    cyl.connected_at = connectedAt;
+    cyl.last_movement_at = movementDateTime;
+    cyl.updated_at = now;
+
+    if (!this.state.lpg_cylinder_movements) this.state.lpg_cylinder_movements = [];
+    const profile = this.getProfiles().find((p) => p.id === userId);
+    const newMovement: SimpleLpgMovement = {
+      id: `mov-${generateId().slice(0, 8)}`,
+      cylinder_id: cyl.id,
+      movement_date: movementDate,
+      movement_type: data.movement_type,
+      previous_status: prevStatus,
+      new_status: newStatus,
+      bhatti_place: (data.movement_type === 'connected' || prevStatus === 'connected') ? (data.bhatti_place || cyl.current_place || 'Kulfi Bhatti') : null,
+      connected_at: data.movement_type === 'connected' ? connectedAt : (cyl.connected_at || null),
+      empty_removed_at: emptyRemovedAt,
+      running_duration_display: durationText,
+      running_duration_text: durationText,
+      running_duration_minutes: durationMinutes,
+      supplier_name: data.supplier_name || cyl.supplier_name || null,
+      bill_number: data.bill_number || null,
+      notes: data.notes || null,
+      is_correction: false,
+      corrected_movement_id: null,
+      created_by: userId,
+      created_by_name: profile?.full_name || 'Owner',
+      created_at: now,
+      cylinder: { ...cyl },
+    };
+
+    this.state.lpg_cylinder_movements.push(newMovement);
+    this.logAudit('lpg_cylinder_movements', newMovement.id, 'RECORD_LPG_MOVEMENT', { prevStatus }, { newStatus, movement: newMovement }, `Recorded LPG movement ${data.movement_type} on cylinder ${cyl.cylinder_code}`, userId);
+    this.saveState();
+
+    return { movement: newMovement, cylinder: cyl };
+  }
+
+  public correctSimpleLpgMovement(
+    data: {
+      movement_id: string;
+      reason: string;
+      corrected_movement_type?: SimpleLpgMovementType;
+      corrected_date?: string;
+      corrected_time?: string;
+      corrected_bhatti_place?: string;
+      corrected_supplier_name?: string;
+      corrected_bill_number?: string;
+      corrected_notes?: string;
+    },
+    userId: string = 'usr-owner-001'
+  ): { correction_movement: SimpleLpgMovement; cylinder: SimpleLpgCylinder } {
+    if (!data.reason || !data.reason.trim()) {
+      throw new Error('Correction reason is mandatory / सुधार का कारण अनिवार्य है');
+    }
+
+    const movements = this.state.lpg_cylinder_movements || [];
+    const orig = movements.find((m) => m.id === data.movement_id);
+    if (!orig) {
+      throw new Error('Movement not found / प्रविष्टि नहीं मिली');
+    }
+
+    const cyl = (this.state.lpg_cylinders || []).find((c) => c.id === orig.cylinder_id);
+    if (!cyl) {
+      throw new Error('Associated cylinder not found');
+    }
+
+    const now = new Date().toISOString();
+    const corrDate = data.corrected_date || getTodayDateString();
+    const profile = this.getProfiles().find((p) => p.id === userId);
+
+    const targetType = data.corrected_movement_type || orig.movement_type;
+    let newStatus = cyl.status;
+    let newPlace = cyl.current_place;
+    let connectedAt = cyl.connected_at;
+
+    if (targetType === 'connected') {
+      newStatus = 'connected';
+      newPlace = data.corrected_bhatti_place || orig.bhatti_place || 'Kulfi Bhatti';
+      connectedAt = now;
+    } else if (targetType === 'empty_removed') {
+      newStatus = 'empty';
+      newPlace = 'Empty Yard';
+      connectedAt = null;
+    } else if (targetType === 'refill_sent') {
+      newStatus = 'sent_for_refill';
+      newPlace = data.corrected_supplier_name || orig.supplier_name || 'Bharat Gas Agency';
+    } else if (targetType === 'refill_received') {
+      newStatus = 'full';
+      newPlace = 'Cylinder Storage Yard';
+    }
+
+    cyl.status = newStatus;
+    cyl.current_place = newPlace;
+    cyl.connected_at = connectedAt;
+    cyl.last_movement_at = now;
+    cyl.updated_at = now;
+
+    const correctionEntry: SimpleLpgMovement = {
+      id: `mov-${generateId().slice(0, 8)}`,
+      cylinder_id: cyl.id,
+      movement_date: corrDate,
+      movement_type: 'correction',
+      previous_status: orig.new_status || orig.previous_status,
+      new_status: newStatus,
+      bhatti_place: data.corrected_bhatti_place || orig.bhatti_place,
+      connected_at: connectedAt,
+      empty_removed_at: null,
+      running_duration_display: null,
+      running_duration_text: null,
+      running_duration_minutes: null,
+      supplier_name: data.corrected_supplier_name || orig.supplier_name,
+      bill_number: data.corrected_bill_number || orig.bill_number,
+      notes: `[सुधार / Correction: ${data.reason.trim()}] ${data.corrected_notes || orig.notes || ''}`.trim(),
+      is_correction: true,
+      corrected_movement_id: orig.id,
+      created_by: userId,
+      created_by_name: profile?.full_name || 'Owner',
+      created_at: now,
+      cylinder: { ...cyl },
+    };
+
+    movements.push(correctionEntry);
+    this.logAudit('lpg_cylinder_movements', correctionEntry.id, 'CORRECT_LPG_MOVEMENT', orig, correctionEntry, `Corrected movement ${orig.id} on ${cyl.cylinder_code}: ${data.reason}`, userId);
+    this.saveState();
+
+    return { correction_movement: correctionEntry, cylinder: cyl };
+  }
+
+  public deleteOrArchiveSimpleLpgCylinder(
+    data: {
+      cylinder_id: string;
+      reason: string;
+    },
+    userId: string = 'usr-owner-001'
+  ): { action: 'deleted' | 'archived'; deleted: boolean; archived: boolean; cylinder_id: string; message: string } {
+    if (!data.reason || !data.reason.trim()) {
+      throw new Error('Reason is required / कारण अनिवार्य है');
+    }
+
+    const cylinders = this.state.lpg_cylinders || [];
+    const cylIndex = cylinders.findIndex((c) => c.id === data.cylinder_id);
+    if (cylIndex === -1) {
+      throw new Error('Cylinder not found / सिलेंडर नहीं मिला');
+    }
+
+    const cyl = cylinders[cylIndex];
+
+    if (cyl.status === 'connected' || cyl.status === 'in_use') {
+      throw new Error('Connected cylinder cannot be deleted or archived. First mark it Empty/Removed / भट्टी पर लगा सिलेंडर हटाया या बंद नहीं किया जा सकता। पहले इसे खाली मार्क करें।');
+    }
+
+    const movements = this.state.lpg_cylinder_movements || [];
+    const operationalMovements = movements.filter(
+      (m) => m.cylinder_id === cyl.id && m.movement_type !== 'cylinder_added'
+    );
+
+    if (operationalMovements.length === 0) {
+      // Unused cylinder -> permanent delete
+      cylinders.splice(cylIndex, 1);
+      this.state.lpg_cylinder_movements = movements.filter((m) => m.cylinder_id !== cyl.id);
+      this.logAudit('lpg_cylinders', cyl.id, 'PERMANENT_DELETE_LPG_CYLINDER', cyl, null, `Permanently deleted unused cylinder ${cyl.cylinder_code}: ${data.reason}`, userId);
+      this.saveState();
+      return {
+        action: 'deleted',
+        deleted: true,
+        archived: false,
+        cylinder_id: cyl.id,
+        message: `Cylinder ${cyl.cylinder_code} permanently deleted / सिलेंडर पूरी तरह हटा दिया गया`,
+      };
+    } else {
+      // Used cylinder -> safely archive
+      cyl.is_active = false;
+      cyl.status = 'inactive';
+      cyl.updated_at = new Date().toISOString();
+
+      const profile = this.getProfiles().find((p) => p.id === userId);
+      const archiveMovement: SimpleLpgMovement = {
+        id: `mov-${generateId().slice(0, 8)}`,
+        cylinder_id: cyl.id,
+        movement_date: getTodayDateString(),
+        movement_type: 'archived',
+        previous_status: cyl.status,
+        new_status: 'inactive',
+        bhatti_place: null,
+        connected_at: null,
+        empty_removed_at: null,
+        running_duration_display: null,
+        running_duration_text: null,
+        running_duration_minutes: null,
+        supplier_name: null,
+        bill_number: null,
+        notes: `Archived / निष्क्रिय किया गया: ${data.reason}`,
+        is_correction: false,
+        corrected_movement_id: null,
+        created_by: userId,
+        created_by_name: profile?.full_name || 'Owner',
+        created_at: new Date().toISOString(),
+      };
+      if (!this.state.lpg_cylinder_movements) this.state.lpg_cylinder_movements = [];
+      this.state.lpg_cylinder_movements.push(archiveMovement);
+
+      this.logAudit('lpg_cylinders', cyl.id, 'ARCHIVE_LPG_CYLINDER', cyl, { is_active: false, status: 'inactive' }, `Archived used cylinder ${cyl.cylinder_code}: ${data.reason}`, userId);
+      this.saveState();
+      return {
+        action: 'archived',
+        deleted: false,
+        archived: true,
+        cylinder_id: cyl.id,
+        message: `Cylinder ${cyl.cylinder_code} archived (history preserved) / सिलेंडर को निष्क्रिय (Archive) किया गया`,
+      };
+    }
+  }
+
+  public reactivateSimpleLpgCylinder(
+    cylinderId: string,
+    reason?: string,
+    userId: string = 'usr-owner-001'
+  ): { cylinder: SimpleLpgCylinder; movement: SimpleLpgMovement } {
+    const cyl = (this.state.lpg_cylinders || []).find((c) => c.id === cylinderId);
+    if (!cyl) {
+      throw new Error('Cylinder not found / सिलेंडर नहीं मिला');
+    }
+
+    cyl.is_active = true;
+    cyl.status = 'empty';
+    cyl.current_place = 'Empty Yard';
+    cyl.updated_at = new Date().toISOString();
+
+    const profile = this.getProfiles().find((p) => p.id === userId);
+    const reactivateMovement: SimpleLpgMovement = {
+      id: `mov-${generateId().slice(0, 8)}`,
+      cylinder_id: cyl.id,
+      movement_date: getTodayDateString(),
+      movement_type: 'reactivated',
+      previous_status: 'inactive',
+      new_status: 'empty',
+      bhatti_place: null,
+      connected_at: null,
+      empty_removed_at: null,
+      running_duration_display: null,
+      running_duration_text: null,
+      running_duration_minutes: null,
+      supplier_name: null,
+      bill_number: null,
+      notes: reason ? `Reactivated: ${reason}` : 'Reactivated by owner',
+      is_correction: false,
+      corrected_movement_id: null,
+      created_by: userId,
+      created_by_name: profile?.full_name || 'Owner',
+      created_at: new Date().toISOString(),
+    };
+    if (!this.state.lpg_cylinder_movements) this.state.lpg_cylinder_movements = [];
+    this.state.lpg_cylinder_movements.push(reactivateMovement);
+
+    this.logAudit('lpg_cylinders', cyl.id, 'REACTIVATE_LPG_CYLINDER', null, cyl, `Reactivated cylinder ${cyl.cylinder_code}`, userId);
+    this.saveState();
+    return { cylinder: cyl, movement: reactivateMovement };
+  }
+
+  // --- Legacy Compatibility Methods ---
+  public getLpgCylinders(): LpgCylinder[] {
+    return this.getSimpleLpgCylinders();
+  }
+
+  public getLpgCylinderById(id: string): LpgCylinder | undefined {
+    return this.getSimpleLpgCylinderById(id);
+  }
+
+  public addLpgCylinder(
+    data: any,
+    userId: string = 'usr-owner-001'
+  ): LpgCylinder {
+    return this.addSimpleLpgCylinder(data, userId).cylinder;
   }
 
   public recordLpgReading(
     cylinderId: string,
     grossWeight: number,
-    readingType: 'weighed' | 'estimated_batch_use' | 'refill_in' | 'empty_out' = 'weighed',
+    readingType: any = 'weighed',
     batchId?: string,
     notes?: string,
     userId: string = 'usr-owner-001'
   ): LpgCylinder {
-    const cyl = (this.state.lpg_cylinders || []).find((c) => c.id === cylinderId);
+    const cyl = this.getSimpleLpgCylinderById(cylinderId);
     if (!cyl) throw new Error('Cylinder not found');
-
-    const prevGross = cyl.current_gross_weight;
-    const newGross = Math.max(cyl.tare_weight, Number(grossWeight) || 0);
-    const gasConsumed = Math.max(0, Number((prevGross - newGross).toFixed(2)));
-    const calc = calculateLpgRemaining(newGross, cyl.tare_weight, cyl.rated_gas_capacity);
-    const now = new Date().toISOString();
-
-    cyl.current_gross_weight = newGross;
-    cyl.calculated_remaining_gas = calc.remainingKg;
-    cyl.remaining_percentage = calc.percentage;
-    if (calc.isEmpty) {
-      cyl.status = 'empty';
-      cyl.empty_date = getTodayDateString();
-    } else if (cyl.status === 'full' && newGross < cyl.full_gross_weight) {
-      cyl.status = 'in_use';
-    }
-    cyl.updated_at = now;
-
     if (!this.state.lpg_cylinder_readings) this.state.lpg_cylinder_readings = [];
-    this.state.lpg_cylinder_readings.push({
-      id: `lpgr-${generateId().slice(0, 8)}`,
+    const r: LpgCylinderReading = {
+      id: `reading-${generateId().slice(0, 8)}`,
       cylinder_id: cylinderId,
-      reading_date: now,
+      reading_date: getTodayDateString(),
       reading_type: readingType,
-      gross_weight: newGross,
-      tare_weight: cyl.tare_weight,
-      remaining_gas_kg: calc.remainingKg,
-      gas_consumed_kg: gasConsumed,
-      batch_id: batchId || null,
-      notes: notes || null,
-      recorded_by: userId,
-      created_at: now,
-    });
-
-    this.logAudit('lpg_cylinders', cylinderId, 'RECORD_LPG_READING', { prevGross }, { newGross, calc }, `Recorded LPG reading: ${calc.remainingKg} kg remaining`, userId);
+      gross_weight: grossWeight,
+      tare_weight: 15.5,
+      net_gas_weight: Math.max(0, grossWeight - 15.5),
+      remaining_percentage: Math.min(100, (Math.max(0, grossWeight - 15.5) / 19.0) * 100),
+      batch_id: batchId,
+      notes,
+      created_by: userId,
+      created_at: new Date().toISOString(),
+    };
+    this.state.lpg_cylinder_readings.push(r);
     this.saveState();
-    return this.getLpgCylinderById(cylinderId)!;
+    return cyl;
   }
 
   public recordLpgRefill(
     cylinderId: string,
     refillCost: number,
-    fullGrossWeight?: number,
+    _fullGrossWeight?: number,
     userId: string = 'usr-owner-001'
   ): LpgCylinder {
-    const cyl = (this.state.lpg_cylinders || []).find((c) => c.id === cylinderId);
-    if (!cyl) throw new Error('Cylinder not found');
-
-    const fullGross = fullGrossWeight || (cyl.tare_weight + cyl.rated_gas_capacity);
-    const now = new Date().toISOString();
-
-    cyl.full_gross_weight = fullGross;
-    cyl.current_gross_weight = fullGross;
-    cyl.calculated_remaining_gas = cyl.rated_gas_capacity;
-    cyl.remaining_percentage = 100.0;
-    cyl.status = 'full';
-    cyl.refill_date = getTodayDateString();
-    cyl.refill_cost = Number(refillCost) || 1800.0;
-    cyl.empty_date = null;
-    cyl.updated_at = now;
-
-    // Record reading
-    if (!this.state.lpg_cylinder_readings) this.state.lpg_cylinder_readings = [];
-    this.state.lpg_cylinder_readings.push({
-      id: `lpgr-${generateId().slice(0, 8)}`,
+    const res = this.recordSimpleLpgMovement({
       cylinder_id: cylinderId,
-      reading_date: now,
-      reading_type: 'refill_in',
-      gross_weight: fullGross,
-      tare_weight: cyl.tare_weight,
-      remaining_gas_kg: cyl.rated_gas_capacity,
-      gas_consumed_kg: 0,
+      movement_type: 'refill_received',
       notes: `Refilled for ₹${refillCost}`,
-      recorded_by: userId,
-      created_at: now,
-    });
-
-    // Record expense
-    if (refillCost > 0) {
-      this.state.expenses.push({
-        id: `exp-${generateId().slice(0, 8)}`,
-        expense_date: getTodayDateString(),
-        category: 'electricity_fuel' as any,
-        amount: refillCost,
-        payment_method: 'cash',
-        vendor_name: cyl.supplier_name || 'Bharat Gas Agency',
-        description: `LPG Cylinder Refill (${cyl.cylinder_code}) - 19kg Gas`,
-        bill_image_path: null,
-        status: 'active' as any,
-        void_reason: null,
-        expense_head_id: null,
-        expense_month: null,
-        due_date: null,
-        corrected_from_expense_id: null,
-        idempotency_key: null,
-        is_monthly_fixed: false,
-        created_by: userId,
-        created_at: now,
-        updated_at: now,
-      });
-    }
-
-    this.logAudit('lpg_cylinders', cylinderId, 'REFILL_LPG_CYLINDER', null, cyl, `Refilled cylinder ${cyl.cylinder_code}`, userId);
-    this.saveState();
-    return this.getLpgCylinderById(cylinderId)!;
+    }, userId);
+    return res.cylinder;
   }
 
   public connectLpgCylinder(cylinderId: string, userId: string = 'usr-owner-001'): LpgCylinder {
-    const cyl = (this.state.lpg_cylinders || []).find((c) => c.id === cylinderId);
-    if (!cyl) throw new Error('Cylinder not found');
-
-    // Disconnect previously active cylinder
-    for (const c of this.state.lpg_cylinders || []) {
-      if (c.id !== cylinderId && c.status === 'in_use') {
-        c.status = 'partially_used';
-      }
-    }
-
-    cyl.status = 'in_use';
-    cyl.connected_date = getTodayDateString();
-    cyl.updated_at = new Date().toISOString();
-
-    this.logAudit('lpg_cylinders', cylinderId, 'CONNECT_LPG_CYLINDER', null, null, `Connected cylinder ${cyl.cylinder_code} to burner`, userId);
-    this.saveState();
-    return this.getLpgCylinderById(cylinderId)!;
+    const res = this.recordSimpleLpgMovement({
+      cylinder_id: cylinderId,
+      movement_type: 'connected',
+    }, userId);
+    return res.cylinder;
   }
 
   public getLpgReadings(cylinderId?: string): LpgCylinderReading[] {
     const list = this.state.lpg_cylinder_readings || [];
-    const filtered = cylinderId ? list.filter((r) => r.cylinder_id === cylinderId) : list;
-    return filtered.sort((a, b) => new Date(b.reading_date).getTime() - new Date(a.reading_date).getTime());
+    if (cylinderId) return list.filter((r) => r.cylinder_id === cylinderId);
+    return list;
   }
 
   public deleteLpgCylinder(cylinderId: string, userId: string = 'usr-owner-001'): { success: boolean; cylinder_id: string; message: string } {
-    const list = this.state.lpg_cylinders || [];
-    const index = list.findIndex((c) => c.id === cylinderId);
-    if (index === -1) {
-      throw new Error(`LPG Cylinder with ID ${cylinderId} not found`);
-    }
-
-    const [deletedCyl] = list.splice(index, 1);
-
-    // Also remove associated readings
+    const cyl = this.getSimpleLpgCylinderById(cylinderId);
+    if (!cyl) throw new Error('Cylinder not found');
+    const res = this.deleteOrArchiveSimpleLpgCylinder({ cylinder_id: cylinderId, reason: 'Owner deleted' }, userId);
     if (this.state.lpg_cylinder_readings) {
-      this.state.lpg_cylinder_readings = this.state.lpg_cylinder_readings.filter(
-        (r) => r.cylinder_id !== cylinderId
-      );
+      this.state.lpg_cylinder_readings = this.state.lpg_cylinder_readings.filter((r) => r.cylinder_id !== cylinderId);
     }
-
-    this.logAudit(
-      'lpg_cylinders',
-      cylinderId,
-      'DELETE_LPG_CYLINDER',
-      deletedCyl,
-      null,
-      `Deleted LPG cylinder ${deletedCyl.cylinder_code}`,
-      userId
-    );
-    this.saveState();
-
-    return {
-      success: true,
-      cylinder_id: cylinderId,
-      message: `LPG cylinder ${deletedCyl.cylinder_code} deleted successfully`,
-    };
+    return { success: true, cylinder_id: cylinderId, message: res.message };
   }
 
   // --- Inventory Wastage & Damage ---

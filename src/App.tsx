@@ -30,6 +30,7 @@ import { PhysicalStockCheckPage } from './pages/inventory/PhysicalStockCheckPage
 import { WastagePage } from './pages/inventory/WastagePage';
 import { ExpenseMasterPage } from './pages/master/ExpenseMasterPage';
 import { MonthlyExpensesPage } from './pages/expenses/MonthlyExpensesPage';
+import { LpgCylinderPage } from './pages/inventory/LpgCylinderPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -88,6 +89,8 @@ export function App() {
                   <Route path="production/cost-calculator" element={<ProductionCostCalculatorPage />} />
                   <Route path="master/recipes" element={<ProductionCostCalculatorPage />} />
                   <Route path="inventory" element={<InventoryDashboardPage />} />
+                  <Route path="inventory/lpg" element={<LpgCylinderPage />} />
+                  <Route path="inventory/cylinders" element={<LpgCylinderPage />} />
                   <Route path="inventory/items" element={<InventoryItemsPage />} />
                   <Route path="inventory/items/:id" element={<IngredientDetailPage />} />
                   <Route path="inventory/purchases" element={<MaterialPurchasesPage />} />
