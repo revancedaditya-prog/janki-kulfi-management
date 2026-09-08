@@ -54,122 +54,118 @@ const STATUS_CONFIG: Record<string, StatusConfigItem> = {
   full: {
     labelEn: 'Full',
     labelHi: 'भरा हुआ',
-    color: 'text-emerald-700 dark:text-emerald-300',
-    bg: 'bg-emerald-50/80 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800',
-    badge: 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-900/60 dark:text-emerald-200 dark:border-emerald-700',
-    avatar: 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-700',
-    cardBorder: 'border-l-4 border-l-emerald-500 border-stone-200 dark:border-stone-800 hover:border-emerald-300 dark:hover:border-emerald-700',
+    color: 'text-emerald-800',
+    bg: 'bg-emerald-50 border-emerald-200',
+    badge: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+    avatar: 'bg-emerald-50 text-emerald-800 border-emerald-300',
+    cardBorder: 'border-l-4 border-l-emerald-500 border-stone-200 hover:border-emerald-300',
     dot: 'bg-emerald-500',
   },
   connected: {
     labelEn: 'Connected (In Use)',
     labelHi: 'भट्टी पर लगा',
-    color: 'text-amber-800 dark:text-amber-300',
-    bg: 'bg-amber-50/80 dark:bg-amber-950/40 border-amber-300 dark:border-amber-700',
-    badge: 'bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-900/60 dark:text-amber-200 dark:border-amber-700',
-    avatar: 'bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-700',
-    cardBorder: 'border-l-4 border-l-amber-500 border-stone-200 dark:border-stone-800 hover:border-amber-300 dark:hover:border-amber-700',
+    color: 'text-amber-900',
+    bg: 'bg-amber-50 border-amber-300',
+    badge: 'bg-amber-50 text-amber-900 border-amber-300',
+    avatar: 'bg-amber-50 text-amber-900 border-amber-300',
+    cardBorder: 'border-l-4 border-l-amber-500 border-stone-200 hover:border-amber-400',
     dot: 'bg-amber-500',
   },
   in_use: {
     labelEn: 'Connected (In Use)',
     labelHi: 'भट्टी पर लगा',
-    color: 'text-amber-800 dark:text-amber-300',
-    bg: 'bg-amber-50/80 dark:bg-amber-950/40 border-amber-300 dark:border-amber-700',
-    badge: 'bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-900/60 dark:text-amber-200 dark:border-amber-700',
-    avatar: 'bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-700',
-    cardBorder: 'border-l-4 border-l-amber-500 border-stone-200 dark:border-stone-800 hover:border-amber-300 dark:hover:border-amber-700',
+    color: 'text-amber-900',
+    bg: 'bg-amber-50 border-amber-300',
+    badge: 'bg-amber-50 text-amber-900 border-amber-300',
+    avatar: 'bg-amber-50 text-amber-900 border-amber-300',
+    cardBorder: 'border-l-4 border-l-amber-500 border-stone-200 hover:border-amber-400',
     dot: 'bg-amber-500',
   },
   empty: {
     labelEn: 'Empty',
     labelHi: 'खाली',
-    color: 'text-rose-700 dark:text-rose-300',
-    bg: 'bg-rose-50/80 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800',
-    badge: 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-900/60 dark:text-rose-200 dark:border-rose-700',
-    avatar: 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/80 dark:text-rose-300 dark:border-rose-800',
-    cardBorder: 'border-l-4 border-l-rose-500 border-stone-200 dark:border-stone-800 hover:border-rose-300 dark:hover:border-rose-700',
+    color: 'text-rose-800',
+    bg: 'bg-rose-50 border-rose-200',
+    badge: 'bg-rose-50 text-rose-800 border-rose-200',
+    avatar: 'bg-rose-50 text-rose-800 border-rose-300',
+    cardBorder: 'border-l-4 border-l-rose-500 border-stone-200 hover:border-rose-300',
     dot: 'bg-rose-500',
   },
   sent_for_refill: {
     labelEn: 'Sent for Refill',
     labelHi: 'भरने भेजा',
-    color: 'text-blue-700 dark:text-blue-300',
-    bg: 'bg-blue-50/80 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800',
-    badge: 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-900/60 dark:text-blue-200 dark:border-blue-700',
-    avatar: 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-950/80 dark:text-blue-300 dark:border-blue-800',
-    cardBorder: 'border-l-4 border-l-blue-500 border-stone-200 dark:border-stone-800 hover:border-blue-300 dark:hover:border-blue-700',
+    color: 'text-blue-800',
+    bg: 'bg-blue-50 border-blue-200',
+    badge: 'bg-blue-50 text-blue-800 border-blue-200',
+    avatar: 'bg-blue-50 text-blue-800 border-blue-300',
+    cardBorder: 'border-l-4 border-l-blue-500 border-stone-200 hover:border-blue-300',
     dot: 'bg-blue-500',
   },
   inactive: {
     labelEn: 'Inactive',
     labelHi: 'निष्क्रिय / बंद',
-    color: 'text-slate-600 dark:text-slate-400',
-    bg: 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700',
-    badge: 'bg-slate-200 text-slate-700 border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600',
-    avatar: 'bg-slate-200 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700',
-    cardBorder: 'border-l-4 border-l-slate-400 border-slate-200 dark:border-slate-800',
-    dot: 'bg-slate-400',
+    color: 'text-stone-600',
+    bg: 'bg-stone-50 border-stone-200',
+    badge: 'bg-stone-100 text-stone-700 border-stone-300',
+    avatar: 'bg-stone-100 text-stone-600 border-stone-300',
+    cardBorder: 'border-l-4 border-l-stone-400 border-stone-200',
+    dot: 'bg-stone-400',
   },
   damaged_inactive: {
     labelEn: 'Inactive',
     labelHi: 'निष्क्रिय / बंद',
-    color: 'text-slate-600 dark:text-slate-400',
-    bg: 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700',
-    badge: 'bg-slate-200 text-slate-700 border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600',
-    avatar: 'bg-slate-200 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700',
-    cardBorder: 'border-l-4 border-l-slate-400 border-slate-200 dark:border-slate-800',
-    dot: 'bg-slate-400',
+    color: 'text-stone-600',
+    bg: 'bg-stone-50 border-stone-200',
+    badge: 'bg-stone-100 text-stone-700 border-stone-300',
+    avatar: 'bg-stone-100 text-stone-600 border-stone-300',
+    cardBorder: 'border-l-4 border-l-stone-400 border-stone-200',
+    dot: 'bg-stone-400',
   },
 };
 
 const MOVEMENT_TYPE_CONFIG: Record<
   string,
-  { labelHi: string; labelEn: string; colorClass: string; actionColor?: string }
+  { labelHi: string; labelEn: string; colorClass: string }
 > = {
   cylinder_added: {
     labelHi: 'नया सिलेंडर जोड़ा गया',
     labelEn: 'Cylinder Added',
-    colorClass: 'bg-slate-100 text-slate-800 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
+    colorClass: 'bg-stone-100 text-stone-800 border-stone-300',
   },
   connected: {
     labelHi: 'भट्टी पर लगाया',
     labelEn: 'Connected to Bhatti',
-    colorClass: 'bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-950/70 dark:text-amber-200 dark:border-amber-700',
-    actionColor: 'amber',
+    colorClass: 'bg-amber-50 text-amber-900 border-amber-300',
   },
   empty_removed: {
     labelHi: 'खाली / भट्टी से हटाया',
     labelEn: 'Empty / Removed',
-    colorClass: 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/70 dark:text-rose-200 dark:border-rose-700',
-    actionColor: 'rose',
+    colorClass: 'bg-rose-50 text-rose-800 border-rose-200',
   },
   refill_sent: {
     labelHi: 'रिफिल के लिए भेजा',
     labelEn: 'Sent for Refill',
-    colorClass: 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-950/70 dark:text-blue-200 dark:border-blue-700',
-    actionColor: 'blue',
+    colorClass: 'bg-blue-50 text-blue-800 border-blue-200',
   },
   refill_received: {
     labelHi: 'रिफिल मिला (Full)',
     labelEn: 'Refill Received (Full)',
-    colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/70 dark:text-emerald-200 dark:border-emerald-700',
-    actionColor: 'emerald',
+    colorClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
   },
   correction: {
     labelHi: 'प्रविष्टि सुधार',
     labelEn: 'Correction / Reversal',
-    colorClass: 'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-950/70 dark:text-purple-200 dark:border-purple-700',
+    colorClass: 'bg-purple-50 text-purple-800 border-purple-200',
   },
   reactivated: {
     labelHi: 'पुनः चालू किया गया',
     labelEn: 'Reactivated',
-    colorClass: 'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/70 dark:text-teal-200 dark:border-teal-700',
+    colorClass: 'bg-teal-50 text-teal-800 border-teal-200',
   },
   archived: {
     labelHi: 'निष्क्रिय किया गया',
     labelEn: 'Archived',
-    colorClass: 'bg-zinc-100 text-zinc-700 border-zinc-300 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700',
+    colorClass: 'bg-stone-100 text-stone-700 border-stone-300',
   },
 };
 
@@ -512,14 +508,14 @@ export const LpgCylinderPage: React.FC = () => {
   );
 
   return (
-    <div className="space-y-6 pb-28 max-w-7xl mx-auto px-2 sm:px-4">
+    <div className="space-y-6 pb-24 max-w-7xl mx-auto">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pt-2">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3">
           <Link to="/inventory">
             <button
               type="button"
-              className="p-2.5 rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900 hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer text-stone-700 dark:text-stone-300 shadow-2xs"
+              className="p-2.5 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 transition-colors cursor-pointer text-stone-700 shadow-xs"
               title="Back to Inventory"
             >
               <ArrowLeft className="w-5 h-5" />
@@ -530,11 +526,11 @@ export const LpgCylinderPage: React.FC = () => {
               <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white shadow-md shadow-orange-500/20">
                 <Flame className="w-5 h-5" />
               </div>
-              <h1 className="text-xl sm:text-2xl font-black text-stone-900 dark:text-white tracking-tight">
+              <h1 className="text-xl sm:text-2xl font-black text-stone-900 tracking-tight">
                 Cylinder Register / सिलेंडर रजिस्टर
               </h1>
             </div>
-            <p className="text-xs text-stone-500 dark:text-stone-400 mt-0.5 font-medium">
+            <p className="text-xs text-stone-600 mt-0.5 font-medium">
               LPG Cylinder Status & Movement Ledger (सरल गैस सिलेंडर प्रबंधन)
             </p>
           </div>
@@ -547,7 +543,7 @@ export const LpgCylinderPage: React.FC = () => {
             size="md"
             leftIcon={<Flame className="w-4 h-4" />}
             onClick={() => handleOpenMovementModal()}
-            className="bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white font-black min-h-[44px] shadow-sm shadow-orange-600/20 cursor-pointer"
+            className="bg-amber-600 hover:bg-amber-700 text-white font-bold min-h-[42px] shadow-sm cursor-pointer"
           >
             + Cylinder Entry / सिलेंडर एंट्री
           </Button>
@@ -558,7 +554,7 @@ export const LpgCylinderPage: React.FC = () => {
               size="md"
               leftIcon={<Plus className="w-4 h-4 text-amber-600" />}
               onClick={handleOpenAddModal}
-              className="font-bold bg-white dark:bg-stone-900 border-stone-300 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 min-h-[44px] cursor-pointer shadow-2xs"
+              className="font-bold bg-white border-stone-300 hover:bg-stone-50 text-stone-800 min-h-[42px] cursor-pointer shadow-xs"
             >
               + Add Cylinder
             </Button>
@@ -568,7 +564,7 @@ export const LpgCylinderPage: React.FC = () => {
 
       {/* Alerts */}
       {errorMsg && (
-        <div className="p-4 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 rounded-2xl flex items-start justify-between gap-3 text-rose-900 dark:text-rose-200 text-sm shadow-xs animate-in fade-in">
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-start justify-between gap-3 text-rose-900 text-sm shadow-xs">
           <div className="flex items-start gap-2.5">
             <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
             <span className="font-semibold">{errorMsg}</span>
@@ -584,7 +580,7 @@ export const LpgCylinderPage: React.FC = () => {
       )}
 
       {successMsg && (
-        <div className="p-4 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded-2xl flex items-start justify-between gap-3 text-emerald-900 dark:text-emerald-200 text-sm shadow-xs animate-in fade-in">
+        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start justify-between gap-3 text-emerald-900 text-sm shadow-xs">
           <div className="flex items-start gap-2.5">
             <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
             <span className="font-semibold">{successMsg}</span>
@@ -599,7 +595,7 @@ export const LpgCylinderPage: React.FC = () => {
         </div>
       )}
 
-      {/* Summary KPI Cards with Vibrant Status Highlighting */}
+      {/* Summary KPI Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
           {
@@ -608,9 +604,9 @@ export const LpgCylinderPage: React.FC = () => {
             labelEn: 'Active Total',
             val: summary.totalActive,
             icon: Layers,
-            iconColor: 'text-stone-700 dark:text-stone-200',
-            iconBg: 'bg-stone-100 dark:bg-stone-800',
-            activeStyle: 'bg-stone-900 text-white dark:bg-stone-800 ring-2 ring-stone-900 dark:ring-stone-400 shadow-md',
+            iconColor: 'text-stone-700',
+            iconBg: 'bg-stone-100',
+            numColor: 'text-stone-900',
           },
           {
             key: 'full',
@@ -618,9 +614,9 @@ export const LpgCylinderPage: React.FC = () => {
             labelEn: 'Full',
             val: summary.full,
             icon: CheckCircle2,
-            iconColor: 'text-emerald-600 dark:text-emerald-400',
-            iconBg: 'bg-emerald-50 dark:bg-emerald-950/70',
-            activeStyle: 'bg-emerald-900 text-white ring-2 ring-emerald-500 shadow-md border-emerald-800',
+            iconColor: 'text-emerald-600',
+            iconBg: 'bg-emerald-50',
+            numColor: 'text-emerald-700',
           },
           {
             key: 'connected',
@@ -628,9 +624,9 @@ export const LpgCylinderPage: React.FC = () => {
             labelEn: 'Connected',
             val: summary.connected,
             icon: Flame,
-            iconColor: 'text-amber-600 dark:text-amber-400',
-            iconBg: 'bg-amber-50 dark:bg-amber-950/70',
-            activeStyle: 'bg-amber-900 text-white ring-2 ring-amber-500 shadow-md border-amber-800',
+            iconColor: 'text-amber-600',
+            iconBg: 'bg-amber-50',
+            numColor: 'text-amber-700',
           },
           {
             key: 'empty',
@@ -638,9 +634,9 @@ export const LpgCylinderPage: React.FC = () => {
             labelEn: 'Empty',
             val: summary.empty,
             icon: AlertCircle,
-            iconColor: 'text-rose-600 dark:text-rose-400',
-            iconBg: 'bg-rose-50 dark:bg-rose-950/70',
-            activeStyle: 'bg-rose-900 text-white ring-2 ring-rose-500 shadow-md border-rose-800',
+            iconColor: 'text-rose-600',
+            iconBg: 'bg-rose-50',
+            numColor: 'text-rose-700',
           },
           {
             key: 'sent_for_refill',
@@ -648,9 +644,9 @@ export const LpgCylinderPage: React.FC = () => {
             labelEn: 'Sent Refill',
             val: summary.sentForRefill,
             icon: Truck,
-            iconColor: 'text-blue-600 dark:text-blue-400',
-            iconBg: 'bg-blue-50 dark:bg-blue-950/70',
-            activeStyle: 'bg-blue-900 text-white ring-2 ring-blue-500 shadow-md border-blue-800',
+            iconColor: 'text-blue-600',
+            iconBg: 'bg-blue-50',
+            numColor: 'text-blue-700',
           },
           {
             key: 'inactive',
@@ -658,11 +654,11 @@ export const LpgCylinderPage: React.FC = () => {
             labelEn: 'Inactive',
             val: summary.inactive,
             icon: Archive,
-            iconColor: 'text-slate-500 dark:text-slate-400',
-            iconBg: 'bg-slate-100 dark:bg-slate-800',
-            activeStyle: 'bg-slate-800 text-white ring-2 ring-slate-400 shadow-md border-slate-700',
+            iconColor: 'text-stone-500',
+            iconBg: 'bg-stone-100',
+            numColor: 'text-stone-600',
           },
-        ].map(({ key, labelHi, labelEn, val, icon: Icon, iconColor, iconBg, activeStyle }) => {
+        ].map(({ key, labelHi, labelEn, val, icon: Icon, iconColor, iconBg, numColor }) => {
           const isSelected = statusFilter === key;
           return (
             <div
@@ -670,20 +666,22 @@ export const LpgCylinderPage: React.FC = () => {
               onClick={() => setStatusFilter(key as any)}
               className={`p-3.5 rounded-2xl border transition-all cursor-pointer select-none ${
                 isSelected
-                  ? activeStyle
-                  : 'bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 hover:border-amber-300 dark:hover:border-amber-700 shadow-2xs'
+                  ? 'bg-stone-900 text-white border-stone-900 shadow-md ring-2 ring-amber-500'
+                  : 'bg-white border-stone-200 hover:border-amber-300 shadow-xs'
               }`}
             >
               <div className="flex items-center justify-between text-xs font-bold mb-1.5">
-                <span className={isSelected ? 'text-white/90' : 'text-stone-700 dark:text-stone-300'}>
+                <span className={isSelected ? 'text-white' : 'text-stone-700'}>
                   {labelHi}
                 </span>
                 <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${isSelected ? 'bg-white/20 text-white' : `${iconBg} ${iconColor}`}`}>
                   <Icon className="w-3.5 h-3.5" />
                 </div>
               </div>
-              <div className="text-2xl font-black tracking-tight">{val}</div>
-              <div className={`text-[10px] font-semibold mt-0.5 ${isSelected ? 'text-white/75' : 'text-stone-500 dark:text-stone-400'}`}>
+              <div className={`text-2xl font-black tracking-tight ${isSelected ? 'text-white' : numColor}`}>
+                {val}
+              </div>
+              <div className={`text-[10px] font-semibold mt-0.5 ${isSelected ? 'text-stone-300' : 'text-stone-500'}`}>
                 {labelEn}
               </div>
             </div>
@@ -692,15 +690,15 @@ export const LpgCylinderPage: React.FC = () => {
       </div>
 
       {/* Tabs and Search Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-200 dark:border-stone-800 pb-3">
-        <div className="flex items-center gap-1.5 bg-stone-100 dark:bg-stone-800/80 p-1.5 rounded-2xl border border-stone-200/60 dark:border-stone-700/60">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-200 pb-3">
+        <div className="flex items-center gap-1.5 bg-stone-100 p-1.5 rounded-2xl border border-stone-200">
           <button
             type="button"
             onClick={() => setActiveTab('status')}
             className={`px-4 py-2 rounded-xl font-bold text-xs sm:text-sm transition-all cursor-pointer ${
               activeTab === 'status'
-                ? 'bg-white dark:bg-stone-900 text-stone-900 dark:text-white shadow-xs'
-                : 'text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-white'
+                ? 'bg-white text-maroon-950 shadow-sm border border-stone-200 font-black'
+                : 'text-stone-600 hover:text-stone-900'
             }`}
           >
             Current Status (वर्तमान स्थिति)
@@ -710,8 +708,8 @@ export const LpgCylinderPage: React.FC = () => {
             onClick={() => setActiveTab('register')}
             className={`px-4 py-2 rounded-xl font-bold text-xs sm:text-sm transition-all cursor-pointer ${
               activeTab === 'register'
-                ? 'bg-white dark:bg-stone-900 text-stone-900 dark:text-white shadow-xs'
-                : 'text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-white'
+                ? 'bg-white text-maroon-950 shadow-sm border border-stone-200 font-black'
+                : 'text-stone-600 hover:text-stone-900'
             }`}
           >
             Movement Register (मूवमेंट रजिस्टर)
@@ -723,7 +721,7 @@ export const LpgCylinderPage: React.FC = () => {
             <select
               value={movementFilterCylinder}
               onChange={(e) => setMovementFilterCylinder(e.target.value)}
-              className="px-3 py-2 text-xs font-bold bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl text-stone-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-2xs"
+              className="px-3 py-2 text-xs font-bold bg-white border border-stone-200 rounded-xl text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-xs"
             >
               <option value="all">All Cylinders (सभी)</option>
               {cylinders.map((c) => (
@@ -741,7 +739,7 @@ export const LpgCylinderPage: React.FC = () => {
               placeholder="Search / खोजें..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 text-sm bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700 rounded-xl text-stone-900 dark:text-white placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-2xs"
+              className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-stone-200 rounded-xl text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-xs"
             />
           </div>
         </div>
@@ -751,9 +749,9 @@ export const LpgCylinderPage: React.FC = () => {
       {activeTab === 'status' && (
         <div>
           {filteredCylinders.length === 0 ? (
-            <div className="text-center py-12 bg-stone-50 dark:bg-stone-900/50 rounded-2xl border border-dashed border-stone-300 dark:border-stone-800">
-              <Flame className="w-12 h-12 text-stone-300 dark:text-stone-700 mx-auto mb-3" />
-              <p className="text-stone-700 dark:text-stone-300 font-bold">No cylinders found matching this filter.</p>
+            <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-stone-300">
+              <Flame className="w-12 h-12 text-stone-300 mx-auto mb-3" />
+              <p className="text-stone-700 font-bold">No cylinders found matching this filter.</p>
               <p className="text-xs text-stone-400 mt-1">कोई सिलेंडर नहीं मिला।</p>
             </div>
           ) : (
@@ -766,8 +764,8 @@ export const LpgCylinderPage: React.FC = () => {
                 return (
                   <div
                     key={cyl.id}
-                    className={`p-5 rounded-2xl border transition-all flex flex-col justify-between shadow-2xs bg-white dark:bg-stone-900 ${cfg.cardBorder} ${
-                      isInactive ? 'opacity-85' : ''
+                    className={`p-5 rounded-2xl border transition-all flex flex-col justify-between shadow-xs bg-white ${cfg.cardBorder} ${
+                      isInactive ? 'opacity-80' : ''
                     }`}
                   >
                     <div>
@@ -781,7 +779,7 @@ export const LpgCylinderPage: React.FC = () => {
                           </div>
                           <div>
                             <div className="flex items-center gap-1.5">
-                              <h3 className="font-black text-lg text-stone-900 dark:text-white leading-tight">
+                              <h3 className="font-black text-lg text-stone-900 leading-tight">
                                 {cyl.cylinder_code}
                               </h3>
                               {isConnected && (
@@ -791,7 +789,7 @@ export const LpgCylinderPage: React.FC = () => {
                                 </span>
                               )}
                             </div>
-                            <span className="text-[11px] text-stone-500 dark:text-stone-400 font-medium">
+                            <span className="text-[11px] text-stone-500 font-medium">
                               {cyl.supplier_name || 'Bharat Gas Agency'}
                             </span>
                           </div>
@@ -803,24 +801,24 @@ export const LpgCylinderPage: React.FC = () => {
                       </div>
 
                       {/* Details */}
-                      <div className="space-y-2 py-3 border-y border-stone-100 dark:border-stone-800 text-xs text-stone-600 dark:text-stone-300">
+                      <div className="space-y-2 py-3 border-y border-stone-100 text-xs text-stone-600">
                         <div className="flex justify-between items-center">
                           <span className="text-stone-500 font-medium flex items-center gap-1.5">
                             <MapPin className="w-3.5 h-3.5 text-stone-400" />
                             Place / स्थान:
                           </span>
-                          <span className="font-bold text-stone-900 dark:text-stone-100">
+                          <span className="font-bold text-stone-900">
                             {cyl.current_place || 'Storage / स्टोर'}
                           </span>
                         </div>
 
                         {isConnected && cyl.connected_at && (
-                          <div className="p-2 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/80 flex justify-between items-center text-amber-900 dark:text-amber-200">
-                            <span className="font-semibold flex items-center gap-1.5 text-amber-800 dark:text-amber-300">
+                          <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 flex justify-between items-center text-amber-950">
+                            <span className="font-semibold flex items-center gap-1.5 text-amber-800">
                               <Clock className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
                               Connected Time:
                             </span>
-                            <span className="font-black">
+                            <span className="font-black text-amber-900">
                               {formatDateTime(cyl.connected_at)}
                             </span>
                           </div>
@@ -831,13 +829,13 @@ export const LpgCylinderPage: React.FC = () => {
                             <Calendar className="w-3.5 h-3.5 text-stone-400" />
                             Last Movement:
                           </span>
-                          <span className="font-semibold text-stone-700 dark:text-stone-300">
+                          <span className="font-semibold text-stone-700">
                             {cyl.last_movement_at ? formatDateTime(cyl.last_movement_at) : 'N/A'}
                           </span>
                         </div>
 
                         {cyl.notes && (
-                          <div className="pt-1 text-[11px] text-stone-600 dark:text-stone-400 italic bg-stone-50 dark:bg-stone-800/60 p-2 rounded-lg border border-stone-100 dark:border-stone-800">
+                          <div className="pt-1 text-[11px] text-stone-600 italic bg-stone-50 p-2 rounded-lg border border-stone-100">
                             Remark: {cyl.notes}
                           </div>
                         )}
@@ -852,7 +850,7 @@ export const LpgCylinderPage: React.FC = () => {
                             size="sm"
                             variant="primary"
                             onClick={() => handleOpenMovementModal(cyl, 'connected')}
-                            className="bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-black min-h-[40px] text-xs shadow-2xs cursor-pointer"
+                            className="bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-bold min-h-[40px] text-xs shadow-xs cursor-pointer"
                           >
                             <Flame className="w-3.5 h-3.5 mr-1" />
                             Connect to Bhatti (भट्टी पर लगाएं)
@@ -864,7 +862,7 @@ export const LpgCylinderPage: React.FC = () => {
                             size="sm"
                             variant="outline"
                             onClick={() => handleOpenMovementModal(cyl, 'empty_removed')}
-                            className="border-rose-300 text-rose-800 dark:text-rose-200 bg-rose-50/60 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 font-bold min-h-[40px] text-xs cursor-pointer"
+                            className="border-rose-300 text-rose-800 bg-rose-50/60 hover:bg-rose-100 font-bold min-h-[40px] text-xs cursor-pointer"
                           >
                             <AlertCircle className="w-3.5 h-3.5 mr-1 text-rose-600" />
                             Mark Empty (खाली चिन्हित करें)
@@ -877,7 +875,7 @@ export const LpgCylinderPage: React.FC = () => {
                               size="sm"
                               variant="outline"
                               onClick={() => handleOpenMovementModal(cyl, 'refill_sent')}
-                              className="border-blue-300 text-blue-800 dark:text-blue-200 bg-blue-50/60 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 font-bold min-h-[40px] text-xs cursor-pointer"
+                              className="border-blue-300 text-blue-800 bg-blue-50/60 hover:bg-blue-100 font-bold min-h-[40px] text-xs cursor-pointer"
                             >
                               <Truck className="w-3.5 h-3.5 mr-1 text-blue-600" />
                               Send Refill (भरने भेजें)
@@ -886,7 +884,7 @@ export const LpgCylinderPage: React.FC = () => {
                               size="sm"
                               variant="primary"
                               onClick={() => handleOpenMovementModal(cyl, 'refill_received')}
-                              className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black min-h-[40px] text-xs shadow-2xs cursor-pointer"
+                              className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold min-h-[40px] text-xs shadow-xs cursor-pointer"
                             >
                               <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
                               Received Full (रिफिल मिला)
@@ -899,7 +897,7 @@ export const LpgCylinderPage: React.FC = () => {
                             size="sm"
                             variant="primary"
                             onClick={() => handleOpenMovementModal(cyl, 'refill_received')}
-                            className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-black min-h-[40px] text-xs shadow-2xs cursor-pointer"
+                            className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold min-h-[40px] text-xs shadow-xs cursor-pointer"
                           >
                             <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
                             Refill Received Full (रिफिल मिला)
@@ -911,7 +909,7 @@ export const LpgCylinderPage: React.FC = () => {
                             size="sm"
                             variant="outline"
                             onClick={() => handleReactivate(cyl)}
-                            className="border-teal-300 text-teal-800 dark:text-teal-200 bg-teal-50/60 dark:bg-teal-950/40 hover:bg-teal-100 dark:hover:bg-teal-900/60 font-bold min-h-[40px] text-xs cursor-pointer"
+                            className="border-teal-300 text-teal-800 bg-teal-50/60 hover:bg-teal-100 font-bold min-h-[40px] text-xs cursor-pointer"
                           >
                             <RotateCcw className="w-3.5 h-3.5 mr-1 text-teal-600" />
                             Reactivate (पुनः चालू करें)
@@ -925,7 +923,7 @@ export const LpgCylinderPage: React.FC = () => {
                           type="button"
                           onClick={() => handleOpenDeleteModal(cyl)}
                           title="Remove / Archive Cylinder"
-                          className="p-2.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-xl transition-colors cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center border border-transparent hover:border-rose-200"
+                          className="p-2.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center border border-transparent hover:border-rose-200"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -943,17 +941,17 @@ export const LpgCylinderPage: React.FC = () => {
       {activeTab === 'register' && (
         <div className="space-y-4">
           {filteredMovements.length === 0 ? (
-            <div className="text-center py-12 bg-stone-50 dark:bg-stone-900/50 rounded-2xl border border-dashed border-stone-300 dark:border-stone-800">
-              <FileText className="w-12 h-12 text-stone-300 dark:text-stone-700 mx-auto mb-3" />
-              <p className="text-stone-700 dark:text-stone-300 font-bold">No movements recorded yet.</p>
+            <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-stone-300">
+              <FileText className="w-12 h-12 text-stone-300 mx-auto mb-3" />
+              <p className="text-stone-700 font-bold">No movements recorded yet.</p>
               <p className="text-xs text-stone-400 mt-1">कोई मूवमेंट रिकॉर्ड उपलब्ध नहीं है।</p>
             </div>
           ) : (
             <>
               {/* Desktop Table View */}
-              <div className="hidden md:block overflow-x-auto bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-xs">
+              <div className="hidden md:block overflow-x-auto bg-white rounded-2xl border border-stone-200 shadow-xs">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-stone-50 dark:bg-stone-800/80 border-b border-stone-200 dark:border-stone-800 text-stone-600 dark:text-stone-400 font-bold">
+                  <thead className="bg-stone-50 border-b border-stone-200 text-stone-600 font-bold">
                     <tr>
                       <th className="p-3.5">Date & Time / दिनांक</th>
                       <th className="p-3.5">Cylinder ID</th>
@@ -965,7 +963,7 @@ export const LpgCylinderPage: React.FC = () => {
                       <th className="p-3.5 text-right">Action</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-stone-100 dark:divide-stone-800 text-stone-800 dark:text-stone-200">
+                  <tbody className="divide-y divide-stone-100 text-stone-800">
                     {filteredMovements.map((mov) => {
                       const cfg = MOVEMENT_TYPE_CONFIG[mov.movement_type] || {
                         labelHi: mov.movement_type,
@@ -975,15 +973,15 @@ export const LpgCylinderPage: React.FC = () => {
                       const durFormatted = mov.running_duration_display || mov.running_duration_text || formatLpgDuration(mov.running_duration_minutes);
 
                       return (
-                        <tr key={mov.id} className="hover:bg-stone-50/70 dark:hover:bg-stone-800/40 transition-colors">
+                        <tr key={mov.id} className="hover:bg-stone-50/70 transition-colors">
                           <td className="p-3.5 font-medium whitespace-nowrap">
-                            <div className="font-bold text-stone-900 dark:text-white">{formatDate(mov.movement_date)}</div>
+                            <div className="font-bold text-stone-900">{formatDate(mov.movement_date)}</div>
                             {mov.movement_time && (
                               <div className="text-[10px] text-stone-400 font-mono mt-0.5">{mov.movement_time}</div>
                             )}
                           </td>
                           <td className="p-3.5">
-                            <span className="font-black px-2.5 py-1 rounded-lg bg-stone-100 dark:bg-stone-800 text-stone-900 dark:text-stone-100 border border-stone-200 dark:border-stone-700">
+                            <span className="font-black px-2.5 py-1 rounded-lg bg-stone-100 text-stone-900 border border-stone-200">
                               {mov.cylinder?.cylinder_code || '—'}
                             </span>
                           </td>
@@ -992,12 +990,12 @@ export const LpgCylinderPage: React.FC = () => {
                               {cfg.labelHi}
                             </span>
                           </td>
-                          <td className="p-3.5 font-semibold text-stone-800 dark:text-stone-200">
+                          <td className="p-3.5 font-semibold text-stone-800">
                             {mov.bhatti_place || '—'}
                           </td>
                           <td className="p-3.5">
                             {durFormatted ? (
-                              <span className="font-black text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/70 px-2.5 py-1 rounded-lg border border-amber-300 dark:border-amber-700 shadow-2xs inline-flex items-center gap-1">
+                              <span className="font-bold text-amber-900 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-300 shadow-2xs inline-flex items-center gap-1">
                                 <Clock className="w-3 h-3 text-amber-600" />
                                 {durFormatted}
                               </span>
@@ -1006,14 +1004,14 @@ export const LpgCylinderPage: React.FC = () => {
                             )}
                           </td>
                           <td className="p-3.5">
-                            <div className="font-medium text-stone-900 dark:text-white">{mov.supplier_name || '—'}</div>
+                            <div className="font-medium text-stone-900">{mov.supplier_name || '—'}</div>
                             {mov.bill_number && (
-                              <div className="text-[10px] text-stone-500 font-mono mt-0.5 bg-stone-100 dark:bg-stone-800 px-1.5 py-0.5 rounded inline-block border border-stone-200 dark:border-stone-700">
+                              <div className="text-[10px] text-stone-500 font-mono mt-0.5 bg-stone-100 px-1.5 py-0.5 rounded inline-block border border-stone-200">
                                 Bill: {mov.bill_number}
                               </div>
                             )}
                           </td>
-                          <td className="p-3.5 max-w-xs truncate text-stone-600 dark:text-stone-400" title={mov.notes || ''}>
+                          <td className="p-3.5 max-w-xs truncate text-stone-600" title={mov.notes || ''}>
                             {mov.notes || '—'}
                           </td>
                           <td className="p-3.5 text-right whitespace-nowrap">
@@ -1022,7 +1020,7 @@ export const LpgCylinderPage: React.FC = () => {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => handleOpenCorrectModal(mov)}
-                                className="font-bold text-xs min-h-[36px] border-purple-200 text-purple-800 dark:text-purple-200 dark:border-purple-800/80 hover:bg-purple-50 dark:hover:bg-purple-950/60 cursor-pointer shadow-2xs"
+                                className="font-bold text-xs min-h-[36px] border-purple-200 text-purple-800 hover:bg-purple-50 cursor-pointer shadow-2xs"
                               >
                                 <Edit3 className="w-3 h-3 mr-1 text-purple-600" />
                                 Correct (सुधार)
@@ -1049,14 +1047,14 @@ export const LpgCylinderPage: React.FC = () => {
                   return (
                     <div
                       key={mov.id}
-                      className="p-4 bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-2xs space-y-2.5"
+                      className="p-4 bg-white rounded-2xl border border-stone-200 shadow-xs space-y-2.5"
                     >
                       <div className="flex justify-between items-start">
                         <div className="flex items-center gap-2">
-                          <span className="font-black text-sm px-2.5 py-1 rounded-lg bg-stone-100 dark:bg-stone-800 text-stone-900 dark:text-stone-100 border border-stone-200 dark:border-stone-700">
+                          <span className="font-black text-sm px-2.5 py-1 rounded-lg bg-stone-100 text-stone-900 border border-stone-200">
                             {mov.cylinder?.cylinder_code || '—'}
                           </span>
-                          <span className="text-xs font-bold text-stone-800 dark:text-stone-200">
+                          <span className="text-xs font-bold text-stone-800">
                             {formatDate(mov.movement_date)} {mov.movement_time || ''}
                           </span>
                         </div>
@@ -1065,17 +1063,17 @@ export const LpgCylinderPage: React.FC = () => {
                         </span>
                       </div>
 
-                      <div className="text-xs text-stone-600 dark:text-stone-300 space-y-1.5 bg-stone-50 dark:bg-stone-800/50 p-3 rounded-xl border border-stone-100 dark:border-stone-800">
+                      <div className="text-xs text-stone-600 space-y-1.5 bg-stone-50 p-3 rounded-xl border border-stone-100">
                         {mov.bhatti_place && (
                           <div className="flex justify-between">
                             <span className="text-stone-500 font-medium">Place / स्थान:</span>
-                            <span className="font-bold text-stone-900 dark:text-stone-100">{mov.bhatti_place}</span>
+                            <span className="font-bold text-stone-900">{mov.bhatti_place}</span>
                           </div>
                         )}
                         {durFormatted && (
                           <div className="flex justify-between items-center">
                             <span className="text-stone-500 font-medium">Running Duration:</span>
-                            <span className="font-black text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/70 px-2 py-0.5 rounded border border-amber-300 dark:border-amber-700">
+                            <span className="font-bold text-amber-900 bg-amber-50 px-2 py-0.5 rounded border border-amber-300">
                               ⏱️ {durFormatted}
                             </span>
                           </div>
@@ -1083,17 +1081,17 @@ export const LpgCylinderPage: React.FC = () => {
                         {mov.supplier_name && (
                           <div className="flex justify-between">
                             <span className="text-stone-500 font-medium">Supplier:</span>
-                            <span className="font-semibold text-stone-800 dark:text-stone-200">{mov.supplier_name}</span>
+                            <span className="font-semibold text-stone-800">{mov.supplier_name}</span>
                           </div>
                         )}
                         {mov.bill_number && (
                           <div className="flex justify-between">
                             <span className="text-stone-500 font-medium">Bill No:</span>
-                            <span className="font-mono text-stone-700 dark:text-stone-300 font-semibold">{mov.bill_number}</span>
+                            <span className="font-mono text-stone-700 font-semibold">{mov.bill_number}</span>
                           </div>
                         )}
                         {mov.notes && (
-                          <div className="pt-1 text-[11px] text-stone-500 dark:text-stone-400 italic">
+                          <div className="pt-1 text-[11px] text-stone-500 italic">
                             Remark: {mov.notes}
                           </div>
                         )}
@@ -1105,7 +1103,7 @@ export const LpgCylinderPage: React.FC = () => {
                             size="sm"
                             variant="outline"
                             onClick={() => handleOpenCorrectModal(mov)}
-                            className="font-bold text-xs min-h-[38px] border-purple-200 text-purple-800 dark:text-purple-200 dark:border-purple-800 hover:bg-purple-50 dark:hover:bg-purple-950/50 cursor-pointer shadow-2xs"
+                            className="font-bold text-xs min-h-[38px] border-purple-200 text-purple-800 hover:bg-purple-50 cursor-pointer shadow-2xs"
                           >
                             <Edit3 className="w-3.5 h-3.5 mr-1 text-purple-600" />
                             Correct Entry (प्रविष्टि सुधार)
@@ -1126,7 +1124,7 @@ export const LpgCylinderPage: React.FC = () => {
         <button
           type="button"
           onClick={() => handleOpenMovementModal()}
-          className="flex items-center gap-2 px-5 py-3.5 bg-gradient-to-r from-orange-600 to-amber-600 text-white rounded-full font-black text-sm shadow-xl shadow-orange-600/30 hover:from-orange-700 hover:to-amber-700 active:scale-95 transition-all min-h-[48px] cursor-pointer"
+          className="flex items-center gap-2 px-5 py-3.5 bg-amber-600 text-white rounded-full font-bold text-sm shadow-xl shadow-amber-600/30 hover:bg-amber-700 active:scale-95 transition-all min-h-[48px] cursor-pointer"
         >
           <Flame className="w-5 h-5" />
           <span>+ सिलेंडर एंट्री</span>
@@ -1143,14 +1141,14 @@ export const LpgCylinderPage: React.FC = () => {
         <form onSubmit={handleMovementSubmit} className="space-y-4 py-1">
           {/* Step 1: Cylinder Selection */}
           <div>
-            <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1.5">
+            <label className="block text-xs font-bold text-stone-700 mb-1.5">
               Select Cylinder / सिलेंडर चुनें *
             </label>
             <select
               value={selectedCylId}
               onChange={(e) => handleCylinderSelectChange(e.target.value)}
               required
-              className="w-full px-3 py-2.5 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl text-sm font-bold text-stone-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:border-amber-500 min-h-[44px] shadow-2xs"
+              className="w-full px-3 py-2.5 bg-white border border-stone-300 rounded-xl text-sm font-bold text-stone-900 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 min-h-[44px] shadow-2xs"
             >
               {cylinders
                 .filter((c) => c.is_active !== false && c.status !== 'inactive')
@@ -1164,15 +1162,15 @@ export const LpgCylinderPage: React.FC = () => {
                 })}
             </select>
             {selectedCylinderObj && (
-              <p className="text-[11px] text-stone-500 dark:text-stone-400 mt-1 font-medium">
-                Current Status: <span className="font-bold text-amber-700 dark:text-amber-400">{STATUS_CONFIG[selectedCylinderObj.status]?.labelHi}</span> | Location: {selectedCylinderObj.current_place || 'Storage'}
+              <p className="text-[11px] text-stone-500 mt-1 font-medium">
+                Current Status: <span className="font-bold text-amber-700">{STATUS_CONFIG[selectedCylinderObj.status]?.labelHi}</span> | Location: {selectedCylinderObj.current_place || 'Storage'}
               </p>
             )}
           </div>
 
           {/* Step 2: Movement Action */}
           <div>
-            <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1.5">
+            <label className="block text-xs font-bold text-stone-700 mb-1.5">
               Select Action / गतिविधि चुनें *
             </label>
             <div className="grid grid-cols-2 gap-2.5">
@@ -1182,7 +1180,7 @@ export const LpgCylinderPage: React.FC = () => {
                   labelHi: 'भट्टी पर लगाएं',
                   labelEn: 'Connect to Bhatti',
                   allowed: selectedCylinderObj?.status === 'full',
-                  activeBorder: 'border-amber-500 bg-amber-50/90 dark:bg-amber-950/70 text-amber-900 dark:text-amber-200 ring-2 ring-amber-500',
+                  activeBorder: 'border-amber-500 bg-amber-50 text-amber-950 ring-2 ring-amber-500',
                   icon: Flame,
                   iconClass: 'text-amber-600',
                 },
@@ -1191,7 +1189,7 @@ export const LpgCylinderPage: React.FC = () => {
                   labelHi: 'खाली / हटाएं',
                   labelEn: 'Mark Empty / Removed',
                   allowed: selectedCylinderObj?.status === 'connected' || selectedCylinderObj?.status === 'in_use',
-                  activeBorder: 'border-rose-500 bg-rose-50/90 dark:bg-rose-950/70 text-rose-900 dark:text-rose-200 ring-2 ring-rose-500',
+                  activeBorder: 'border-rose-500 bg-rose-50 text-rose-950 ring-2 ring-rose-500',
                   icon: AlertCircle,
                   iconClass: 'text-rose-600',
                 },
@@ -1200,7 +1198,7 @@ export const LpgCylinderPage: React.FC = () => {
                   labelHi: 'भरने भेजें',
                   labelEn: 'Send for Refill',
                   allowed: selectedCylinderObj?.status === 'empty',
-                  activeBorder: 'border-blue-500 bg-blue-50/90 dark:bg-blue-950/70 text-blue-900 dark:text-blue-200 ring-2 ring-blue-500',
+                  activeBorder: 'border-blue-500 bg-blue-50 text-blue-950 ring-2 ring-blue-500',
                   icon: Truck,
                   iconClass: 'text-blue-600',
                 },
@@ -1209,7 +1207,7 @@ export const LpgCylinderPage: React.FC = () => {
                   labelHi: 'रिफिल मिला (Full)',
                   labelEn: 'Refill Received',
                   allowed: selectedCylinderObj?.status === 'sent_for_refill' || selectedCylinderObj?.status === 'empty',
-                  activeBorder: 'border-emerald-500 bg-emerald-50/90 dark:bg-emerald-950/70 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-500',
+                  activeBorder: 'border-emerald-500 bg-emerald-50 text-emerald-950 ring-2 ring-emerald-500',
                   icon: CheckCircle2,
                   iconClass: 'text-emerald-600',
                 },
@@ -1224,15 +1222,15 @@ export const LpgCylinderPage: React.FC = () => {
                       isSelected
                         ? `${activeBorder} font-bold shadow-xs`
                         : allowed
-                        ? 'border-stone-200 dark:border-stone-700 hover:border-amber-300 dark:hover:border-amber-700 bg-white dark:bg-stone-900 text-stone-900 dark:text-white'
-                        : 'opacity-40 border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-stone-800/40 text-stone-400 cursor-not-allowed'
+                        ? 'border-stone-200 hover:border-amber-300 bg-white text-stone-900'
+                        : 'opacity-40 border-stone-200 bg-stone-50 text-stone-400 cursor-not-allowed'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-0.5">
-                      <span className="text-xs font-black">{labelHi}</span>
+                      <span className="text-xs font-bold">{labelHi}</span>
                       <ActionIcon className={`w-3.5 h-3.5 ${isSelected ? 'text-current' : iconClass}`} />
                     </div>
-                    <div className="text-[10px] text-stone-500 dark:text-stone-400 font-medium">{labelEn}</div>
+                    <div className="text-[10px] text-stone-500 font-medium">{labelEn}</div>
                   </button>
                 );
               })}
@@ -1240,10 +1238,10 @@ export const LpgCylinderPage: React.FC = () => {
           </div>
 
           {/* Dynamic Relevant Fields */}
-          <div className="p-3.5 bg-stone-50 dark:bg-stone-850 rounded-xl border border-stone-200 dark:border-stone-700 space-y-3">
+          <div className="p-3.5 bg-stone-50 rounded-xl border border-stone-200 space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
+                <label className="block text-xs font-semibold text-stone-700 mb-1">
                   Date / दिनांक *
                 </label>
                 <input
@@ -1251,19 +1249,19 @@ export const LpgCylinderPage: React.FC = () => {
                   value={movDate}
                   onChange={(e) => setMovDate(e.target.value)}
                   required
-                  className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-amber-500"
+                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-sm text-stone-900 min-h-[44px] focus:ring-2 focus:ring-amber-500"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
+                <label className="block text-xs font-semibold text-stone-700 mb-1">
                   Time / समय
                 </label>
                 <input
                   type="time"
                   value={movTime}
                   onChange={(e) => setMovTime(e.target.value)}
-                  className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-amber-500"
+                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-sm text-stone-900 min-h-[44px] focus:ring-2 focus:ring-amber-500"
                 />
               </div>
             </div>
@@ -1271,14 +1269,14 @@ export const LpgCylinderPage: React.FC = () => {
             {/* Connect Action Specific Fields */}
             {movAction === 'connected' && (
               <div>
-                <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
+                <label className="block text-xs font-semibold text-stone-700 mb-1">
                   Bhatti / Place (भट्टी का स्थान) *
                 </label>
                 <div className="flex gap-2">
                   <select
                     value={movPlace}
                     onChange={(e) => setMovPlace(e.target.value)}
-                    className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-lg text-sm font-bold text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-amber-500"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-sm font-bold text-stone-900 min-h-[44px] focus:ring-2 focus:ring-amber-500"
                   >
                     {BHATTI_PLACES.map((p) => (
                       <option key={p} value={p}>
@@ -1292,7 +1290,7 @@ export const LpgCylinderPage: React.FC = () => {
 
             {/* Empty/Removed Action Details */}
             {movAction === 'empty_removed' && (
-              <div className="p-3 bg-amber-50/90 dark:bg-amber-950/50 rounded-xl border border-amber-300 dark:border-amber-700 text-xs text-amber-900 dark:text-amber-200">
+              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-950">
                 <p className="font-bold flex items-center gap-1.5">
                   <Clock className="w-4 h-4 text-amber-600" />
                   Running Duration (कार्यकाल):
@@ -1307,7 +1305,7 @@ export const LpgCylinderPage: React.FC = () => {
             {(movAction === 'refill_sent' || movAction === 'refill_received') && (
               <>
                 <div>
-                  <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
+                  <label className="block text-xs font-semibold text-stone-700 mb-1">
                     Supplier (गैस एजेंसी / आपूर्तिकर्ता)
                   </label>
                   <input
@@ -1315,12 +1313,12 @@ export const LpgCylinderPage: React.FC = () => {
                     value={movSupplier}
                     onChange={(e) => setMovSupplier(e.target.value)}
                     placeholder="Bharat Gas Agency"
-                    className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-amber-500"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-sm text-stone-900 min-h-[44px] focus:ring-2 focus:ring-amber-500"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
+                  <label className="block text-xs font-semibold text-stone-700 mb-1">
                     Bill / Challan No. (बिल नंबर - Optional)
                   </label>
                   <input
@@ -1328,7 +1326,7 @@ export const LpgCylinderPage: React.FC = () => {
                     value={movBill}
                     onChange={(e) => setMovBill(e.target.value)}
                     placeholder="e.g. BG-9482"
-                    className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-amber-500 font-mono"
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-sm text-stone-900 min-h-[44px] focus:ring-2 focus:ring-amber-500 font-mono"
                   />
                 </div>
               </>
@@ -1336,7 +1334,7 @@ export const LpgCylinderPage: React.FC = () => {
 
             {/* Remark / Notes */}
             <div>
-              <label className="block text-xs font-semibold text-stone-700 dark:text-stone-300 mb-1">
+              <label className="block text-xs font-semibold text-stone-700 mb-1">
                 Remark / टिप्पणी (Optional)
               </label>
               <input
@@ -1344,12 +1342,12 @@ export const LpgCylinderPage: React.FC = () => {
                 value={movNotes}
                 onChange={(e) => setMovNotes(e.target.value)}
                 placeholder="e.g. Changed after batch 2"
-                className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-lg text-sm text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-amber-500"
+                className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-sm text-stone-900 min-h-[44px] focus:ring-2 focus:ring-amber-500"
               />
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-200 dark:border-stone-800">
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-200">
             <Button
               type="button"
               variant="outline"
@@ -1364,7 +1362,7 @@ export const LpgCylinderPage: React.FC = () => {
               variant="primary"
               size="md"
               isLoading={recordMovementMutation.isPending}
-              className="bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white font-black min-h-[44px] shadow-sm cursor-pointer"
+              className="bg-amber-600 hover:bg-amber-700 text-white font-bold min-h-[44px] shadow-sm cursor-pointer"
             >
               Save Entry / प्रविष्टि सहेजें
             </Button>
@@ -1381,7 +1379,7 @@ export const LpgCylinderPage: React.FC = () => {
       >
         <form onSubmit={handleAddSubmit} className="space-y-4 py-1">
           <div>
-            <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+            <label className="block text-xs font-bold text-stone-700 mb-1">
               Cylinder ID / Code *
             </label>
             <input
@@ -1390,22 +1388,22 @@ export const LpgCylinderPage: React.FC = () => {
               onChange={(e) => setAddCode(e.target.value.toUpperCase())}
               placeholder="C-5"
               required
-              className="w-full px-3 py-2.5 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl font-mono font-bold text-base text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-amber-500"
+              className="w-full px-3 py-2.5 bg-white border border-stone-300 rounded-xl font-mono font-bold text-base text-stone-900 min-h-[44px] focus:ring-2 focus:ring-amber-500"
             />
-            <p className="text-[11px] text-stone-500 dark:text-stone-400 mt-1">
+            <p className="text-[11px] text-stone-500 mt-1">
               Suggested next code: <span className="font-bold text-amber-600">{getNextSuggestedCode(cylinders)}</span>
             </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+              <label className="block text-xs font-bold text-stone-700 mb-1">
                 Initial Status / प्रारंभिक स्थिति *
               </label>
               <select
                 value={addStatus}
                 onChange={(e) => setAddStatus(e.target.value as SimpleLpgCylinderStatus)}
-                className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl text-sm font-bold text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-amber-500"
+                className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm font-bold text-stone-900 min-h-[44px] focus:ring-2 focus:ring-amber-500"
               >
                 <option value="full">Full / भरा हुआ</option>
                 <option value="empty">Empty / खाली</option>
@@ -1415,20 +1413,20 @@ export const LpgCylinderPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+              <label className="block text-xs font-bold text-stone-700 mb-1">
                 Starting Date / तिथि
               </label>
               <input
                 type="date"
                 value={addStartDate}
                 onChange={(e) => setAddStartDate(e.target.value)}
-                className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl text-sm text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-amber-500"
+                className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 min-h-[44px] focus:ring-2 focus:ring-amber-500"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+            <label className="block text-xs font-bold text-stone-700 mb-1">
               Supplier / आपूर्तिकर्ता (Optional)
             </label>
             <input
@@ -1436,12 +1434,12 @@ export const LpgCylinderPage: React.FC = () => {
               value={addSupplierName}
               onChange={(e) => setAddSupplierName(e.target.value)}
               placeholder="Bharat Gas Agency"
-              className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl text-sm text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-amber-500"
+              className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 min-h-[44px] focus:ring-2 focus:ring-amber-500"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+            <label className="block text-xs font-bold text-stone-700 mb-1">
               Remark / टिप्पणी (Optional)
             </label>
             <textarea
@@ -1449,11 +1447,11 @@ export const LpgCylinderPage: React.FC = () => {
               onChange={(e) => setAddNotes(e.target.value)}
               rows={2}
               placeholder="e.g. New commercial cylinder purchase"
-              className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl text-sm text-stone-900 dark:text-white focus:ring-2 focus:ring-amber-500"
+              className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 focus:ring-2 focus:ring-amber-500"
             />
           </div>
 
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-200 dark:border-stone-800">
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-200">
             <Button
               type="button"
               variant="outline"
@@ -1468,7 +1466,7 @@ export const LpgCylinderPage: React.FC = () => {
               variant="primary"
               size="md"
               isLoading={addCylinderMutation.isPending}
-              className="bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white font-black min-h-[44px] shadow-sm cursor-pointer"
+              className="bg-amber-600 hover:bg-amber-700 text-white font-bold min-h-[44px] shadow-sm cursor-pointer"
             >
               + Add Cylinder / जोड़ें
             </Button>
@@ -1485,23 +1483,23 @@ export const LpgCylinderPage: React.FC = () => {
       >
         <form onSubmit={handleDeleteSubmit} className="space-y-4 py-1">
           {targetCylinder && (
-            <div className="p-3.5 bg-stone-50 dark:bg-stone-800/60 rounded-xl border border-stone-200 dark:border-stone-700">
+            <div className="p-3.5 bg-stone-50 rounded-xl border border-stone-200">
               <div className="flex justify-between items-center">
                 <span className="text-xs text-stone-500 font-medium">Cylinder Code:</span>
-                <span className="font-black text-base text-stone-900 dark:text-white">
+                <span className="font-black text-base text-stone-900">
                   {targetCylinder.cylinder_code}
                 </span>
               </div>
               <div className="flex justify-between items-center mt-1">
                 <span className="text-xs text-stone-500 font-medium">Current Status:</span>
-                <span className="text-xs font-bold text-amber-700 dark:text-amber-400">
+                <span className="text-xs font-bold text-amber-700">
                   {STATUS_CONFIG[targetCylinder.status]?.labelHi} ({STATUS_CONFIG[targetCylinder.status]?.labelEn})
                 </span>
               </div>
             </div>
           )}
 
-          <div className="p-3 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700 rounded-xl text-xs text-amber-900 dark:text-amber-200 space-y-1">
+          <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-950 space-y-1">
             <p className="font-bold flex items-center gap-1.5">
               <AlertTriangle className="w-4 h-4 text-amber-600" />
               Deletion & Archival Rules:
@@ -1514,7 +1512,7 @@ export const LpgCylinderPage: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+            <label className="block text-xs font-bold text-stone-700 mb-1">
               Reason for Removal / हटाने का कारण * (अनिवार्य)
             </label>
             <textarea
@@ -1523,11 +1521,11 @@ export const LpgCylinderPage: React.FC = () => {
               required
               rows={3}
               placeholder="e.g. Cylinder returned to agency / Cylinder replaced"
-              className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl text-sm text-stone-900 dark:text-white focus:ring-2 focus:ring-rose-500"
+              className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 focus:ring-2 focus:ring-rose-500"
             />
           </div>
 
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-200 dark:border-stone-800">
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-200">
             <Button
               type="button"
               variant="outline"
@@ -1542,7 +1540,7 @@ export const LpgCylinderPage: React.FC = () => {
               variant="primary"
               size="md"
               isLoading={deleteArchiveMutation.isPending}
-              className="bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-black min-h-[44px] shadow-sm cursor-pointer"
+              className="bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-bold min-h-[44px] shadow-sm cursor-pointer"
             >
               <Trash2 className="w-4 h-4 mr-1" />
               Confirm Removal / हटाएं
@@ -1560,16 +1558,16 @@ export const LpgCylinderPage: React.FC = () => {
       >
         <form onSubmit={handleCorrectSubmit} className="space-y-4 py-1">
           {targetMovement && (
-            <div className="p-3 bg-purple-50 dark:bg-purple-950/50 rounded-xl border border-purple-200 dark:border-purple-800 text-xs text-purple-900 dark:text-purple-200">
-              <span className="text-purple-700 dark:text-purple-300 font-medium">Original Movement: </span>
-              <span className="font-black text-purple-950 dark:text-white">
+            <div className="p-3 bg-purple-50 rounded-xl border border-purple-200 text-xs text-purple-950">
+              <span className="text-purple-700 font-medium">Original Movement: </span>
+              <span className="font-black text-purple-950">
                 {targetMovement.cylinder?.cylinder_code} — {MOVEMENT_TYPE_CONFIG[targetMovement.movement_type]?.labelHi} ({formatDate(targetMovement.movement_date)})
               </span>
             </div>
           )}
 
           <div>
-            <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+            <label className="block text-xs font-bold text-stone-700 mb-1">
               Reason for Correction / सुधार का कारण * (अनिवार्य)
             </label>
             <textarea
@@ -1578,19 +1576,19 @@ export const LpgCylinderPage: React.FC = () => {
               required
               rows={2}
               placeholder="e.g. Wrong bhatti entered by mistake"
-              className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl text-sm text-stone-900 dark:text-white focus:ring-2 focus:ring-purple-500"
+              className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 focus:ring-2 focus:ring-purple-500"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+              <label className="block text-xs font-bold text-stone-700 mb-1">
                 Corrected Action / सही गतिविधि *
               </label>
               <select
                 value={corrType}
                 onChange={(e) => setCorrType(e.target.value as SimpleLpgMovementType)}
-                className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl text-sm font-bold text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-purple-500"
+                className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm font-bold text-stone-900 min-h-[44px] focus:ring-2 focus:ring-purple-500"
               >
                 <option value="connected">Connected / भट्टी पर लगाया</option>
                 <option value="empty_removed">Empty / Removed (खाली किया)</option>
@@ -1600,20 +1598,20 @@ export const LpgCylinderPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+              <label className="block text-xs font-bold text-stone-700 mb-1">
                 Date / दिनांक
               </label>
               <input
                 type="date"
                 value={corrDate}
                 onChange={(e) => setCorrDate(e.target.value)}
-                className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl text-sm text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-purple-500"
+                className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 min-h-[44px] focus:ring-2 focus:ring-purple-500"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+            <label className="block text-xs font-bold text-stone-700 mb-1">
               Place / भट्टी का स्थान
             </label>
             <input
@@ -1621,13 +1619,13 @@ export const LpgCylinderPage: React.FC = () => {
               value={corrPlace}
               onChange={(e) => setCorrPlace(e.target.value)}
               placeholder="Kulfi Bhatti 1"
-              className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl text-sm text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-purple-500"
+              className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 min-h-[44px] focus:ring-2 focus:ring-purple-500"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+              <label className="block text-xs font-bold text-stone-700 mb-1">
                 Supplier
               </label>
               <input
@@ -1635,12 +1633,12 @@ export const LpgCylinderPage: React.FC = () => {
                 value={corrSupplier}
                 onChange={(e) => setCorrSupplier(e.target.value)}
                 placeholder="Bharat Gas Agency"
-                className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl text-sm text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-purple-500"
+                className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 min-h-[44px] focus:ring-2 focus:ring-purple-500"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
+              <label className="block text-xs font-bold text-stone-700 mb-1">
                 Bill Number
               </label>
               <input
@@ -1648,12 +1646,12 @@ export const LpgCylinderPage: React.FC = () => {
                 value={corrBill}
                 onChange={(e) => setCorrBill(e.target.value)}
                 placeholder="BG-1234"
-                className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-700 rounded-xl text-sm text-stone-900 dark:text-white min-h-[44px] focus:ring-2 focus:ring-purple-500 font-mono"
+                className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm text-stone-900 min-h-[44px] focus:ring-2 focus:ring-purple-500 font-mono"
               />
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-200 dark:border-stone-800">
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-200">
             <Button
               type="button"
               variant="outline"
@@ -1668,7 +1666,7 @@ export const LpgCylinderPage: React.FC = () => {
               variant="primary"
               size="md"
               isLoading={correctMovementMutation.isPending}
-              className="bg-purple-600 hover:bg-purple-700 active:bg-purple-800 text-white font-black min-h-[44px] shadow-sm cursor-pointer"
+              className="bg-purple-600 hover:bg-purple-700 active:bg-purple-800 text-white font-bold min-h-[44px] shadow-sm cursor-pointer"
             >
               Submit Correction / सुधार दर्ज करें
             </Button>
