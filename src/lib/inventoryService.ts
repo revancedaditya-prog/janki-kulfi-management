@@ -72,10 +72,12 @@ export function formatIngredientQuantityWithUnit(
 ): string {
   const qty = Number(quantity) || 0;
   if (baseUnit === 'g' && qty >= 1000) {
-    return `${(qty / 1000).toFixed(2).replace(/\.00$/, '')} kg (${qty.toLocaleString()} g)`;
+    const formattedKg = parseFloat((qty / 1000).toFixed(2));
+    return `${formattedKg} kg (${qty.toLocaleString()} g)`;
   }
   if (baseUnit === 'ml' && qty >= 1000) {
-    return `${(qty / 1000).toFixed(2).replace(/\.00$/, '')} L (${qty.toLocaleString()} ml)`;
+    const formattedL = parseFloat((qty / 1000).toFixed(2));
+    return `${formattedL} L (${qty.toLocaleString()} ml)`;
   }
   return `${qty.toLocaleString()} ${baseUnit}`;
 }

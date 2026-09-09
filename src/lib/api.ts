@@ -70,6 +70,29 @@ export function isRpcMissingError(err: any): boolean {
   );
 }
 
+export function getIndiaMonthBounds(targetDate: Date = new Date()): { startOfMonth: string; endOfMonth: string } {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const parts = formatter.formatToParts(targetDate);
+    const year = parts.find((p) => p.type === 'year')?.value || String(targetDate.getFullYear());
+    const month = parts.find((p) => p.type === 'month')?.value || String(targetDate.getMonth() + 1).padStart(2, '0');
+    const startOfMonth = `${year}-${month}-01`;
+    const lastDay = new Date(Number(year), Number(month), 0).getDate();
+    const endOfMonth = `${year}-${month}-${String(lastDay).padStart(2, '0')}`;
+    return { startOfMonth, endOfMonth };
+  } catch {
+    const now = targetDate;
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+    return { startOfMonth, endOfMonth };
+  }
+}
+
 export async function resolveSupabaseIngredientId(ingredientId: string): Promise<string> {
   if (!ingredientId) return ingredientId;
 
@@ -104,11 +127,6 @@ export async function resolveSupabaseIngredientId(ingredientId: string): Promise
       if (data && data.length > 0 && data[0].id) {
         return data[0].id;
       }
-      // If code/name query returned nothing, fallback to first available ingredient
-      const { data: fallbackAll } = await (supabase as any).from('ingredients').select('id').limit(1);
-      if (fallbackAll && fallbackAll.length > 0 && fallbackAll[0].id) {
-        return fallbackAll[0].id;
-      }
     } catch {}
   }
   return ingredientId;
@@ -132,8 +150,6 @@ export async function resolveSupabaseSupplierId(supplierId?: string | null): Pro
         const { data } = await (supabase as any).from('suppliers').select('id').ilike('name', name).limit(1);
         if (data && data.length > 0 && data[0].id) return data[0].id;
       }
-      const { data: anySup } = await (supabase as any).from('suppliers').select('id').limit(1);
-      if (anySup && anySup.length > 0 && anySup[0].id) return anySup[0].id;
     } catch {}
   }
   return isValidUuid(supplierId) ? supplierId : null;
@@ -3470,12 +3486,16 @@ export const api = {
     }
     const { data, error } = await query;
     if (!error && data && data.length > 0) {
-      return data.map((ing: any) => ({
-        ...ing,
-        id: ing.id || ing.ingredient_id,
-        current_stock: Number(ing.current_stock ?? ing.available_quantity ?? ing.available_base_quantity) || 0,
-        current_rate: Number(ing.current_rate ?? ing.latest_purchase_rate) || 0,
-      }));
+      return data.map((ing: any) => {
+        const stock = Number(ing.current_stock ?? ing.available_quantity ?? ing.available_base_quantity) || 0;
+        return {
+          ...ing,
+          id: ing.id || ing.ingredient_id,
+          current_stock: stock,
+          available_base_quantity: stock,
+          current_rate: Number(ing.current_rate ?? ing.latest_purchase_rate) || 0,
+        };
+      });
     }
 
     // 2. Try v_raw_material_stock
@@ -3485,12 +3505,16 @@ export const api = {
     }
     const { data: vData, error: vError } = await vQuery;
     if (!vError && vData && vData.length > 0) {
-      return vData.map((ing: any) => ({
-        ...ing,
-        id: ing.id || ing.ingredient_id,
-        current_stock: Number(ing.current_stock ?? ing.available_quantity ?? ing.available_base_quantity) || 0,
-        current_rate: Number(ing.current_rate ?? ing.latest_purchase_rate) || 0,
-      }));
+      return vData.map((ing: any) => {
+        const stock = Number(ing.current_stock ?? ing.available_quantity ?? ing.available_base_quantity) || 0;
+        return {
+          ...ing,
+          id: ing.id || ing.ingredient_id,
+          current_stock: stock,
+          available_base_quantity: stock,
+          current_rate: Number(ing.current_rate ?? ing.latest_purchase_rate) || 0,
+        };
+      });
     }
 
     // 3. Fallback: query ingredients table directly and calculate from movements
@@ -3515,12 +3539,16 @@ export const api = {
       }
     }
 
-    return (rawData || []).map((ing: any) => ({
-      ...ing,
-      id: ing.id,
-      current_stock: balances[ing.id] || 0,
-      current_rate: Number(ing.current_rate) || 0,
-    }));
+    return (rawData || []).map((ing: any) => {
+      const stock = balances[ing.id] || 0;
+      return {
+        ...ing,
+        id: ing.id,
+        current_stock: stock,
+        available_base_quantity: stock,
+        current_rate: Number(ing.current_rate) || 0,
+      };
+    });
   },
 
   async getIngredientById(id: string): Promise<Ingredient | undefined> {
@@ -3556,6 +3584,7 @@ export const api = {
         ...rawData,
         id: rawData.id,
         current_stock: currentStock,
+        available_base_quantity: currentStock,
         current_rate: Number(rawData.current_rate) || 0,
       };
     }
@@ -3572,10 +3601,12 @@ export const api = {
     }
 
     if (data) {
+      const stock = Number(data.current_stock ?? data.available_quantity ?? data.available_base_quantity) || 0;
       return {
         ...data,
         id: data.id || data.ingredient_id,
-        current_stock: Number(data.current_stock ?? data.available_quantity ?? data.available_base_quantity) || 0,
+        current_stock: stock,
+        available_base_quantity: stock,
         current_rate: Number(data.current_rate ?? data.latest_purchase_rate) || 0,
       };
     }
@@ -3604,6 +3635,7 @@ export const api = {
           ...ing,
           id: ing.id,
           current_stock: currentStock,
+          available_base_quantity: currentStock,
           current_rate: Number(ing.current_rate) || 0,
         };
       }
@@ -3863,27 +3895,25 @@ export const api = {
       }
     }
 
-    // 2. Purchases this month (from material_purchases)
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString().split('T')[0];
+    // 2. Purchases this month (from material_purchases in Asia/Kolkata business timezone)
+    const { startOfMonth, endOfMonth } = getIndiaMonthBounds();
 
     const { data: purchaseData, error: purchaseError } = await (supabase as any)
       .from('material_purchases')
-      .select('grand_total, status')
+      .select('total_amount, status')
       .gte('purchase_date', startOfMonth)
       .lte('purchase_date', endOfMonth)
       .neq('status', 'cancelled');
 
     if (purchaseError) {
       if (purchaseError.code === 'PGRST205' || purchaseError.code === '42P01') {
-        console.warn('[Supabase] Table material_purchases not found in schema cache. Please run migration 025 in Supabase SQL editor.');
+        console.warn('[Supabase] Table material_purchases not found in schema cache.');
       } else {
         throw new Error(`[Dashboard KPIs Purchases ${purchaseError.code || ''}]: ${purchaseError.message}`);
       }
     }
 
-    const purchasesThisMonth = (purchaseData || []).reduce((sum: number, p: any) => sum + Number(p.grand_total || 0), 0);
+    const purchasesThisMonth = (purchaseData || []).reduce((sum: number, p: any) => sum + Number(p.total_amount || 0), 0);
 
     // 3. Production consumption this month (from raw_material_movements where movement_type = 'production_consumption' or 'production')
     const { data: consumptionData, error: consumError } = await (supabase as any)
@@ -3982,6 +4012,7 @@ export const api = {
       credit_amount?: number;
       bill_image_url?: string | null;
       notes?: string | null;
+      idempotency_key?: string | null;
       items: {
         ingredient_id: string;
         purchased_quantity: number;
@@ -4011,12 +4042,13 @@ export const api = {
     const resolvedSupplierId = await resolveSupabaseSupplierId(data.supplier_id);
     const safeUserId = toSafeUuid(userId) || '00000000-0000-0000-0000-000000000001';
     const safeSupplierId = toSafeUuid(resolvedSupplierId);
+    const idempotencyKey = toSafeUuid(data.idempotency_key) || null;
 
-    // 1. Attempt RPC
+    // 1. Attempt Atomic RPC 'confirm_material_purchase_atomic'
     let rpcPurchaseId: string | null = null;
     try {
       const { data: result, error: rpcError } = await (supabase as any).rpc(
-        'confirm_material_purchase_transaction',
+        'confirm_material_purchase_atomic',
         {
           p_purchase_date: data.purchase_date,
           p_supplier_id: safeSupplierId || resolvedSupplierId || null,
@@ -4027,17 +4059,49 @@ export const api = {
           p_bill_image_url: data.bill_image_url || null,
           p_notes: data.notes || null,
           p_items: resolvedItems,
+          p_idempotency_key: idempotencyKey,
           p_user_id: safeUserId || userId,
         }
       );
 
       if (!rpcError && result?.purchase_id) {
         rpcPurchaseId = result.purchase_id;
-      } else if (rpcError && rpcError.code !== 'PGRST202' && rpcError.code !== '42883') {
-        console.warn('[material purchase] RPC non-202 warning:', rpcError);
+      } else if (rpcError) {
+        if (isRpcMissingError(rpcError)) {
+          // Fallback to confirm_material_purchase_transaction if atomic RPC not yet in schema cache
+          console.warn('[material purchase] confirm_material_purchase_atomic not in schema cache, trying confirm_material_purchase_transaction fallback...');
+          const { data: fallbackRes, error: fbErr } = await (supabase as any).rpc(
+            'confirm_material_purchase_transaction',
+            {
+              p_purchase_date: data.purchase_date,
+              p_supplier_id: safeSupplierId || resolvedSupplierId || null,
+              p_invoice_number: data.invoice_number || null,
+              p_payment_method: data.payment_method,
+              p_paid_amount: Number(data.paid_amount || 0),
+              p_credit_amount: Number(data.credit_amount || 0),
+              p_bill_image_url: data.bill_image_url || null,
+              p_notes: data.notes || null,
+              p_items: resolvedItems,
+              p_user_id: safeUserId || userId,
+            }
+          );
+          if (!fbErr && fallbackRes?.purchase_id) {
+            rpcPurchaseId = fallbackRes.purchase_id;
+          } else if (fbErr && !isRpcMissingError(fbErr)) {
+            console.error('[material purchase] Fallback RPC error:', fbErr);
+            throw new Error(`[Supabase Purchase RPC Error ${fbErr.code || ''}]: ${fbErr.message}`);
+          }
+        } else {
+          // Real validation or constraint error: throw directly to caller
+          console.error('[material purchase] Atomic RPC error:', rpcError);
+          throw new Error(`[Supabase Purchase RPC Error ${rpcError.code || ''}]: ${rpcError.message}`);
+        }
       }
-    } catch (e) {
-      console.warn('[material purchase] RPC call exception:', e);
+    } catch (e: any) {
+      if (e.message?.startsWith('[Supabase Purchase RPC Error')) {
+        throw e;
+      }
+      console.warn('[material purchase] RPC exception, attempting direct Supabase transaction fallback:', e);
     }
 
     if (rpcPurchaseId) {
@@ -4045,7 +4109,7 @@ export const api = {
       if (loaded) return loaded;
     }
 
-    // 2. Direct live Supabase transaction (Guarantees live DB transaction even if RPC is pending in schema cache)
+    // 2. Direct live Supabase transaction (Guarantees live DB transaction with authoritative stock movements)
     const purchaseNumber = `PUR-${data.purchase_date.replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
     const totalAmount = resolvedItems.reduce((sum, it) => {
       const itemPrice = (Number(it.purchased_quantity) || 0) * (Number(it.unit_price) || 0);
@@ -4069,6 +4133,7 @@ export const api = {
         status: 'received',
         bill_image_url: data.bill_image_url || null,
         notes: data.notes || null,
+        idempotency_key: idempotencyKey,
         created_by: safeUserId,
       })
       .select()
@@ -4078,7 +4143,7 @@ export const api = {
       if (purchaseErr.code === 'PGRST205' || purchaseErr.code === '42P01') {
         throw new Error(
           `[Supabase Purchase PGRST205]: Table 'public.material_purchases' is not yet present in your Supabase database schema cache. ` +
-          `Please open your Supabase SQL Editor and execute 'supabase/migrations/025_ensure_material_purchases_tables_and_cache.sql' or 'supabase/complete_setup.sql'.`
+          `Please open your Supabase SQL Editor and execute 'supabase/migrations/030_atomic_material_purchase_and_stock_repair.sql' or 'supabase/complete_setup.sql'.`
         );
       }
       throw new Error(`[Supabase Purchase ${purchaseErr.code || ''}]: ${purchaseErr.message}`);

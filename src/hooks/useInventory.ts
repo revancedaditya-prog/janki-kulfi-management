@@ -137,6 +137,7 @@ export function useCreateMaterialPurchase() {
       credit_amount?: number;
       bill_image_url?: string | null;
       notes?: string | null;
+      idempotency_key?: string | null;
       items: {
         ingredient_id: string;
         purchased_quantity: number;

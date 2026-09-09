@@ -2655,6 +2655,16 @@ class MockStore {
       throw new Error('Purchase must contain at least one item');
     }
 
+    if ((data as any).idempotency_key) {
+      const existing = (this.state.material_purchases || []).find(
+        (p: any) => p.idempotency_key === (data as any).idempotency_key
+      );
+      if (existing) {
+        const full = this.getMaterialPurchaseById(existing.id);
+        if (full) return full;
+      }
+    }
+
     const purchaseId = `pur-${generateId().slice(0, 8)}`;
     const purchaseNumber = `PUR-${data.purchase_date.replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
     const now = new Date().toISOString();
@@ -2842,6 +2852,7 @@ class MockStore {
       total_amount: Number(totalAmount.toFixed(2)),
       bill_image_url: data.bill_image_url || null,
       notes: data.notes || null,
+      idempotency_key: (data as any).idempotency_key || null,
       status: 'received',
       expense_id: expenseId,
       created_by: userId,

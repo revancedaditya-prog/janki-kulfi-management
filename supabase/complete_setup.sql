@@ -419,6 +419,7 @@ CREATE TABLE IF NOT EXISTS material_purchases (
   total_amount NUMERIC(12,2) NOT NULL DEFAULT 0.00 CHECK (total_amount >= 0),
   bill_image_url TEXT,
   notes TEXT,
+  idempotency_key UUID UNIQUE,
   status TEXT NOT NULL DEFAULT 'received' CHECK (status IN ('draft', 'received', 'cancelled', 'reversed')),
   expense_id UUID REFERENCES expenses(id) ON DELETE SET NULL,
   reversal_reason TEXT,
@@ -2476,7 +2477,7 @@ $$;
 -- 6.3 Raw Material Inventory & Purchases
 -- ----------------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION public.confirm_material_purchase_transaction(
+CREATE OR REPLACE FUNCTION public.confirm_material_purchase_atomic(
   p_purchase_date DATE,
   p_supplier_id TEXT,
   p_invoice_number TEXT,
@@ -2486,6 +2487,7 @@ CREATE OR REPLACE FUNCTION public.confirm_material_purchase_transaction(
   p_bill_image_url TEXT,
   p_notes TEXT,
   p_items JSONB,
+  p_idempotency_key UUID DEFAULT NULL,
   p_user_id TEXT DEFAULT NULL
 ) RETURNS JSONB AS $$
 DECLARE
@@ -2507,37 +2509,99 @@ DECLARE
   v_supplier_uuid UUID := NULL;
   v_user_uuid UUID := NULL;
   v_ing_uuid UUID;
+  v_existing_id UUID;
+  v_balances JSONB := '[]'::JSONB;
+  v_new_bal NUMERIC(12,3);
 BEGIN
-  -- Safe UUID conversions
+  -- Strict search path
+  SET search_path = public, extensions, pg_temp;
+
+  -- 1. Idempotency check
+  IF p_idempotency_key IS NOT NULL THEN
+    SELECT id, purchase_number, total_amount INTO v_existing_id, v_purchase_number, v_total_purchase_cost
+    FROM public.material_purchases
+    WHERE idempotency_key = p_idempotency_key;
+
+    IF v_existing_id IS NOT NULL THEN
+      RETURN jsonb_build_object(
+        'success', true,
+        'idempotent_duplicate', true,
+        'purchase_id', v_existing_id,
+        'purchase_number', v_purchase_number,
+        'total_amount', v_total_purchase_cost,
+        'message', 'खरीद पहले ही दर्ज की जा चुकी है (Idempotent replay)'
+      );
+    END IF;
+  END IF;
+
+  -- 2. Resolve User & Supplier
+  IF auth.uid() IS NOT NULL THEN
+    v_user_uuid := auth.uid();
+  ELSIF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_user_uuid := p_user_id::UUID;
+  END IF;
+
   IF p_supplier_id IS NOT NULL AND p_supplier_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
     v_supplier_uuid := p_supplier_id::UUID;
-    IF NOT EXISTS (SELECT 1 FROM suppliers WHERE id = v_supplier_uuid) THEN
+    IF NOT EXISTS (SELECT 1 FROM public.suppliers WHERE id = v_supplier_uuid) THEN
       v_supplier_uuid := NULL;
     END IF;
   END IF;
 
-  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
-    v_user_uuid := p_user_id::UUID;
+  IF p_items IS NULL OR jsonb_array_length(p_items) = 0 THEN
+    RAISE EXCEPTION 'At least one purchase item is required (कम से कम एक सामग्री आवश्यक है)';
   END IF;
 
-  v_purchase_number := 'PUR-' || TO_CHAR(COALESCE(p_purchase_date, CURRENT_DATE), 'YYYYMMDD') || '-' || LPAD(FLOOR(RANDOM() * 9000 + 1000)::TEXT, 4, '0');
-
-  -- Calculate total cost
+  -- 3. Validate items & calculate total cost
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    IF (v_item->>'ingredient_id') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+      v_ing_uuid := (v_item->>'ingredient_id')::UUID;
+    ELSE
+      SELECT id INTO v_ing_uuid FROM public.ingredients 
+      WHERE id::TEXT = (v_item->>'ingredient_id') OR code ILIKE (v_item->>'ingredient_id') OR name_en ILIKE (v_item->>'ingredient_id')
+      LIMIT 1;
+    END IF;
+
+    IF v_ing_uuid IS NULL THEN
+      RAISE EXCEPTION 'Ingredient % not found in database', COALESCE(v_item->>'ingredient_id', 'Unknown');
+    END IF;
+
+    SELECT * INTO v_ing FROM public.ingredients WHERE id = v_ing_uuid;
+    IF v_ing IS NULL THEN
+      RAISE EXCEPTION 'Ingredient with ID % not found', v_ing_uuid;
+    END IF;
+
+    IF v_ing.is_active = false THEN
+      RAISE EXCEPTION 'Ingredient % (%) is deactivated and cannot be purchased', v_ing.name_hi, v_ing.name_en;
+    END IF;
+
     v_purchased_qty := COALESCE((v_item->>'purchased_quantity')::NUMERIC, 0);
+    IF v_purchased_qty <= 0 THEN
+      RAISE EXCEPTION 'Purchased quantity must be greater than 0 for %', v_ing.name_hi;
+    END IF;
+
     v_unit_price := COALESCE((v_item->>'unit_price')::NUMERIC, 0);
-    v_discount := COALESCE((v_item->>'discount')::NUMERIC, 0);
-    v_tax := COALESCE((v_item->>'tax')::NUMERIC, 0);
+    IF v_unit_price < 0 THEN
+      RAISE EXCEPTION 'Unit price cannot be negative for %', v_ing.name_hi;
+    END IF;
+
+    v_free_qty := COALESCE((v_item->>'free_quantity')::NUMERIC, 0);
+    IF v_free_qty < 0 THEN v_free_qty := 0; END IF;
+
+    v_discount := COALESCE((v_item->>'discount')::NUMERIC, (v_item->>'discount_amount')::NUMERIC, 0);
+    v_tax := COALESCE((v_item->>'tax')::NUMERIC, (v_item->>'tax_amount')::NUMERIC, 0);
     v_charge := COALESCE((v_item->>'allocated_charge')::NUMERIC, 0);
     v_item_price := ROUND(v_purchased_qty * v_unit_price, 2);
     v_net_item_cost := v_item_price - v_discount + v_tax + v_charge;
     v_total_purchase_cost := v_total_purchase_cost + v_net_item_cost;
   END LOOP;
 
-  -- 1. Insert Material Purchase Header
-  INSERT INTO material_purchases (
+  v_purchase_number := 'PUR-' || TO_CHAR(COALESCE(p_purchase_date, CURRENT_DATE), 'YYYYMMDD') || '-' || LPAD(FLOOR(RANDOM() * 9000 + 1000)::TEXT, 4, '0');
+
+  -- 4. Insert Purchase Header
+  INSERT INTO public.material_purchases (
     purchase_number, purchase_date, supplier_id, invoice_number, payment_method,
-    total_amount, paid_amount, credit_amount, status, bill_image_url, notes, created_by
+    total_amount, paid_amount, credit_amount, status, bill_image_url, notes, idempotency_key, created_by
   ) VALUES (
     v_purchase_number,
     COALESCE(p_purchase_date, CURRENT_DATE),
@@ -2550,165 +2614,251 @@ BEGIN
     'received',
     p_bill_image_url,
     p_notes,
+    p_idempotency_key,
     v_user_uuid
   ) RETURNING id INTO v_purchase_id;
 
-  -- 2. Insert Items & Movements
+  -- 5. Insert Items & Movements
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
     IF (v_item->>'ingredient_id') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
       v_ing_uuid := (v_item->>'ingredient_id')::UUID;
     ELSE
-      SELECT id INTO v_ing_uuid FROM ingredients WHERE id::TEXT = (v_item->>'ingredient_id') OR code ILIKE (v_item->>'ingredient_id') LIMIT 1;
+      SELECT id INTO v_ing_uuid FROM public.ingredients 
+      WHERE id::TEXT = (v_item->>'ingredient_id') OR code ILIKE (v_item->>'ingredient_id') OR name_en ILIKE (v_item->>'ingredient_id')
+      LIMIT 1;
     END IF;
 
-    IF v_ing_uuid IS NOT NULL THEN
-      SELECT * INTO v_ing FROM ingredients WHERE id = v_ing_uuid;
-      
-      v_purchased_qty := COALESCE((v_item->>'purchased_quantity')::NUMERIC, 0);
-      v_free_qty := COALESCE((v_item->>'free_quantity')::NUMERIC, 0);
-      v_total_rec_qty := v_purchased_qty + v_free_qty;
-      v_unit_price := COALESCE((v_item->>'unit_price')::NUMERIC, 0);
-      v_discount := COALESCE((v_item->>'discount')::NUMERIC, (v_item->>'discount_amount')::NUMERIC, 0);
-      v_tax := COALESCE((v_item->>'tax')::NUMERIC, (v_item->>'tax_amount')::NUMERIC, 0);
-      v_charge := COALESCE((v_item->>'allocated_charge')::NUMERIC, 0);
-      v_item_price := ROUND(v_purchased_qty * v_unit_price, 2);
-      v_net_item_cost := v_item_price - v_discount + v_tax + v_charge;
-      v_unit_acq_cost := CASE WHEN v_total_rec_qty > 0 THEN ROUND(v_net_item_cost / v_total_rec_qty, 4) ELSE v_unit_price END;
+    SELECT * INTO v_ing FROM public.ingredients WHERE id = v_ing_uuid;
+    
+    v_purchased_qty := COALESCE((v_item->>'purchased_quantity')::NUMERIC, 0);
+    v_free_qty := COALESCE((v_item->>'free_quantity')::NUMERIC, 0);
+    v_total_rec_qty := v_purchased_qty + v_free_qty;
+    v_unit_price := COALESCE((v_item->>'unit_price')::NUMERIC, 0);
+    v_discount := COALESCE((v_item->>'discount')::NUMERIC, (v_item->>'discount_amount')::NUMERIC, 0);
+    v_tax := COALESCE((v_item->>'tax')::NUMERIC, (v_item->>'tax_amount')::NUMERIC, 0);
+    v_charge := COALESCE((v_item->>'allocated_charge')::NUMERIC, 0);
+    v_item_price := ROUND(v_purchased_qty * v_unit_price, 2);
+    v_net_item_cost := v_item_price - v_discount + v_tax + v_charge;
+    v_unit_acq_cost := CASE WHEN v_total_rec_qty > 0 THEN ROUND(v_net_item_cost / v_total_rec_qty, 4) ELSE v_unit_price END;
 
-      INSERT INTO material_purchase_items (
-        purchase_id, ingredient_id, purchased_quantity, purchase_unit,
-        free_quantity, total_received_quantity, base_quantity, base_unit,
-        unit_price, item_price, discount, tax, allocated_charge,
-        net_item_cost, unit_acquisition_cost, lot_number, manufacturing_date, expiry_date
-      ) VALUES (
-        v_purchase_id, v_ing_uuid, v_purchased_qty, COALESCE(v_item->>'purchase_unit', v_ing.base_unit),
-        v_free_qty, v_total_rec_qty, v_total_rec_qty, COALESCE(v_item->>'purchase_unit', v_ing.base_unit),
-        v_unit_price, v_item_price, v_discount, v_tax, v_charge,
-        v_net_item_cost, v_unit_acq_cost, v_item->>'lot_number',
-        NULLIF(v_item->>'manufacturing_date', '')::DATE,
-        NULLIF(v_item->>'expiry_date', '')::DATE
-      );
+    INSERT INTO public.material_purchase_items (
+      purchase_id, ingredient_id, purchased_quantity, purchase_unit,
+      free_quantity, total_received_quantity, base_quantity, base_unit,
+      unit_price, item_price, discount, tax, allocated_charge,
+      net_item_cost, unit_acquisition_cost, lot_number, manufacturing_date, expiry_date
+    ) VALUES (
+      v_purchase_id, v_ing_uuid, v_purchased_qty, COALESCE(v_item->>'purchase_unit', v_ing.base_unit),
+      v_free_qty, v_total_rec_qty, v_total_rec_qty, v_ing.base_unit,
+      v_unit_price, v_item_price, v_discount, v_tax, v_charge,
+      v_net_item_cost, v_unit_acq_cost, v_item->>'lot_number',
+      NULLIF(v_item->>'manufacturing_date', '')::DATE,
+      NULLIF(v_item->>'expiry_date', '')::DATE
+    );
 
-      -- Stock In Movement
-      INSERT INTO raw_material_movements (
-        ingredient_id, movement_type, quantity, base_unit,
-        unit_cost_snapshot, total_value_snapshot, reference_table, reference_id,
-        movement_date, source_location, destination_location, reason, created_by
-      ) VALUES (
-        v_ing_uuid, 'purchase_received', v_total_rec_qty, v_ing.base_unit,
-        v_unit_acq_cost, v_net_item_cost, 'material_purchases', v_purchase_id,
-        COALESCE(p_purchase_date, CURRENT_DATE), 'Supplier', 'Main Store',
-        'Material purchase: ' || v_purchase_number, v_user_uuid
-      );
+    -- Stock In Movement
+    INSERT INTO public.raw_material_movements (
+      ingredient_id, movement_type, quantity, base_unit,
+      unit_cost_snapshot, total_value_snapshot, reference_table, reference_id,
+      movement_date, source_location, destination_location, reason, created_by
+    ) VALUES (
+      v_ing_uuid, 'purchase_received', v_total_rec_qty, v_ing.base_unit,
+      v_unit_acq_cost, v_net_item_cost, 'material_purchases', v_purchase_id,
+      COALESCE(p_purchase_date, CURRENT_DATE), 'Supplier', 'Main Store',
+      'Material purchase: ' || v_purchase_number, v_user_uuid
+    );
 
-      -- Update current rate on ingredient
-      UPDATE ingredients SET current_rate = v_unit_price WHERE id = v_ing_uuid;
-    END IF;
+    -- Update current rate
+    UPDATE public.ingredients 
+    SET current_rate = v_unit_price, updated_at = NOW()
+    WHERE id = v_ing_uuid;
+
+    SELECT COALESCE(SUM(quantity), 0) INTO v_new_bal
+    FROM public.raw_material_movements
+    WHERE ingredient_id = v_ing_uuid;
+
+    v_balances := v_balances || jsonb_build_object(
+      'ingredient_id', v_ing_uuid,
+      'name_hi', v_ing.name_hi,
+      'name_en', v_ing.name_en,
+      'new_balance', v_new_bal,
+      'base_unit', v_ing.base_unit
+    );
   END LOOP;
 
-  -- 3. If paid amount > 0, insert into expenses
+  -- 6. Linked Expense
   IF COALESCE(p_paid_amount, 0) > 0 THEN
-    INSERT INTO expenses (
+    INSERT INTO public.expenses (
       expense_date, category, amount, payment_method, paid_to, description, bill_url, created_by
     ) VALUES (
       COALESCE(p_purchase_date, CURRENT_DATE), 'raw_materials', p_paid_amount,
       CASE WHEN p_payment_method = 'credit' THEN 'cash' ELSE p_payment_method END,
-      'Material Supplier', 'Raw material purchase ' || v_purchase_number, p_bill_image_url, v_user_uuid
+      COALESCE((SELECT name FROM public.suppliers WHERE id = v_supplier_uuid), 'Material Supplier'),
+      'Raw material purchase ' || v_purchase_number, p_bill_image_url, v_user_uuid
     );
   END IF;
+
+  -- 7. Audit log
+  INSERT INTO public.audit_logs (
+    table_name, record_id, action, new_data, reason, performed_by
+  ) VALUES (
+    'material_purchases', v_purchase_id, 'CREATE_MATERIAL_PURCHASE',
+    jsonb_build_object('purchase_number', v_purchase_number, 'total_amount', v_total_purchase_cost, 'items_count', jsonb_array_length(p_items)),
+    'Received raw material purchase ' || v_purchase_number, v_user_uuid
+  );
 
   RETURN jsonb_build_object(
     'success', true,
     'purchase_id', v_purchase_id,
     'purchase_number', v_purchase_number,
     'total_amount', v_total_purchase_cost,
-    'message', 'सामग्री खरीद सफलतापूर्वक दर्ज की गई'
+    'balances', v_balances,
+    'message', 'सामग्री खरीद सफलतापूर्वक दर्ज की गई व स्टॉक अपडेट हुआ'
   );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-CREATE OR REPLACE FUNCTION reverse_material_purchase_transaction(
+-- Backward compatibility alias
+CREATE OR REPLACE FUNCTION public.confirm_material_purchase_transaction(
+  p_purchase_date DATE,
+  p_supplier_id TEXT,
+  p_invoice_number TEXT,
+  p_payment_method TEXT,
+  p_paid_amount NUMERIC,
+  p_credit_amount NUMERIC,
+  p_bill_image_url TEXT,
+  p_notes TEXT,
+  p_items JSONB,
+  p_user_id TEXT DEFAULT NULL
+) RETURNS JSONB AS $$
+BEGIN
+  RETURN public.confirm_material_purchase_atomic(
+    p_purchase_date, p_supplier_id, p_invoice_number, p_payment_method,
+    p_paid_amount, p_credit_amount, p_bill_image_url, p_notes,
+    p_items, NULL, p_user_id
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION public.reverse_material_purchase_transaction(
   p_purchase_id UUID,
-  p_reason TEXT DEFAULT 'Purchase cancelled',
+  p_reason TEXT DEFAULT 'Purchase cancelled/reversed',
   p_user_id TEXT DEFAULT NULL
 ) RETURNS JSONB AS $$
 DECLARE
   v_purch RECORD;
   v_item RECORD;
   v_user_uuid UUID := NULL;
-  v_qty NUMERIC;
-  v_cost NUMERIC;
+  v_qty NUMERIC(12,3);
+  v_cost NUMERIC(12,2);
+  v_current_stock NUMERIC(12,3);
+  v_item_count INTEGER := 0;
 BEGIN
-  IF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+  SET search_path = public, extensions, pg_temp;
+
+  IF auth.uid() IS NOT NULL THEN
+    v_user_uuid := auth.uid();
+  ELSIF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
     v_user_uuid := p_user_id::UUID;
   END IF;
 
-  SELECT * INTO v_purch FROM material_purchases WHERE id = p_purchase_id FOR UPDATE;
+  SELECT * INTO v_purch FROM public.material_purchases WHERE id = p_purchase_id FOR UPDATE;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Material purchase not found';
+    RAISE EXCEPTION 'Material purchase with ID % not found', p_purchase_id;
   END IF;
 
-  IF v_purch.status = 'cancelled' THEN
-    RAISE EXCEPTION 'Purchase is already cancelled';
+  IF v_purch.status = 'cancelled' OR v_purch.status = 'reversed' THEN
+    RAISE EXCEPTION 'Purchase % is already cancelled/reversed', v_purch.purchase_number;
   END IF;
 
-  -- 1. Update purchase status
-  UPDATE material_purchases
+  -- 1. Validate that reversal will not cause stock to drop below zero
+  FOR v_item IN SELECT * FROM public.material_purchase_items WHERE purchase_id = p_purchase_id LOOP
+    v_qty := COALESCE(v_item.purchased_quantity, 0) + COALESCE(v_item.free_quantity, 0);
+    IF v_qty > 0 THEN
+      SELECT COALESCE(SUM(quantity), 0) INTO v_current_stock
+      FROM public.raw_material_movements
+      WHERE ingredient_id = v_item.ingredient_id;
+
+      IF (v_current_stock - v_qty) < -0.001 THEN
+        RAISE EXCEPTION 'Cannot reverse purchase %: stock for % would become negative (% - % = %). Perform physical stock correction first.',
+          v_purch.purchase_number,
+          (SELECT name_hi FROM public.ingredients WHERE id = v_item.ingredient_id),
+          v_current_stock,
+          v_qty,
+          (v_current_stock - v_qty);
+      END IF;
+    END IF;
+  END LOOP;
+
+  -- 2. Update purchase status
+  UPDATE public.material_purchases
   SET status = 'cancelled',
-      notes = COALESCE(notes, '') || ' [Cancelled: ' || COALESCE(p_reason, 'No reason') || ']',
+      notes = COALESCE(notes, '') || ' [Cancelled: ' || COALESCE(p_reason, 'No reason given') || ']',
       updated_at = NOW()
   WHERE id = p_purchase_id;
 
-  -- 2. Reverse stock movements for each item
-  FOR v_item IN SELECT * FROM material_purchase_items WHERE purchase_id = p_purchase_id LOOP
+  -- 3. Reverse stock movements for each item
+  FOR v_item IN SELECT * FROM public.material_purchase_items WHERE purchase_id = p_purchase_id LOOP
     v_qty := COALESCE(v_item.purchased_quantity, 0) + COALESCE(v_item.free_quantity, 0);
-    v_cost := COALESCE(v_item.item_total_cost, v_item.net_item_cost, v_qty * COALESCE(v_item.unit_price, 0));
+    v_cost := COALESCE(v_item.net_item_cost, v_item.item_price, v_qty * COALESCE(v_item.unit_price, 0));
 
-    INSERT INTO raw_material_movements (
-      ingredient_id,
-      movement_type,
-      quantity,
-      base_unit,
-      unit_cost_snapshot,
-      total_value_snapshot,
-      reference_table,
-      reference_id,
-      movement_date,
-      source_location,
-      notes,
-      created_by
-    ) VALUES (
-      v_item.ingredient_id,
-      'purchase_reversal',
-      -ABS(v_qty),
-      COALESCE(v_item.purchase_unit, 'unit'),
-      v_item.unit_price,
-      -ABS(v_cost),
-      'material_purchases',
-      p_purchase_id,
-      CURRENT_DATE,
-      'Main Store',
-      COALESCE(p_reason, 'Purchase cancelled/reversed'),
-      v_user_uuid
-    );
+    IF v_qty > 0 THEN
+      INSERT INTO public.raw_material_movements (
+        ingredient_id,
+        movement_type,
+        quantity,
+        base_unit,
+        unit_cost_snapshot,
+        total_value_snapshot,
+        reference_table,
+        reference_id,
+        movement_date,
+        source_location,
+        destination_location,
+        reason,
+        created_by
+      ) VALUES (
+        v_item.ingredient_id,
+        'purchase_reversal',
+        -ABS(v_qty),
+        COALESCE(v_item.purchase_unit, (SELECT base_unit FROM public.ingredients WHERE id = v_item.ingredient_id), 'kg'),
+        COALESCE(v_item.unit_price, 0.00),
+        -ABS(v_cost),
+        'material_purchases',
+        p_purchase_id,
+        CURRENT_DATE,
+        'Main Store',
+        'Supplier',
+        COALESCE(p_reason, 'Material purchase reversed: ' || v_purch.purchase_number),
+        v_user_uuid
+      );
+      v_item_count := v_item_count + 1;
+    END IF;
   END LOOP;
 
-  -- 3. Audit log
-  INSERT INTO audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
-  VALUES (
+  -- 4. Audit log
+  INSERT INTO public.audit_logs (
+    table_name,
+    record_id,
+    action,
+    old_data,
+    new_data,
+    reason,
+    performed_by
+  ) VALUES (
     'material_purchases',
     p_purchase_id,
-    'REVERSE_PURCHASE',
-    row_to_json(v_purch)::jsonb,
-    jsonb_build_object('status', 'cancelled', 'reason', p_reason),
-    p_reason,
+    'REVERSE_MATERIAL_PURCHASE',
+    jsonb_build_object('status', v_purch.status, 'purchase_number', v_purch.purchase_number),
+    jsonb_build_object('status', 'cancelled', 'reason', p_reason, 'items_reversed', v_item_count),
+    COALESCE(p_reason, 'Material purchase reversed: ' || v_purch.purchase_number),
     v_user_uuid
   );
 
   RETURN jsonb_build_object(
     'success', true,
     'purchase_id', p_purchase_id,
-    'message', 'खरीद प्रविष्टि सफलतापूर्वक रद्द कर दी गई'
+    'purchase_number', v_purch.purchase_number,
+    'message', 'खरीद सफलतापूर्वक रिवर्स कर दी गई व स्टॉक घटा दिया गया'
   );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

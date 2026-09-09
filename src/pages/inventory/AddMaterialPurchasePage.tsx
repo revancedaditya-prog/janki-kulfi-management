@@ -201,16 +201,23 @@ export const AddMaterialPurchasePage: React.FC = () => {
   const effectivePaidAmount = paidAmount !== '' ? Math.min(totalBillAmount, Math.max(0, parseFloat(paidAmount) || 0)) : totalBillAmount;
   const creditAmount = Math.max(0, Number((totalBillAmount - effectivePaidAmount).toFixed(2)));
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting || createPurchase.isPending) return;
+
     setFormError(null);
 
-    const validItems = items.filter((it) => it.ingredient_id && it.purchased_quantity > 0);
+    const validItems = items.filter((it) => it.ingredient_id && Number(it.purchased_quantity) > 0);
     if (validItems.length === 0) {
-      setFormError('कम से कम एक सामग्री और मान्य मात्रा दर्ज करें।');
+      setFormError('कम से कम एक सामग्री और मान्य मात्रा दर्ज करें (Quantity must be > 0)।');
       return;
     }
 
+    const idempotencyKey = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : undefined;
+
+    setIsSubmitting(true);
     try {
       await createPurchase.mutateAsync({
         purchase_date: purchaseDate,
@@ -220,15 +227,16 @@ export const AddMaterialPurchasePage: React.FC = () => {
         paid_amount: effectivePaidAmount,
         credit_amount: creditAmount,
         notes: notes.trim() || null,
+        idempotency_key: idempotencyKey,
         items: validItems.map((it) => ({
           ingredient_id: it.ingredient_id,
-          purchased_quantity: it.purchased_quantity,
+          purchased_quantity: Number(it.purchased_quantity),
           purchase_unit: it.purchase_unit,
-          free_quantity: it.free_quantity,
-          unit_price: it.unit_price,
-          discount: it.discount,
-          tax: it.tax,
-          allocated_charge: it.allocated_charge,
+          free_quantity: Number(it.free_quantity || 0),
+          unit_price: Number(it.unit_price || 0),
+          discount: Number(it.discount || 0),
+          tax: Number(it.tax || 0),
+          allocated_charge: Number(it.allocated_charge || 0),
           lot_number: it.lot_number || null,
           manufacturing_date: it.manufacturing_date || null,
           expiry_date: it.expiry_date || null,
@@ -237,7 +245,10 @@ export const AddMaterialPurchasePage: React.FC = () => {
 
       navigate('/inventory?tab=purchases');
     } catch (err: any) {
-      setFormError(err.message || 'खरीद सहेजने में विफल');
+      console.error('[AddMaterialPurchase] Purchase creation failed:', err);
+      setFormError(err.message || 'खरीद सहेजने में विफल। कृपया पुनः प्रयास करें।');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 

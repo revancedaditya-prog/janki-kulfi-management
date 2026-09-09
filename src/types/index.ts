@@ -383,6 +383,7 @@ export interface MaterialPurchase {
   total_amount: number;
   bill_image_url?: string | null;
   notes?: string | null;
+  idempotency_key?: string | null;
   status: 'draft' | 'received' | 'cancelled' | 'reversed';
   expense_id?: string | null;
   reversal_reason?: string | null;
