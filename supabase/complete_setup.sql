@@ -2537,8 +2537,7 @@ BEGIN
   -- 1. Insert Material Purchase Header
   INSERT INTO material_purchases (
     purchase_number, purchase_date, supplier_id, invoice_number, payment_method,
-    total_amount, discount_amount, tax_amount, transport_charges,
-    paid_amount, credit_amount, status, bill_image_url, notes, created_by
+    total_amount, paid_amount, credit_amount, status, bill_image_url, notes, created_by
   ) VALUES (
     v_purchase_number,
     COALESCE(p_purchase_date, CURRENT_DATE),
@@ -2546,7 +2545,6 @@ BEGIN
     p_invoice_number,
     COALESCE(p_payment_method, 'cash'),
     v_total_purchase_cost,
-    0, 0, 0,
     COALESCE(p_paid_amount, 0),
     COALESCE(p_credit_amount, 0),
     'received',
@@ -2570,8 +2568,8 @@ BEGIN
       v_free_qty := COALESCE((v_item->>'free_quantity')::NUMERIC, 0);
       v_total_rec_qty := v_purchased_qty + v_free_qty;
       v_unit_price := COALESCE((v_item->>'unit_price')::NUMERIC, 0);
-      v_discount := COALESCE((v_item->>'discount')::NUMERIC, 0);
-      v_tax := COALESCE((v_item->>'tax')::NUMERIC, 0);
+      v_discount := COALESCE((v_item->>'discount')::NUMERIC, (v_item->>'discount_amount')::NUMERIC, 0);
+      v_tax := COALESCE((v_item->>'tax')::NUMERIC, (v_item->>'tax_amount')::NUMERIC, 0);
       v_charge := COALESCE((v_item->>'allocated_charge')::NUMERIC, 0);
       v_item_price := ROUND(v_purchased_qty * v_unit_price, 2);
       v_net_item_cost := v_item_price - v_discount + v_tax + v_charge;
@@ -2579,12 +2577,14 @@ BEGIN
 
       INSERT INTO material_purchase_items (
         purchase_id, ingredient_id, purchased_quantity, purchase_unit,
-        free_quantity, unit_price, discount_amount, tax_amount, allocated_charge,
-        item_total_cost, lot_number, manufacturing_date, expiry_date
+        free_quantity, total_received_quantity, base_quantity, base_unit,
+        unit_price, item_price, discount, tax, allocated_charge,
+        net_item_cost, unit_acquisition_cost, lot_number, manufacturing_date, expiry_date
       ) VALUES (
         v_purchase_id, v_ing_uuid, v_purchased_qty, COALESCE(v_item->>'purchase_unit', v_ing.base_unit),
-        v_free_qty, v_unit_price, v_discount, v_tax, v_charge,
-        v_net_item_cost, v_item->>'lot_number',
+        v_free_qty, v_total_rec_qty, v_total_rec_qty, COALESCE(v_item->>'purchase_unit', v_ing.base_unit),
+        v_unit_price, v_item_price, v_discount, v_tax, v_charge,
+        v_net_item_cost, v_unit_acq_cost, v_item->>'lot_number',
         NULLIF(v_item->>'manufacturing_date', '')::DATE,
         NULLIF(v_item->>'expiry_date', '')::DATE
       );

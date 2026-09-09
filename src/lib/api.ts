@@ -4064,9 +4064,6 @@ export const api = {
         invoice_number: data.invoice_number || null,
         payment_method: data.payment_method,
         total_amount: Number(totalAmount.toFixed(2)),
-        discount_amount: resolvedItems.reduce((sum, it) => sum + (Number(it.discount) || 0), 0),
-        tax_amount: resolvedItems.reduce((sum, it) => sum + (Number(it.tax) || 0), 0),
-        transport_charges: resolvedItems.reduce((sum, it) => sum + (Number(it.allocated_charge) || 0), 0),
         paid_amount: Number(data.paid_amount || 0),
         credit_amount: Number(data.credit_amount || 0),
         status: 'received',
@@ -4090,18 +4087,28 @@ export const api = {
     // Insert purchase items
     const itemsToInsert = resolvedItems.map((it) => {
       const itemPrice = (Number(it.purchased_quantity) || 0) * (Number(it.unit_price) || 0);
-      const netCost = itemPrice - Number(it.discount || 0) + Number(it.tax || 0) + Number(it.allocated_charge || 0);
+      const discount = Number(it.discount || 0);
+      const tax = Number(it.tax || 0);
+      const charge = Number(it.allocated_charge || 0);
+      const netCost = itemPrice - discount + tax + charge;
+      const totalRecQty = (Number(it.purchased_quantity) || 0) + (Number(it.free_quantity) || 0);
+      const unitAcqCost = totalRecQty > 0 ? Number((netCost / totalRecQty).toFixed(4)) : Number(it.unit_price);
       return {
         purchase_id: purchaseRow.id,
         ingredient_id: it.ingredient_id,
         purchased_quantity: Number(it.purchased_quantity),
         purchase_unit: it.purchase_unit,
         free_quantity: Number(it.free_quantity || 0),
+        total_received_quantity: totalRecQty,
+        base_quantity: totalRecQty,
+        base_unit: it.purchase_unit,
         unit_price: Number(it.unit_price),
-        discount_amount: Number(it.discount || 0),
-        tax_amount: Number(it.tax || 0),
-        allocated_charge: Number(it.allocated_charge || 0),
-        item_total_cost: Number(netCost.toFixed(2)),
+        item_price: Number(itemPrice.toFixed(2)),
+        discount: discount,
+        tax: tax,
+        allocated_charge: charge,
+        net_item_cost: Number(netCost.toFixed(2)),
+        unit_acquisition_cost: unitAcqCost,
         lot_number: it.lot_number || null,
         manufacturing_date: it.manufacturing_date || null,
         expiry_date: it.expiry_date || null,

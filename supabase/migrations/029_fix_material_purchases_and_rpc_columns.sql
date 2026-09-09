@@ -1,6 +1,33 @@
--- Migration 024: Resilient confirm_material_purchase_transaction RPC & Permissions
--- Allows TEXT or UUID parameters for maximum PostgREST compatibility
+-- ============================================================================
+-- Migration 029: Fix material_purchases Schema & RPC Column Alignment
+-- Run in Supabase SQL Editor to ensure all columns match and reload schema cache
+-- ============================================================================
 
+-- 1. Ensure Table Columns exist with backwards compatibility
+ALTER TABLE IF EXISTS public.material_purchases 
+  ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(12,2) DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(12,2) DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS transport_charges NUMERIC(12,2) DEFAULT 0.00;
+
+ALTER TABLE IF EXISTS public.material_purchase_items
+  ADD COLUMN IF NOT EXISTS total_received_quantity NUMERIC(12,3),
+  ADD COLUMN IF NOT EXISTS base_quantity NUMERIC(12,3),
+  ADD COLUMN IF NOT EXISTS base_unit TEXT,
+  ADD COLUMN IF NOT EXISTS item_price NUMERIC(12,2),
+  ADD COLUMN IF NOT EXISTS discount NUMERIC(12,2) DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS tax NUMERIC(12,2) DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS allocated_charge NUMERIC(12,2) DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS net_item_cost NUMERIC(12,2),
+  ADD COLUMN IF NOT EXISTS unit_acquisition_cost NUMERIC(12,4),
+  ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(12,2) DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(12,2) DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS item_total_cost NUMERIC(12,2);
+
+ALTER TABLE IF EXISTS public.raw_material_movements
+  ADD COLUMN IF NOT EXISTS reason TEXT,
+  ADD COLUMN IF NOT EXISTS notes TEXT;
+
+-- 2. Clean and Robust confirm_material_purchase_transaction RPC
 CREATE OR REPLACE FUNCTION public.confirm_material_purchase_transaction(
   p_purchase_date DATE,
   p_supplier_id TEXT,
@@ -36,7 +63,7 @@ BEGIN
   -- Safe UUID conversions
   IF p_supplier_id IS NOT NULL AND p_supplier_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
     v_supplier_uuid := p_supplier_id::UUID;
-    IF NOT EXISTS (SELECT 1 FROM suppliers WHERE id = v_supplier_uuid) THEN
+    IF NOT EXISTS (SELECT 1 FROM public.suppliers WHERE id = v_supplier_uuid) THEN
       v_supplier_uuid := NULL;
     END IF;
   END IF;
@@ -51,8 +78,8 @@ BEGIN
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
     v_purchased_qty := COALESCE((v_item->>'purchased_quantity')::NUMERIC, 0);
     v_unit_price := COALESCE((v_item->>'unit_price')::NUMERIC, 0);
-    v_discount := COALESCE((v_item->>'discount')::NUMERIC, 0);
-    v_tax := COALESCE((v_item->>'tax')::NUMERIC, 0);
+    v_discount := COALESCE((v_item->>'discount')::NUMERIC, (v_item->>'discount_amount')::NUMERIC, 0);
+    v_tax := COALESCE((v_item->>'tax')::NUMERIC, (v_item->>'tax_amount')::NUMERIC, 0);
     v_charge := COALESCE((v_item->>'allocated_charge')::NUMERIC, 0);
     v_item_price := ROUND(v_purchased_qty * v_unit_price, 2);
     v_net_item_cost := v_item_price - v_discount + v_tax + v_charge;
@@ -60,7 +87,7 @@ BEGIN
   END LOOP;
 
   -- 1. Insert Material Purchase Header
-  INSERT INTO material_purchases (
+  INSERT INTO public.material_purchases (
     purchase_number, purchase_date, supplier_id, invoice_number, payment_method,
     total_amount, paid_amount, credit_amount, status, bill_image_url, notes, created_by
   ) VALUES (
@@ -83,11 +110,11 @@ BEGIN
     IF (v_item->>'ingredient_id') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
       v_ing_uuid := (v_item->>'ingredient_id')::UUID;
     ELSE
-      SELECT id INTO v_ing_uuid FROM ingredients WHERE id::TEXT = (v_item->>'ingredient_id') OR code ILIKE (v_item->>'ingredient_id') LIMIT 1;
+      SELECT id INTO v_ing_uuid FROM public.ingredients WHERE id::TEXT = (v_item->>'ingredient_id') OR code ILIKE (v_item->>'ingredient_id') LIMIT 1;
     END IF;
 
     IF v_ing_uuid IS NOT NULL THEN
-      SELECT * INTO v_ing FROM ingredients WHERE id = v_ing_uuid;
+      SELECT * INTO v_ing FROM public.ingredients WHERE id = v_ing_uuid;
       
       v_purchased_qty := COALESCE((v_item->>'purchased_quantity')::NUMERIC, 0);
       v_free_qty := COALESCE((v_item->>'free_quantity')::NUMERIC, 0);
@@ -100,7 +127,7 @@ BEGIN
       v_net_item_cost := v_item_price - v_discount + v_tax + v_charge;
       v_unit_acq_cost := CASE WHEN v_total_rec_qty > 0 THEN ROUND(v_net_item_cost / v_total_rec_qty, 4) ELSE v_unit_price END;
 
-      INSERT INTO material_purchase_items (
+      INSERT INTO public.material_purchase_items (
         purchase_id, ingredient_id, purchased_quantity, purchase_unit,
         free_quantity, total_received_quantity, base_quantity, base_unit,
         unit_price, item_price, discount, tax, allocated_charge,
@@ -115,7 +142,7 @@ BEGIN
       );
 
       -- Stock In Movement
-      INSERT INTO raw_material_movements (
+      INSERT INTO public.raw_material_movements (
         ingredient_id, movement_type, quantity, base_unit,
         unit_cost_snapshot, total_value_snapshot, reference_table, reference_id,
         movement_date, source_location, destination_location, reason, created_by
@@ -127,13 +154,13 @@ BEGIN
       );
 
       -- Update current rate on ingredient
-      UPDATE ingredients SET current_rate = v_unit_price WHERE id = v_ing_uuid;
+      UPDATE public.ingredients SET current_rate = v_unit_price WHERE id = v_ing_uuid;
     END IF;
   END LOOP;
 
   -- 3. If paid amount > 0, insert into expenses
   IF COALESCE(p_paid_amount, 0) > 0 THEN
-    INSERT INTO expenses (
+    INSERT INTO public.expenses (
       expense_date, category, amount, payment_method, paid_to, description, bill_url, created_by
     ) VALUES (
       COALESCE(p_purchase_date, CURRENT_DATE), 'raw_materials', p_paid_amount,
@@ -152,7 +179,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Grant permissions to public roles
+-- 3. Permissions and Schema Reload
 GRANT EXECUTE ON FUNCTION public.confirm_material_purchase_transaction TO anon, authenticated, service_role;
-
+GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
 NOTIFY pgrst, 'reload schema';
