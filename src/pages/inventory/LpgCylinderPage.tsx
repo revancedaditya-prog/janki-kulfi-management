@@ -604,9 +604,10 @@ export const LpgCylinderPage: React.FC = () => {
             labelEn: 'Active Total',
             val: summary.totalActive,
             icon: Layers,
-            iconColor: 'text-stone-700',
-            iconBg: 'bg-stone-100',
+            iconColor: 'text-amber-700',
+            iconBg: 'bg-amber-100/80',
             numColor: 'text-stone-900',
+            activeClass: 'bg-amber-50/70 border-amber-500 ring-2 ring-amber-500/70',
           },
           {
             key: 'full',
@@ -617,6 +618,7 @@ export const LpgCylinderPage: React.FC = () => {
             iconColor: 'text-emerald-600',
             iconBg: 'bg-emerald-50',
             numColor: 'text-emerald-700',
+            activeClass: 'bg-emerald-50/70 border-emerald-500 ring-2 ring-emerald-500/70',
           },
           {
             key: 'connected',
@@ -627,6 +629,7 @@ export const LpgCylinderPage: React.FC = () => {
             iconColor: 'text-amber-600',
             iconBg: 'bg-amber-50',
             numColor: 'text-amber-700',
+            activeClass: 'bg-amber-50/70 border-amber-500 ring-2 ring-amber-500/70',
           },
           {
             key: 'empty',
@@ -637,6 +640,7 @@ export const LpgCylinderPage: React.FC = () => {
             iconColor: 'text-rose-600',
             iconBg: 'bg-rose-50',
             numColor: 'text-rose-700',
+            activeClass: 'bg-rose-50/70 border-rose-500 ring-2 ring-rose-500/70',
           },
           {
             key: 'sent_for_refill',
@@ -647,6 +651,7 @@ export const LpgCylinderPage: React.FC = () => {
             iconColor: 'text-blue-600',
             iconBg: 'bg-blue-50',
             numColor: 'text-blue-700',
+            activeClass: 'bg-blue-50/70 border-blue-500 ring-2 ring-blue-500/70',
           },
           {
             key: 'inactive',
@@ -654,11 +659,12 @@ export const LpgCylinderPage: React.FC = () => {
             labelEn: 'Inactive',
             val: summary.inactive,
             icon: Archive,
-            iconColor: 'text-stone-500',
+            iconColor: 'text-stone-600',
             iconBg: 'bg-stone-100',
-            numColor: 'text-stone-600',
+            numColor: 'text-stone-700',
+            activeClass: 'bg-stone-100/80 border-stone-400 ring-2 ring-stone-400/70',
           },
-        ].map(({ key, labelHi, labelEn, val, icon: Icon, iconColor, iconBg, numColor }) => {
+        ].map(({ key, labelHi, labelEn, val, icon: Icon, iconColor, iconBg, numColor, activeClass }) => {
           const isSelected = statusFilter === key;
           return (
             <div
@@ -666,22 +672,22 @@ export const LpgCylinderPage: React.FC = () => {
               onClick={() => setStatusFilter(key as any)}
               className={`p-3.5 rounded-2xl border transition-all cursor-pointer select-none ${
                 isSelected
-                  ? 'bg-stone-900 text-white border-stone-900 shadow-md ring-2 ring-amber-500'
-                  : 'bg-white border-stone-200 hover:border-amber-300 shadow-xs'
+                  ? `${activeClass} shadow-md`
+                  : 'bg-white border-stone-200 hover:border-stone-300 hover:shadow-xs'
               }`}
             >
               <div className="flex items-center justify-between text-xs font-bold mb-1.5">
-                <span className={isSelected ? 'text-white' : 'text-stone-700'}>
+                <span className={isSelected ? 'text-stone-900 font-extrabold' : 'text-stone-700'}>
                   {labelHi}
                 </span>
-                <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${isSelected ? 'bg-white/20 text-white' : `${iconBg} ${iconColor}`}`}>
+                <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${iconBg} ${iconColor}`}>
                   <Icon className="w-3.5 h-3.5" />
                 </div>
               </div>
-              <div className={`text-2xl font-black tracking-tight ${isSelected ? 'text-white' : numColor}`}>
+              <div className={`text-2xl font-black tracking-tight ${numColor}`}>
                 {val}
               </div>
-              <div className={`text-[10px] font-semibold mt-0.5 ${isSelected ? 'text-stone-300' : 'text-stone-500'}`}>
+              <div className="text-[10px] font-semibold mt-0.5 text-stone-500">
                 {labelEn}
               </div>
             </div>
