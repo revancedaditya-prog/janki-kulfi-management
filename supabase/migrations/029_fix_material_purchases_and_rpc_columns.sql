@@ -1,14 +1,56 @@
 -- ============================================================================
--- Migration 029: Fix material_purchases Schema & RPC Column Alignment
--- Run in Supabase SQL Editor to ensure all columns match and reload schema cache
+-- Migration 029: Universal Schema & Column Alignment Fix
+-- Run in Supabase SQL Editor to ensure all tables, columns, and RPCs match
 -- ============================================================================
 
 -- 1. Ensure Table Columns exist with backwards compatibility
+
+-- Audit Logs compatibility
+ALTER TABLE IF EXISTS public.audit_logs 
+  ADD COLUMN IF NOT EXISTS old_values JSONB,
+  ADD COLUMN IF NOT EXISTS new_values JSONB,
+  ADD COLUMN IF NOT EXISTS old_data JSONB,
+  ADD COLUMN IF NOT EXISTS new_data JSONB,
+  ADD COLUMN IF NOT EXISTS change_reason TEXT,
+  ADD COLUMN IF NOT EXISTS reason TEXT,
+  ADD COLUMN IF NOT EXISTS user_id UUID,
+  ADD COLUMN IF NOT EXISTS performed_by UUID,
+  ADD COLUMN IF NOT EXISTS performed_at TIMESTAMPTZ DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
+-- Expenses compatibility
+ALTER TABLE IF EXISTS public.expenses
+  ADD COLUMN IF NOT EXISTS paid_to TEXT,
+  ADD COLUMN IF NOT EXISTS vendor_name TEXT,
+  ADD COLUMN IF NOT EXISTS bill_url TEXT,
+  ADD COLUMN IF NOT EXISTS bill_image_path TEXT,
+  ADD COLUMN IF NOT EXISTS is_recurring BOOLEAN DEFAULT false,
+  ADD COLUMN IF NOT EXISTS expense_head_id UUID,
+  ADD COLUMN IF NOT EXISTS expense_month TEXT,
+  ADD COLUMN IF NOT EXISTS due_date DATE,
+  ADD COLUMN IF NOT EXISTS corrected_from_expense_id UUID,
+  ADD COLUMN IF NOT EXISTS idempotency_key TEXT,
+  ADD COLUMN IF NOT EXISTS is_monthly_fixed BOOLEAN DEFAULT false;
+
+-- Physical Stock Counts compatibility
+ALTER TABLE IF EXISTS public.physical_stock_counts
+  ADD COLUMN IF NOT EXISTS approved_by UUID,
+  ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS approval_notes TEXT;
+
+-- Raw Material Movements compatibility
+ALTER TABLE IF EXISTS public.raw_material_movements
+  ADD COLUMN IF NOT EXISTS reason TEXT,
+  ADD COLUMN IF NOT EXISTS notes TEXT,
+  ADD COLUMN IF NOT EXISTS destination_location TEXT DEFAULT 'Main Store';
+
+-- Material Purchases Header compatibility
 ALTER TABLE IF EXISTS public.material_purchases 
   ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(12,2) DEFAULT 0.00,
   ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(12,2) DEFAULT 0.00,
   ADD COLUMN IF NOT EXISTS transport_charges NUMERIC(12,2) DEFAULT 0.00;
 
+-- Material Purchase Items compatibility
 ALTER TABLE IF EXISTS public.material_purchase_items
   ADD COLUMN IF NOT EXISTS total_received_quantity NUMERIC(12,3),
   ADD COLUMN IF NOT EXISTS base_quantity NUMERIC(12,3),
@@ -22,10 +64,6 @@ ALTER TABLE IF EXISTS public.material_purchase_items
   ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(12,2) DEFAULT 0.00,
   ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(12,2) DEFAULT 0.00,
   ADD COLUMN IF NOT EXISTS item_total_cost NUMERIC(12,2);
-
-ALTER TABLE IF EXISTS public.raw_material_movements
-  ADD COLUMN IF NOT EXISTS reason TEXT,
-  ADD COLUMN IF NOT EXISTS notes TEXT;
 
 -- 2. Clean and Robust confirm_material_purchase_transaction RPC
 CREATE OR REPLACE FUNCTION public.confirm_material_purchase_transaction(
