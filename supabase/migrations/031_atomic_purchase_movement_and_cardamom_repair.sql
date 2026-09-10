@@ -461,6 +461,98 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- Reverse Material Purchase Transaction Function
+CREATE OR REPLACE FUNCTION public.reverse_material_purchase_transaction(
+  p_purchase_id UUID,
+  p_reason TEXT DEFAULT 'Purchase cancelled',
+  p_user_id TEXT DEFAULT NULL
+) RETURNS JSONB AS $$
+DECLARE
+  v_purch RECORD;
+  v_item RECORD;
+  v_user_uuid UUID := NULL;
+  v_qty NUMERIC(12,3);
+  v_cost NUMERIC(12,2);
+BEGIN
+  SET search_path = public, extensions, pg_temp;
+
+  IF auth.uid() IS NOT NULL THEN
+    v_user_uuid := auth.uid();
+  ELSIF p_user_id IS NOT NULL AND p_user_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_user_uuid := p_user_id::UUID;
+  END IF;
+
+  SELECT * INTO v_purch FROM public.material_purchases WHERE id = p_purchase_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Material purchase not found';
+  END IF;
+
+  IF v_purch.status = 'cancelled' THEN
+    RAISE EXCEPTION 'Purchase is already cancelled';
+  END IF;
+
+  UPDATE public.material_purchases
+  SET status = 'cancelled',
+      notes = COALESCE(notes, '') || ' [Cancelled: ' || COALESCE(p_reason, 'No reason') || ']',
+      updated_at = NOW()
+  WHERE id = p_purchase_id;
+
+  FOR v_item IN SELECT * FROM public.material_purchase_items WHERE purchase_id = p_purchase_id LOOP
+    v_qty := COALESCE(v_item.purchased_quantity, 0) + COALESCE(v_item.free_quantity, 0);
+    v_cost := COALESCE(v_item.net_item_cost, v_qty * COALESCE(v_item.unit_price, 0));
+
+    INSERT INTO public.raw_material_movements (
+      ingredient_id,
+      movement_type,
+      quantity,
+      base_unit,
+      unit_cost_snapshot,
+      total_value_snapshot,
+      reference_table,
+      reference_id,
+      movement_date,
+      source_location,
+      destination_location,
+      reason,
+      performed_by,
+      created_by
+    ) VALUES (
+      v_item.ingredient_id,
+      'purchase_reversal',
+      -ABS(v_qty),
+      COALESCE(v_item.purchase_unit, (SELECT base_unit FROM public.ingredients WHERE id = v_item.ingredient_id), 'kg'),
+      COALESCE(v_item.unit_price, 0.00),
+      -ABS(v_cost),
+      'material_purchases',
+      p_purchase_id,
+      CURRENT_DATE,
+      'Main Store',
+      'Supplier',
+      COALESCE(p_reason, 'Purchase cancelled/reversed'),
+      v_user_uuid,
+      v_user_uuid
+    );
+  END LOOP;
+
+  INSERT INTO public.audit_logs (table_name, record_id, action, old_data, new_data, reason, performed_by)
+  VALUES (
+    'material_purchases',
+    p_purchase_id,
+    'REVERSE_PURCHASE',
+    row_to_json(v_purch)::jsonb,
+    jsonb_build_object('status', 'cancelled', 'reason', p_reason),
+    p_reason,
+    v_user_uuid
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'purchase_id', p_purchase_id,
+    'message', 'खरीद प्रविष्टि सफलतापूर्वक रद्द कर दी गई'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 -- 4. Authoritative Canonical View for Raw Material Balances
 DROP VIEW IF EXISTS public.v_raw_material_stock CASCADE;
 DROP VIEW IF EXISTS public.current_raw_material_stock CASCADE;
@@ -642,8 +734,5 @@ GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
 GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.confirm_material_purchase_atomic TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.confirm_material_purchase_transaction TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.reverse_material_purchase_transaction TO anon, authenticated, service_role;
 
 NOTIFY pgrst, 'reload schema';
