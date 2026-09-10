@@ -33,7 +33,22 @@ BEFORE INSERT OR UPDATE ON public.production_items
 FOR EACH ROW
 EXECUTE FUNCTION public.trg_fn_calculate_production_item_saleable();
 
--- 3. Robust complete_production_with_recipe_transaction with full null-safety
+-- 3. Drop all previous overloaded signatures of complete_production_with_recipe_transaction
+DO $$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN (
+    SELECT oid::regprocedure AS func_signature
+    FROM pg_proc
+    WHERE proname = 'complete_production_with_recipe_transaction'
+      AND pronamespace = 'public'::regnamespace
+  ) LOOP
+    EXECUTE 'DROP FUNCTION IF EXISTS ' || r.func_signature || ' CASCADE;';
+  END LOOP;
+END $$;
+
+-- 4. Robust complete_production_with_recipe_transaction with full null-safety
 CREATE OR REPLACE FUNCTION public.complete_production_with_recipe_transaction(
   p_production_date DATE,
   p_product_id UUID,
