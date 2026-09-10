@@ -183,13 +183,27 @@ BEGIN
 
   -- 6. Process Recipe Items
   FOR v_rec_item IN 
-    SELECT ri.*, i.name_en, i.name_hi, i.base_unit, i.conversion_factor, i.current_rate, i.rate_unit, i.category, i.storage_location
+    SELECT 
+      ri.id,
+      ri.recipe_id,
+      ri.ingredient_id,
+      COALESCE(ri.quantity, 0) AS quantity,
+      ri.unit,
+      ri.sort_order,
+      i.name_en, 
+      i.name_hi, 
+      i.base_unit, 
+      COALESCE(i.conversion_factor, 1.0000) AS conversion_factor, 
+      COALESCE(i.current_rate, 0.00) AS current_rate, 
+      COALESCE(i.rate_unit, i.base_unit) AS rate_unit, 
+      i.category, 
+      COALESCE(i.storage_location, 'Main Store') AS storage_location
     FROM public.recipe_items ri
     JOIN public.ingredients i ON ri.ingredient_id = i.id
     WHERE ri.recipe_id = v_recipe.id
     ORDER BY ri.sort_order, ri.id
   LOOP
-    v_std_item_qty := ROUND((v_rec_item.quantity_per_batch * v_scale_factor), 3);
+    v_std_item_qty := ROUND((v_rec_item.quantity * v_scale_factor), 3);
     v_actual_item_qty := v_std_item_qty;
     v_variance_reason := NULL;
 
