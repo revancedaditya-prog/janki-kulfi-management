@@ -58,7 +58,7 @@ ALTER TABLE IF EXISTS public.material_purchase_items
   ADD COLUMN IF NOT EXISTS manufacturing_date DATE,
   ADD COLUMN IF NOT EXISTS expiry_date DATE;
 
--- Raw material movements columns
+-- Raw material movements columns & constraint cleanup
 ALTER TABLE IF EXISTS public.raw_material_movements
   ADD COLUMN IF NOT EXISTS source_location TEXT,
   ADD COLUMN IF NOT EXISTS destination_location TEXT,
@@ -70,6 +70,29 @@ ALTER TABLE IF EXISTS public.raw_material_movements
   ADD COLUMN IF NOT EXISTS reason TEXT,
   ADD COLUMN IF NOT EXISTS performed_by UUID,
   ADD COLUMN IF NOT EXISTS created_by UUID;
+
+-- Drop any legacy check constraints on movement_type that restrict new movement types
+ALTER TABLE IF EXISTS public.raw_material_movements 
+  DROP CONSTRAINT IF EXISTS raw_material_movements_movement_type_check,
+  DROP CONSTRAINT IF EXISTS raw_material_movements_movement_type_check1,
+  DROP CONSTRAINT IF EXISTS chk_rmm_movement_type;
+
+DO $$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN (
+    SELECT conname 
+    FROM pg_constraint 
+    WHERE conrelid = 'public.raw_material_movements'::regclass 
+      AND contype = 'c' 
+      AND (conname ILIKE '%movement_type%' OR pg_get_constraintdef(oid) ILIKE '%movement_type%')
+  ) LOOP
+    EXECUTE 'ALTER TABLE public.raw_material_movements DROP CONSTRAINT IF EXISTS ' || quote_ident(r.conname);
+  END LOOP;
+EXCEPTION
+  WHEN OTHERS THEN NULL;
+END $$;
 
 -- 2. Drop existing function signatures to ensure clean reload
 DROP FUNCTION IF EXISTS public.confirm_material_purchase_atomic(DATE, TEXT, TEXT, TEXT, NUMERIC, NUMERIC, TEXT, TEXT, JSONB, UUID, TEXT);
