@@ -439,7 +439,10 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- 4. Authoritative Canonical View for Raw Material Balances
-CREATE OR REPLACE VIEW public.current_raw_material_stock AS
+DROP VIEW IF EXISTS public.v_raw_material_stock CASCADE;
+DROP VIEW IF EXISTS public.current_raw_material_stock CASCADE;
+
+CREATE VIEW public.current_raw_material_stock AS
 SELECT
   i.id,
   i.id AS ingredient_id,
