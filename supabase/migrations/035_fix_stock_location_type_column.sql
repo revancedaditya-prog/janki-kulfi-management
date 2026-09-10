@@ -1,31 +1,20 @@
 -- ============================================================================
--- Migration 034: Fix Recipe Item Quantity Column & Enforce Atomic Stock Validation
+-- Migration 035: Fix Canonical stock_locations Column (location_type) in Production RPC
 -- ============================================================================
 
--- 1. Ensure table schema safety for recipe_items and production_batch_ingredients
-ALTER TABLE IF EXISTS public.recipe_items
-  ADD COLUMN IF NOT EXISTS quantity NUMERIC(12,4) NOT NULL DEFAULT 0.0000,
-  ADD COLUMN IF NOT EXISTS unit TEXT NOT NULL DEFAULT 'kg',
-  ADD COLUMN IF NOT EXISTS is_optional BOOLEAN NOT NULL DEFAULT false,
-  ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0;
+-- 1. Ensure stock_locations has the required canonical locations
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.stock_locations WHERE location_type = 'production') THEN
+    INSERT INTO public.stock_locations (location_type, name, is_active)
+    VALUES ('production', 'Production Floor', true);
+  END IF;
 
-ALTER TABLE IF EXISTS public.production_batch_ingredients
-  ADD COLUMN IF NOT EXISTS ingredient_name TEXT,
-  ADD COLUMN IF NOT EXISTS ingredient_name_snapshot TEXT,
-  ADD COLUMN IF NOT EXISTS quantity_used NUMERIC(12,3) DEFAULT 0.000,
-  ADD COLUMN IF NOT EXISTS expected_quantity NUMERIC(12,3) DEFAULT 0.000,
-  ADD COLUMN IF NOT EXISTS actual_quantity NUMERIC(12,3) DEFAULT 0.000,
-  ADD COLUMN IF NOT EXISTS converted_base_quantity NUMERIC(12,3) DEFAULT 0.000,
-  ADD COLUMN IF NOT EXISTS rate_snapshot NUMERIC(12,4) DEFAULT 0.0000,
-  ADD COLUMN IF NOT EXISTS rate_unit TEXT,
-  ADD COLUMN IF NOT EXISTS calculated_cost NUMERIC(12,2) DEFAULT 0.00,
-  ADD COLUMN IF NOT EXISTS is_packaging BOOLEAN DEFAULT false,
-  ADD COLUMN IF NOT EXISTS variance_reason TEXT;
-
-ALTER TABLE IF EXISTS public.production_items 
-  ALTER COLUMN produced_quantity SET DEFAULT 0,
-  ALTER COLUMN damaged_quantity SET DEFAULT 0,
-  ALTER COLUMN saleable_quantity SET DEFAULT 0;
+  IF NOT EXISTS (SELECT 1 FROM public.stock_locations WHERE location_type = 'main_freezer') THEN
+    INSERT INTO public.stock_locations (location_type, name, is_active)
+    VALUES ('main_freezer', 'Main Freezer', true);
+  END IF;
+END $$;
 
 -- 2. Drop all legacy / overloaded signatures of complete_production_with_recipe_transaction
 DO $$
@@ -42,7 +31,7 @@ BEGIN
   END LOOP;
 END $$;
 
--- 3. Definitive, single signature for complete_production_with_recipe_transaction
+-- 3. Definitive complete_production_with_recipe_transaction with canonical location_type column
 CREATE OR REPLACE FUNCTION public.complete_production_with_recipe_transaction(
   p_production_date DATE,
   p_product_id UUID,
