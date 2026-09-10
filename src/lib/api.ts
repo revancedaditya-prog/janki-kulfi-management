@@ -4119,25 +4119,42 @@ export const api = {
       return sum + (itemPrice - discount + tax + charge);
     }, 0);
 
-    const { data: purchaseRow, error: purchaseErr } = await (supabase as any)
+    const headerPayload: any = {
+      purchase_number: purchaseNumber,
+      purchase_date: data.purchase_date,
+      supplier_id: safeSupplierId || null,
+      invoice_number: data.invoice_number || null,
+      payment_method: data.payment_method,
+      total_amount: Number(totalAmount.toFixed(2)),
+      paid_amount: Number(data.paid_amount || 0),
+      credit_amount: Number(data.credit_amount || 0),
+      status: 'received',
+      bill_image_url: data.bill_image_url || null,
+      notes: data.notes || null,
+      created_by: safeUserId,
+    };
+    if (idempotencyKey) {
+      headerPayload.idempotency_key = idempotencyKey;
+    }
+
+    let { data: purchaseRow, error: purchaseErr } = await (supabase as any)
       .from('material_purchases')
-      .insert({
-        purchase_number: purchaseNumber,
-        purchase_date: data.purchase_date,
-        supplier_id: safeSupplierId || null,
-        invoice_number: data.invoice_number || null,
-        payment_method: data.payment_method,
-        total_amount: Number(totalAmount.toFixed(2)),
-        paid_amount: Number(data.paid_amount || 0),
-        credit_amount: Number(data.credit_amount || 0),
-        status: 'received',
-        bill_image_url: data.bill_image_url || null,
-        notes: data.notes || null,
-        idempotency_key: idempotencyKey,
-        created_by: safeUserId,
-      })
+      .insert(headerPayload)
       .select()
       .single();
+
+    // If idempotency_key is not in schema cache (PGRST204), retry insert without it
+    if (purchaseErr && (purchaseErr.code === 'PGRST204' || String(purchaseErr.message).includes('idempotency_key'))) {
+      console.warn('[Supabase Purchase] Column idempotency_key not found in schema cache, retrying without it. Please execute migration 030 in Supabase SQL editor.');
+      delete headerPayload.idempotency_key;
+      const retryResult = await (supabase as any)
+        .from('material_purchases')
+        .insert(headerPayload)
+        .select()
+        .single();
+      purchaseRow = retryResult.data;
+      purchaseErr = retryResult.error;
+    }
 
     if (purchaseErr) {
       if (purchaseErr.code === 'PGRST205' || purchaseErr.code === '42P01') {
@@ -4180,9 +4197,26 @@ export const api = {
       };
     });
 
-    const { error: itemsErr } = await (supabase as any)
+    let { error: itemsErr } = await (supabase as any)
       .from('material_purchase_items')
       .insert(itemsToInsert);
+
+    if (itemsErr && itemsErr.code === 'PGRST204') {
+      console.warn('[Supabase Purchase] Schema mismatch on material_purchase_items, retrying with core columns...');
+      const fallbackItems = itemsToInsert.map((it: any) => ({
+        purchase_id: it.purchase_id,
+        ingredient_id: it.ingredient_id,
+        purchased_quantity: it.purchased_quantity,
+        purchase_unit: it.purchase_unit,
+        unit_price: it.unit_price,
+        item_price: it.item_price,
+        net_item_cost: it.net_item_cost,
+      }));
+      const retryItems = await (supabase as any)
+        .from('material_purchase_items')
+        .insert(fallbackItems);
+      itemsErr = retryItems.error;
+    }
 
     if (itemsErr) {
       throw new Error(`[Supabase Purchase Items ${itemsErr.code || ''}]: ${itemsErr.message}`);
