@@ -68,6 +68,7 @@ ALTER TABLE IF EXISTS public.raw_material_movements
   ADD COLUMN IF NOT EXISTS unit_cost_snapshot NUMERIC(12,4) NOT NULL DEFAULT 0.0000,
   ADD COLUMN IF NOT EXISTS total_value_snapshot NUMERIC(12,2) NOT NULL DEFAULT 0.00,
   ADD COLUMN IF NOT EXISTS reason TEXT,
+  ADD COLUMN IF NOT EXISTS performed_by UUID,
   ADD COLUMN IF NOT EXISTS created_by UUID;
 
 -- 2. Drop existing function signatures to ensure clean reload
