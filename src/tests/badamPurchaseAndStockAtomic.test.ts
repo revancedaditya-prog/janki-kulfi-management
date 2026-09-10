@@ -206,4 +206,68 @@ describe('BADAM Purchase → Inventory Stock Authoritative Update & Atomic Recon
     expect(q2).toBe(stockBefore + 10);
     expect(balances[badam.id]).toBe(stockBefore + 10);
   });
+
+  // 9. Cardamom / इलायची Purchase (10 kg @ ₹2,400 = ₹24,000) immediately updates stock and KPIs
+  it('9. Cardamom (इलायची) purchase of 10 kg @ ₹2,400 immediately updates stock by +10 kg, value by ₹24,000, and monthly purchases KPI', async () => {
+    const cardamom = mockStore.getIngredients().find((i) => i.code === 'ING-CARDAMOM' || i.name_hi.includes('इलायची'))!;
+    const initialCardamomStock = await api.getAvailableRawMaterialStock(cardamom.id);
+    const kpiBefore = await api.getRawMaterialDashboardKPIs();
+
+    const purchase = await api.createMaterialPurchase(
+      {
+        purchase_date: '2026-09-10',
+        payment_method: 'upi',
+        paid_amount: 24000,
+        invoice_number: 'INV-CARD-9676',
+        items: [
+          {
+            ingredient_id: cardamom.id,
+            purchased_quantity: 10,
+            purchase_unit: 'kg',
+            unit_price: 2400,
+          },
+        ],
+      },
+      'usr-owner-001'
+    );
+
+    expect(purchase).toBeDefined();
+    expect(purchase.total_amount).toBe(24000);
+
+    // Stock changes immediately from initial to +10 kg
+    const updatedStock = await api.getAvailableRawMaterialStock(cardamom.id);
+    expect(updatedStock).toBe(initialCardamomStock + 10);
+
+    // Stock movement is recorded with positive purchase_received
+    const movements = await api.getRawMaterialMovements(cardamom.id);
+    const purchaseMovement = movements.find((m) => m.reference_id === purchase.id || m.movement_type === 'purchase_received');
+    expect(purchaseMovement).toBeDefined();
+    expect(purchaseMovement?.quantity).toBe(10);
+    expect(purchaseMovement?.movement_type).toBe('purchase_received');
+
+    // Monthly purchases KPI increases by ₹24,000
+    const kpiAfter = await api.getRawMaterialDashboardKPIs();
+    expect(Number(kpiAfter?.purchasesThisMonth || 0)).toBe(Number(kpiBefore?.purchasesThisMonth || 0) + 24000);
+  });
+
+  // 10. Improve Stock / Stock Correction operates as a distinct adjustment without interfering with purchase history
+  it('10. Improve Stock / Stock Correction creates distinct physical_count_correction movement and sets exact target balance', async () => {
+    const cardamom = mockStore.getIngredients().find((i) => i.code === 'ING-CARDAMOM' || i.name_hi.includes('इलायची'))!;
+    
+    // Correct stock to exactly 12 kg
+    const correctionResult = await api.correctRawMaterialStock({
+      ingredientId: cardamom.id,
+      newQuantity: 12,
+      reason: 'Physical inventory audit adjustment',
+      userId: 'usr-owner-001',
+    });
+
+    expect(correctionResult).toBeDefined();
+    const stockAfterCorrection = await api.getAvailableRawMaterialStock(cardamom.id);
+    expect(stockAfterCorrection).toBe(12);
+
+    const movements = await api.getRawMaterialMovements(cardamom.id);
+    const correctionMovement = movements.find((m) => m.movement_type === 'physical_count_correction');
+    expect(correctionMovement).toBeDefined();
+  });
 });

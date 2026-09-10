@@ -4229,7 +4229,7 @@ export const api = {
       const netCost = itemPrice - Number(it.discount || 0) + Number(it.tax || 0) + Number(it.allocated_charge || 0);
       const unitAcqCost = qty > 0 ? Number((netCost / qty).toFixed(4)) : Number(it.unit_price);
 
-      await (supabase as any).from('raw_material_movements').insert({
+      let { error: movErr } = await (supabase as any).from('raw_material_movements').insert({
         ingredient_id: it.ingredient_id,
         movement_type: 'purchase_received',
         quantity: qty,
@@ -4244,6 +4244,29 @@ export const api = {
         reason: `Material purchase: ${purchaseNumber}`,
         created_by: safeUserId,
       });
+
+      if (movErr && (movErr.code === '23503' || String(movErr.message).includes('foreign key') || String(movErr.message).includes('created_by'))) {
+        const retryMov = await (supabase as any).from('raw_material_movements').insert({
+          ingredient_id: it.ingredient_id,
+          movement_type: 'purchase_received',
+          quantity: qty,
+          base_unit: it.purchase_unit,
+          unit_cost_snapshot: unitAcqCost,
+          total_value_snapshot: Number(netCost.toFixed(2)),
+          reference_table: 'material_purchases',
+          reference_id: purchaseRow.id,
+          movement_date: data.purchase_date,
+          source_location: 'Supplier',
+          destination_location: 'Main Store',
+          reason: `Material purchase: ${purchaseNumber}`,
+          created_by: null,
+        });
+        movErr = retryMov.error;
+      }
+
+      if (movErr) {
+        throw new Error(`[Supabase Purchase Movement ${movErr.code || ''}]: Failed to record inventory movement: ${movErr.message}`);
+      }
 
       // Update current_rate on ingredients table
       await (supabase as any)
