@@ -131,7 +131,8 @@ DECLARE
   v_supplier_uuid UUID := NULL;
   v_user_uuid UUID := NULL;
   v_ing_uuid UUID;
-  v_existing_id UUID;
+  v_existing_id UUID := NULL;
+  v_existing_total NUMERIC(12,2) := NULL;
   v_balances JSONB := '[]'::JSONB;
   v_new_bal NUMERIC(12,3);
 BEGIN
@@ -140,7 +141,7 @@ BEGIN
 
   -- 1. Check idempotency: If this purchase was already recorded with this key, return it safely
   IF p_idempotency_key IS NOT NULL THEN
-    SELECT id, purchase_number, total_amount INTO v_existing_id, v_purchase_number, v_total_purchase_cost
+    SELECT id, purchase_number, total_amount INTO v_existing_id, v_purchase_number, v_existing_total
     FROM public.material_purchases
     WHERE idempotency_key = p_idempotency_key;
 
@@ -150,11 +151,13 @@ BEGIN
         'idempotent_duplicate', true,
         'purchase_id', v_existing_id,
         'purchase_number', v_purchase_number,
-        'total_amount', v_total_purchase_cost,
+        'total_amount', v_existing_total,
         'message', 'खरीद पहले ही दर्ज की जा चुकी है (Idempotent replay)'
       );
     END IF;
   END IF;
+
+  v_total_purchase_cost := 0.00;
 
   -- 2. Resolve User ID and verify authorization
   IF auth.uid() IS NOT NULL THEN
@@ -232,7 +235,7 @@ BEGIN
     v_charge := COALESCE((v_item->>'allocated_charge')::NUMERIC, 0);
     v_item_price := ROUND(v_purchased_qty * v_unit_price, 2);
     v_net_item_cost := v_item_price - v_discount + v_tax + v_charge;
-    v_total_purchase_cost := v_total_purchase_cost + v_net_item_cost;
+    v_total_purchase_cost := COALESCE(v_total_purchase_cost, 0.00) + COALESCE(v_net_item_cost, 0.00);
   END LOOP;
 
   -- 5. Generate formatted purchase number: PUR-YYYYMMDD-XXXX
@@ -259,7 +262,7 @@ BEGIN
     v_supplier_uuid,
     p_invoice_number,
     COALESCE(p_payment_method, 'cash'),
-    v_total_purchase_cost,
+    COALESCE(v_total_purchase_cost, 0.00),
     COALESCE(p_paid_amount, 0),
     COALESCE(p_credit_amount, 0),
     'received',
