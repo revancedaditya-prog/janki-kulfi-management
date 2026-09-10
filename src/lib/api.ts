@@ -698,18 +698,20 @@ export const api = {
 
     if (batchErr) throw batchErr;
 
-    const totalSaleable = items.reduce((sum, it) => sum + (it.produced_quantity - (it.damaged_quantity || 0)), 0);
+    const totalSaleable = items.reduce((sum, it) => sum + Math.max(0, Number(it.produced_quantity || 0) - Number(it.damaged_quantity || 0)), 0);
 
     const itemsToInsert = items.map((it) => {
-      const saleable = it.produced_quantity - (it.damaged_quantity || 0);
+      const prod = Number(it.produced_quantity || 0);
+      const dam = Number(it.damaged_quantity || 0);
+      const saleable = Math.max(0, prod - dam);
       const allocatedCost = totalSaleable > 0 ? (totalIngredientCost * saleable) / totalSaleable : 0;
       const unitCost = saleable > 0 ? allocatedCost / saleable : 0;
 
       return {
         batch_id: batch.id,
         product_id: it.product_id,
-        produced_quantity: it.produced_quantity,
-        damaged_quantity: it.damaged_quantity || 0,
+        produced_quantity: prod,
+        damaged_quantity: dam,
         saleable_quantity: saleable,
         allocated_ingredient_cost: Number(allocatedCost.toFixed(2)),
         unit_production_cost: Number(unitCost.toFixed(2)),
@@ -926,16 +928,20 @@ export const api = {
 
     await (supabase as any).from('production_items').delete().eq('batch_id', batchId);
 
-    const totalSaleable = items.reduce((sum, it) => sum + (it.produced_quantity - (it.damaged_quantity || 0)), 0);
+    const totalSaleable = items.reduce((sum, it) => sum + Math.max(0, Number(it.produced_quantity || 0) - Number(it.damaged_quantity || 0)), 0);
+
     const itemsToInsert = items.map((it) => {
-      const saleable = it.produced_quantity - (it.damaged_quantity || 0);
+      const prod = Number(it.produced_quantity || 0);
+      const dam = Number(it.damaged_quantity || 0);
+      const saleable = Math.max(0, prod - dam);
       const allocatedCost = totalSaleable > 0 ? (totalIngredientCost * saleable) / totalSaleable : 0;
       const unitCost = saleable > 0 ? allocatedCost / saleable : 0;
+
       return {
         batch_id: batchId,
         product_id: it.product_id,
-        produced_quantity: it.produced_quantity,
-        damaged_quantity: it.damaged_quantity || 0,
+        produced_quantity: prod,
+        damaged_quantity: dam,
         saleable_quantity: saleable,
         allocated_ingredient_cost: Number(allocatedCost.toFixed(2)),
         unit_production_cost: Number(unitCost.toFixed(2)),
@@ -966,7 +972,12 @@ export const api = {
         p_date: productionDate,
         p_cost: totalIngredientCost,
         p_notes: notes,
-        p_items: items,
+        p_items: items.map(item => ({
+          product_id: item.product_id,
+          produced_quantity: Number(item.produced_quantity),
+          damaged_quantity: Number(item.damaged_quantity),
+          notes: item.notes
+        })),
         p_reason: reason,
         p_user_id: userId,
       });
@@ -1015,16 +1026,19 @@ export const api = {
 
     if (nErr || !newBatch) throw nErr || new Error('Failed to create revised production batch');
 
-    const totalSaleable = items.reduce((sum, it) => sum + (it.produced_quantity - (it.damaged_quantity || 0)), 0);
+    const totalSaleable = items.reduce((sum, it) => sum + Math.max(0, Number(it.produced_quantity || 0) - Number(it.damaged_quantity || 0)), 0);
+
     const itemsToInsert = items.map((it) => {
-      const saleable = it.produced_quantity - (it.damaged_quantity || 0);
+      const prod = Number(it.produced_quantity || 0);
+      const dam = Number(it.damaged_quantity || 0);
+      const saleable = Math.max(0, prod - dam);
       const allocatedCost = totalSaleable > 0 ? (totalIngredientCost * saleable) / totalSaleable : 0;
       const unitCost = saleable > 0 ? allocatedCost / saleable : 0;
       return {
         batch_id: newBatch.id,
         product_id: it.product_id,
-        produced_quantity: it.produced_quantity,
-        damaged_quantity: it.damaged_quantity || 0,
+        produced_quantity: prod,
+        damaged_quantity: dam,
         saleable_quantity: saleable,
         allocated_ingredient_cost: Number(allocatedCost.toFixed(2)),
         unit_production_cost: Number(unitCost.toFixed(2)),
@@ -1474,14 +1488,17 @@ export const api = {
     if (bErr) throw bErr;
 
     // Insert production item
+    const prod = Number(produced || 0);
+    const dam = Number(damaged || 0);
+    const sal = Math.max(0, prod - dam);
     await (supabase as any).from('production_items').insert({
       batch_id: batch.id,
       product_id: data.productId,
-      produced_quantity: produced,
-      damaged_quantity: damaged,
-      saleable_quantity: saleable,
-      allocated_ingredient_cost: data.totalIngredientCost,
-      unit_production_cost: data.costPerPiece,
+      produced_quantity: prod,
+      damaged_quantity: dam,
+      saleable_quantity: sal,
+      allocated_ingredient_cost: Number(data.totalIngredientCost || 0),
+      unit_production_cost: Number(data.costPerPiece || 0),
       notes: data.notes || null,
     });
 
@@ -5440,12 +5457,12 @@ export const api = {
     const { data, error } = await (supabase as any).rpc('complete_production_with_recipe_transaction', {
       p_production_date: params.productionDate,
       p_product_id: resolvedProductId,
-      p_produced_quantity: params.producedQuantity,
-      p_damaged_quantity: params.damagedQuantity || 0,
+      p_produced_quantity: Number(params.producedQuantity || 0),
+      p_damaged_quantity: Number(params.damagedQuantity || 0),
       p_recipe_id: resolvedRecipeId,
       p_actual_ingredients: resolvedActualIngredients && resolvedActualIngredients.length > 0 ? resolvedActualIngredients : null,
       p_notes: params.notes || '',
-      p_lpg_cost: params.lpgCost || 0.0,
+      p_lpg_cost: Number(params.lpgCost || 0.0),
       p_overhead_costs: params.overheadCosts || {},
       p_idempotency_key: params.idempotencyKey || null,
       p_user_id: params.userId || null,
