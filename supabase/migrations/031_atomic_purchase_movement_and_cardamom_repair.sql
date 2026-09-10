@@ -2,9 +2,33 @@
 -- Migration 031: Authoritative Material Purchase Atomic RPC & Cardamom/Badam Stock Repair
 -- ============================================================================
 
--- 1. Ensure idempotency_key column exists on material_purchases
+-- 1. Ensure all tables and required columns exist safely
+
+-- Ingredients columns
+ALTER TABLE IF EXISTS public.ingredients
+  ADD COLUMN IF NOT EXISTS purchase_unit TEXT DEFAULT 'kg',
+  ADD COLUMN IF NOT EXISTS conversion_factor NUMERIC(10,4) NOT NULL DEFAULT 1.0000,
+  ADD COLUMN IF NOT EXISTS min_stock_level NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS reorder_quantity NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS current_rate NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS rate_unit TEXT NOT NULL DEFAULT 'kg',
+  ADD COLUMN IF NOT EXISTS preferred_supplier_id UUID,
+  ADD COLUMN IF NOT EXISTS preferred_supplier_name TEXT,
+  ADD COLUMN IF NOT EXISTS storage_location TEXT DEFAULT 'Main Store',
+  ADD COLUMN IF NOT EXISTS track_expiry BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS track_lots BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS track_inventory BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+
+-- Material purchases columns
 ALTER TABLE IF EXISTS public.material_purchases 
-  ADD COLUMN IF NOT EXISTS idempotency_key UUID;
+  ADD COLUMN IF NOT EXISTS idempotency_key UUID,
+  ADD COLUMN IF NOT EXISTS paid_amount NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS credit_amount NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'received',
+  ADD COLUMN IF NOT EXISTS bill_image_url TEXT,
+  ADD COLUMN IF NOT EXISTS notes TEXT,
+  ADD COLUMN IF NOT EXISTS created_by UUID;
 
 DO $$
 BEGIN
@@ -18,6 +42,33 @@ EXCEPTION
   WHEN duplicate_table THEN NULL;
   WHEN duplicate_object THEN NULL;
 END $$;
+
+-- Material purchase items columns
+ALTER TABLE IF EXISTS public.material_purchase_items
+  ADD COLUMN IF NOT EXISTS free_quantity NUMERIC(12,3) NOT NULL DEFAULT 0.000,
+  ADD COLUMN IF NOT EXISTS total_received_quantity NUMERIC(12,3) NOT NULL DEFAULT 0.000,
+  ADD COLUMN IF NOT EXISTS base_quantity NUMERIC(12,3) NOT NULL DEFAULT 0.000,
+  ADD COLUMN IF NOT EXISTS base_unit TEXT DEFAULT 'kg',
+  ADD COLUMN IF NOT EXISTS discount NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS tax NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS allocated_charge NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS net_item_cost NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS unit_acquisition_cost NUMERIC(12,4) NOT NULL DEFAULT 0.0000,
+  ADD COLUMN IF NOT EXISTS lot_number TEXT,
+  ADD COLUMN IF NOT EXISTS manufacturing_date DATE,
+  ADD COLUMN IF NOT EXISTS expiry_date DATE;
+
+-- Raw material movements columns
+ALTER TABLE IF EXISTS public.raw_material_movements
+  ADD COLUMN IF NOT EXISTS source_location TEXT,
+  ADD COLUMN IF NOT EXISTS destination_location TEXT,
+  ADD COLUMN IF NOT EXISTS reference_id UUID,
+  ADD COLUMN IF NOT EXISTS reference_type TEXT,
+  ADD COLUMN IF NOT EXISTS reference_table TEXT,
+  ADD COLUMN IF NOT EXISTS unit_cost_snapshot NUMERIC(12,4) NOT NULL DEFAULT 0.0000,
+  ADD COLUMN IF NOT EXISTS total_value_snapshot NUMERIC(12,2) NOT NULL DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS reason TEXT,
+  ADD COLUMN IF NOT EXISTS created_by UUID;
 
 -- 2. Drop existing function signatures to ensure clean reload
 DROP FUNCTION IF EXISTS public.confirm_material_purchase_atomic(DATE, TEXT, TEXT, TEXT, NUMERIC, NUMERIC, TEXT, TEXT, JSONB, UUID, TEXT);
