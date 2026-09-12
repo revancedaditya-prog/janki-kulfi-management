@@ -490,6 +490,41 @@ export const api = {
     return newProd;
   },
 
+  async updateProduct(
+    productId: string,
+    data: {
+      name_en?: string;
+      name_hi?: string;
+      sku?: string;
+      description?: string;
+      selling_price?: number;
+      commission_type?: 'fixed' | 'percentage';
+      commission_value?: number;
+      is_active?: boolean;
+    },
+    userId?: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.updateProduct(productId, data, userId);
+    }
+    const resolvedProductId = await resolveSupabaseProductId(productId);
+    const { data: result, error } = await (supabase as any).rpc('update_product_transaction', {
+      p_product_id: resolvedProductId,
+      p_name_en: data.name_en || null,
+      p_name_hi: data.name_hi || null,
+      p_sku: data.sku || null,
+      p_description: data.description !== undefined ? data.description : null,
+      p_selling_price: data.selling_price !== undefined ? data.selling_price : null,
+      p_commission_type: data.commission_type || 'fixed',
+      p_commission_value: data.commission_value || 0,
+      p_is_active: data.is_active !== undefined ? data.is_active : true,
+    });
+    if (error) {
+      throw new Error(`[Update Product ${error.code || ''}]: ${error.message}`);
+    }
+    return result;
+  },
+
   async updateProductPrice(
     productId: string,
     sellingPrice: number,
@@ -500,27 +535,11 @@ export const api = {
     if (useMockMode) {
       return mockStore.updateProductPrice(productId, sellingPrice, commissionType, commissionValue, userId);
     }
-    // Close existing price
-    await (supabase as any)
-      .from('product_prices')
-      .update({ effective_to: new Date().toISOString() })
-      .eq('product_id', productId)
-      .is('effective_to', null);
-
-    const { data, error } = await (supabase as any)
-      .from('product_prices')
-      .insert({
-        product_id: productId,
-        selling_price: sellingPrice,
-        commission_type: commissionType,
-        commission_value: commissionValue,
-        effective_from: new Date().toISOString(),
-        created_by: userId,
-      })
-      .select()
-      .single();
-    if (error) throw error;
-    return data;
+    return this.updateProduct(productId, {
+      selling_price: sellingPrice,
+      commission_type: commissionType,
+      commission_value: commissionValue,
+    }, userId);
   },
 
   // --- Carts & Sellers ---
@@ -1198,6 +1217,7 @@ export const api = {
     if (useMockMode) {
       return mockStore.getRecipeForProduct(productId);
     }
+    const resolvedProductId = await resolveSupabaseProductId(productId);
     const { data, error } = await (supabase as any)
       .from('recipes')
       .select(`
@@ -1208,17 +1228,19 @@ export const api = {
           ingredient:ingredients(*)
         )
       `)
-      .eq('product_id', productId)
-      .or('status.eq.active,is_default.eq.true')
+      .eq('product_id', resolvedProductId)
+      .order('is_default', { ascending: false })
       .order('version_number', { ascending: false })
-      .maybeSingle();
+      .limit(1);
+
     if (error) {
-      throw new Error(error.message || 'Failed to fetch active recipe from database');
+      throw new Error(`[Get Active Recipe ${error.code || ''}]: ${error.message}`);
     }
-    if (!data) return undefined;
-    const yieldQty = Number(data.expected_yield_pieces || data.standard_output_pieces || 100);
+    const active = data?.[0];
+    if (!active) return undefined;
+    const yieldQty = Number(active.expected_yield_pieces || active.standard_output_pieces || 100);
     return {
-      ...data,
+      ...active,
       expected_yield_pieces: yieldQty,
       standard_output_pieces: yieldQty,
     };
@@ -1228,6 +1250,7 @@ export const api = {
     if (useMockMode) {
       return mockStore.getRecipeHistory(productId);
     }
+    const resolvedProductId = await resolveSupabaseProductId(productId);
     const { data, error } = await (supabase as any)
       .from('recipes')
       .select(`
@@ -1238,10 +1261,10 @@ export const api = {
           ingredient:ingredients(*)
         )
       `)
-      .eq('product_id', productId)
+      .eq('product_id', resolvedProductId)
       .order('version_number', { ascending: false });
     if (error) {
-      throw new Error(error.message || 'Failed to fetch recipe history from database');
+      throw new Error(`[Recipe History ${error.code || ''}]: ${error.message}`);
     }
     return (data || []).map((r: any) => {
       const yieldQty = Number(r.expected_yield_pieces || r.standard_output_pieces || 100);
@@ -1256,6 +1279,7 @@ export const api = {
   async saveRecipe(
     data: {
       product_id: string;
+      recipe_id?: string;
       name?: string;
       standard_output_pieces: number;
       expected_yield_pieces?: number;
@@ -1269,6 +1293,7 @@ export const api = {
         save_rate_to_master?: boolean;
         rate?: number;
       }[];
+      idempotency_key?: string;
     },
     userId: string
   ): Promise<RecipeWithItems> {
@@ -1277,81 +1302,40 @@ export const api = {
     }
 
     const resolvedProductId = await resolveSupabaseProductId(data.product_id);
+    const resolvedRecipeId = data.recipe_id ? toSafeUuid(data.recipe_id) : null;
 
-    // Get current version number
-    const { data: existing } = await (supabase as any)
-      .from('recipes')
-      .select('version_number')
-      .eq('product_id', resolvedProductId)
-      .order('version_number', { ascending: false })
-      .limit(1);
-
-    const newVersion = (existing?.[0]?.version_number || 0) + 1;
-    const isActivating = data.status === 'active' || data.status === undefined;
-
-    if (isActivating) {
-      await (supabase as any)
-        .from('recipes')
-        .update({ status: 'archived', is_default: false })
-        .eq('product_id', resolvedProductId);
-    }
-
-    const stdYield = Math.max(1, Number(data.standard_output_pieces || data.expected_yield_pieces || 100));
-
-    const recipeInsertPayload: Record<string, any> = {
-      product_id: resolvedProductId,
-      version_number: newVersion,
-      name: data.name || `Standard Recipe v${newVersion}`,
-      standard_output_pieces: stdYield,
-      default_overheads: data.default_overheads,
-      notes: data.notes || null,
-      status: data.status || 'active',
-      is_default: isActivating,
-      created_by: userId,
-    };
-
-    let { data: newRecipe, error: recError } = await (supabase as any)
-      .from('recipes')
-      .insert(recipeInsertPayload)
-      .select()
-      .single();
-
-    // If status column is missing in older remote schema, retry without status column
-    if (recError && recError.message?.includes('status')) {
-      delete recipeInsertPayload.status;
-      const retry = await (supabase as any)
-        .from('recipes')
-        .insert(recipeInsertPayload)
-        .select()
-        .single();
-      newRecipe = retry.data;
-      recError = retry.error;
-    }
-
-    if (recError) {
-      throw new Error(recError.message || 'Failed to save recipe in Supabase');
-    }
-
-    // Insert recipe items with resolved ingredient UUIDs
-    const itemsToInsert = await Promise.all(
-      data.items.map(async (it, idx) => ({
-        recipe_id: newRecipe.id,
+    const resolvedItems = await Promise.all(
+      data.items.map(async (it) => ({
         ingredient_id: await resolveSupabaseIngredientId(it.ingredient_id),
-        quantity: it.quantity,
-        unit: it.unit,
-        sort_order: idx + 1,
+        quantity: Math.max(0, Number(it.quantity) || 0),
+        unit: it.unit || 'kg',
       }))
     );
 
-    const { error: itemsError } = await (supabase as any)
-      .from('recipe_items')
-      .insert(itemsToInsert);
+    const stdYield = Math.max(1, Number(data.expected_yield_pieces || data.standard_output_pieces || 100));
+    const idempotencyKey = toSafeUuid(data.idempotency_key) || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null);
 
-    if (itemsError) {
-      throw new Error(itemsError.message || 'Failed to insert recipe items');
+    const { data: rpcResult, error: rpcError } = await (supabase as any).rpc('save_recipe_version_transaction', {
+      p_product_id: resolvedProductId,
+      p_recipe_id: resolvedRecipeId,
+      p_name: data.name ? data.name.trim() : null,
+      p_expected_yield: stdYield,
+      p_default_overheads: data.default_overheads || {},
+      p_items: resolvedItems,
+      p_status: data.status || 'active',
+      p_notes: data.notes ? data.notes.trim() : null,
+      p_idempotency_key: idempotencyKey,
+    });
+
+    if (rpcError) {
+      throw new Error(`[Save Recipe ${rpcError.code || ''}]: ${rpcError.message}`);
     }
 
-    // Optionally update rates WITHOUT modifying rate_unit
+    if (!rpcResult || rpcResult.success === false) {
+      throw new Error(rpcResult?.message || 'Failed to save recipe version');
+    }
+
+    // Optionally update rates in ingredients master if flagged
     for (const it of data.items) {
       if (it.save_rate_to_master && typeof it.rate === 'number' && it.rate > 0) {
         const resIngId = await resolveSupabaseIngredientId(it.ingredient_id);
@@ -1359,11 +1343,32 @@ export const api = {
       }
     }
 
-    const freshRecipe = await this.getRecipeForProduct(resolvedProductId);
-    if (!freshRecipe) {
-      throw new Error('Failed to retrieve newly saved recipe from Supabase');
+    const savedRecipeId = rpcResult.recipe_id;
+    const { data: recData, error: recError } = await (supabase as any)
+      .from('recipes')
+      .select(`
+        *,
+        product:products(*),
+        items:recipe_items(
+          *,
+          ingredient:ingredients(*)
+        )
+      `)
+      .eq('id', savedRecipeId)
+      .single();
+
+    if (recError || !recData) {
+      const fresh = await this.getRecipeForProduct(resolvedProductId);
+      if (fresh) return fresh;
+      throw new Error(`Failed to retrieve newly saved recipe: ${recError?.message || 'Not found'}`);
     }
-    return freshRecipe;
+
+    const yieldQty = Number(recData.expected_yield_pieces || recData.standard_output_pieces || stdYield);
+    return {
+      ...recData,
+      expected_yield_pieces: yieldQty,
+      standard_output_pieces: yieldQty,
+    };
   },
 
   async activateRecipeVersion(recipeId: string, userId?: string): Promise<{ success: boolean; message: string }> {

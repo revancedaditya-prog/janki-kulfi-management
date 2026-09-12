@@ -1038,6 +1038,52 @@ class MockStore {
     return newPrice;
   }
 
+  public updateProduct(
+    productId: string,
+    data: {
+      name_en?: string;
+      name_hi?: string;
+      sku?: string;
+      description?: string;
+      selling_price?: number;
+      commission_type?: 'fixed' | 'percentage';
+      commission_value?: number;
+      is_active?: boolean;
+    },
+    userId: string = 'usr-owner-001'
+  ): ProductWithPrice {
+    const product = this.state.products.find((p) => p.id === productId);
+    if (!product) throw new Error('Product not found');
+
+    if (data.name_en !== undefined) product.name_en = data.name_en;
+    if (data.name_hi !== undefined) product.name_hi = data.name_hi;
+    if (data.sku !== undefined) product.sku = data.sku;
+    if (data.description !== undefined) product.description = data.description;
+    if (data.is_active !== undefined) product.is_active = data.is_active;
+
+    if (data.selling_price !== undefined) {
+      this.updateProductPrice(
+        productId,
+        data.selling_price,
+        data.commission_type || 'fixed',
+        data.commission_value || 0,
+        userId
+      );
+    }
+
+    this.logAudit('products', productId, 'UPDATE_PRODUCT', null, product, 'Updated product details', userId);
+    this.saveState();
+
+    const activePrice = this.getActivePrice(productId);
+    return {
+      ...product,
+      current_price: activePrice?.selling_price || 0,
+      commission_type: (activePrice?.commission_type as CommissionType) || 'fixed',
+      commission_value: activePrice?.commission_value || 0,
+      available_quantity: this.getAvailableFreezerStock(productId),
+    };
+  }
+
   // --- Carts & Sellers ---
   public getCarts(): Cart[] {
     return this.state.carts;
@@ -4174,10 +4220,11 @@ class MockStore {
   public saveRecipe(
     data: {
       product_id: string;
+      recipe_id?: string;
       name?: string;
       standard_output_pieces: number;
       expected_yield_pieces?: number;
-      default_overheads: AdditionalOverheads;
+      default_overheads?: AdditionalOverheads;
       notes?: string;
       status?: 'draft' | 'active' | 'archived';
       items: {
@@ -4187,6 +4234,7 @@ class MockStore {
         save_rate_to_master?: boolean;
         rate?: number;
       }[];
+      idempotency_key?: string;
     },
     userId: string = 'usr-owner-001'
   ): RecipeWithItems {
@@ -4194,14 +4242,24 @@ class MockStore {
     if (!this.state.recipe_items) this.state.recipe_items = [];
 
     const existingRecipes = this.state.recipes.filter((r) => r.product_id === data.product_id);
+    const existingDraft = data.recipe_id
+      ? this.state.recipes.find((r) => r.id === data.recipe_id && r.status === 'draft')
+      : undefined;
+
+    const isUsedInBatches = data.recipe_id
+      ? (this.state.production_batches || []).some((b) => (b as any).recipe_id === data.recipe_id || b.recipe?.id === data.recipe_id)
+      : false;
+
+    const canEditInPlace = Boolean(existingDraft && !isUsedInBatches);
+
     const latestVersion = existingRecipes.sort((a, b) => b.version_number - a.version_number)[0];
-    const newVersion = (latestVersion?.version_number || 0) + 1;
+    const newVersion = canEditInPlace && existingDraft ? existingDraft.version_number : (latestVersion?.version_number || 0) + 1;
     const isActivating = data.status === 'active' || data.status === undefined;
 
     if (isActivating) {
-      // Archive previous active recipe
+      // Archive previous active recipes for this product
       for (const r of existingRecipes) {
-        if (r.status === 'active' || r.is_default) {
+        if ((r.status === 'active' || r.is_default) && (!canEditInPlace || r.id !== existingDraft?.id)) {
           r.status = 'archived';
           r.is_default = false;
         }
@@ -4209,7 +4267,7 @@ class MockStore {
     }
 
     const now = new Date().toISOString();
-    const recipeId = `rec-${generateId().slice(0, 8)}`;
+    const recipeId = canEditInPlace && existingDraft ? existingDraft.id : `rec-${generateId().slice(0, 8)}`;
     const product = this.state.products.find((p) => p.id === data.product_id);
     const stdYield = Math.max(1, data.expected_yield_pieces || data.standard_output_pieces || 100);
 
@@ -4239,7 +4297,19 @@ class MockStore {
       updated_at: now,
     };
 
-    this.state.recipes.push(newRecipe);
+    if (canEditInPlace && existingDraft) {
+      existingDraft.name = newRecipe.name;
+      existingDraft.standard_output_pieces = stdYield;
+      existingDraft.expected_yield_pieces = stdYield;
+      existingDraft.default_overheads = newRecipe.default_overheads;
+      existingDraft.notes = newRecipe.notes;
+      existingDraft.status = newRecipe.status;
+      existingDraft.is_default = newRecipe.is_default;
+      existingDraft.updated_at = now;
+      this.state.recipe_items = this.state.recipe_items.filter((it) => it.recipe_id !== recipeId);
+    } else {
+      this.state.recipes.push(newRecipe);
+    }
 
     // Save recipe items
     const insertedItems: RecipeItem[] = [];

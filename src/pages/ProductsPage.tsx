@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   useProducts,
   useCreateProduct,
-  useUpdateProductPrice,
+  useUpdateProduct,
   usePriceHistory,
 } from '@/hooks/useProducts';
 import { useLanguage } from '@/i18n/LanguageContext';
@@ -22,10 +22,10 @@ export const ProductsPage: React.FC = () => {
   const { isOwner } = useAuth();
 
   const createProduct = useCreateProduct();
-  const updatePrice = useUpdateProductPrice();
+  const updateProduct = useUpdateProduct();
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [selectedProductForPrice, setSelectedProductForPrice] = useState<ProductWithPrice | null>(null);
+  const [selectedProductForEdit, setSelectedProductForEdit] = useState<ProductWithPrice | null>(null);
 
   // Add Product Form State
   const [nameEn, setNameEn] = useState('');
@@ -37,14 +37,19 @@ export const ProductsPage: React.FC = () => {
   const [commissionValue, setCommissionValue] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Price Update Form State
-  const [newPrice, setNewPrice] = useState('');
-  const [newCommType, setNewCommType] = useState<CommissionType>('fixed');
-  const [newCommValue, setNewCommValue] = useState('');
-  const [priceFormError, setPriceFormError] = useState<string | null>(null);
+  // Edit Product Form State
+  const [editNameEn, setEditNameEn] = useState('');
+  const [editNameHi, setEditNameHi] = useState('');
+  const [editSku, setEditSku] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editSellingPrice, setEditSellingPrice] = useState('');
+  const [editCommissionType, setEditCommissionType] = useState<CommissionType>('fixed');
+  const [editCommissionValue, setEditCommissionValue] = useState('');
+  const [editIsActive, setEditIsActive] = useState<boolean>(true);
+  const [editFormError, setEditFormError] = useState<string | null>(null);
 
   // Price history query
-  const { data: priceHistory = [] } = usePriceHistory(selectedProductForPrice?.id || '');
+  const { data: priceHistory = [] } = usePriceHistory(selectedProductForEdit?.id || '');
 
   const handleOpenAddModal = () => {
     setNameEn('');
@@ -58,12 +63,17 @@ export const ProductsPage: React.FC = () => {
     setIsAddModalOpen(true);
   };
 
-  const handleOpenPriceModal = (prod: ProductWithPrice) => {
-    setSelectedProductForPrice(prod);
-    setNewPrice(String(prod.current_price || 0));
-    setNewCommType((prod.commission_type as CommissionType) || 'fixed');
-    setNewCommValue(String(prod.commission_value || 0));
-    setPriceFormError(null);
+  const handleOpenEditModal = (prod: ProductWithPrice) => {
+    setSelectedProductForEdit(prod);
+    setEditNameEn(prod.name_en || '');
+    setEditNameHi(prod.name_hi || '');
+    setEditSku(prod.sku || '');
+    setEditDescription(prod.description || '');
+    setEditSellingPrice(String(prod.current_price || 0));
+    setEditCommissionType((prod.commission_type as CommissionType) || 'fixed');
+    setEditCommissionValue(String(prod.commission_value || 0));
+    setEditIsActive(prod.is_active !== false);
+    setEditFormError(null);
   };
 
   const handleCreateProduct = async (e: React.FormEvent) => {
@@ -95,29 +105,40 @@ export const ProductsPage: React.FC = () => {
     }
   };
 
-  const handleUpdatePrice = async (e: React.FormEvent) => {
+  const handleUpdateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    setPriceFormError(null);
+    setEditFormError(null);
 
-    if (!selectedProductForPrice) return;
-    const priceNum = parseFloat(newPrice);
-    const commNum = parseFloat(newCommValue);
+    if (!selectedProductForEdit) return;
+    const priceNum = parseFloat(editSellingPrice);
+    const commNum = parseFloat(editCommissionValue);
 
     if (isNaN(priceNum) || priceNum <= 0) {
-      setPriceFormError('कृपया सही बिक्री मूल्य दर्ज करें');
+      setEditFormError('कृपया सही बिक्री मूल्य दर्ज करें');
+      return;
+    }
+    if (isNaN(commNum) || commNum < 0) {
+      setEditFormError('कमीशन 0 या उससे अधिक होना चाहिए');
       return;
     }
 
     try {
-      await updatePrice.mutateAsync({
-        productId: selectedProductForPrice.id,
-        sellingPrice: priceNum,
-        commissionType: newCommType,
-        commissionValue: commNum,
+      await updateProduct.mutateAsync({
+        productId: selectedProductForEdit.id,
+        data: {
+          name_en: editNameEn.trim(),
+          name_hi: editNameHi.trim(),
+          sku: editSku.trim(),
+          description: editDescription.trim(),
+          selling_price: priceNum,
+          commission_type: editCommissionType,
+          commission_value: commNum,
+          is_active: editIsActive,
+        },
       });
-      setSelectedProductForPrice(null);
+      setSelectedProductForEdit(null);
     } catch (err: any) {
-      setPriceFormError(err.message || 'मूल्य बदलने में त्रुटि');
+      setEditFormError(err.message || 'उत्पाद अपडेट करने में त्रुटि');
     }
   };
 
@@ -131,7 +152,7 @@ export const ProductsPage: React.FC = () => {
             {t.productsList}
           </h2>
           <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
-            कुल्फी उत्पाद सूची, वर्तमान बिक्री दरें एवं विक्रेता कमीशन दरें
+            कुल्फी उत्पाद सूची, वर्तमान बिक्री दरें, मूल्य इतिहास एवं विक्रेता कमीशन दरें
           </p>
         </div>
 
@@ -204,14 +225,14 @@ export const ProductsPage: React.FC = () => {
               </div>
 
               {isOwner && (
-                <div className="pt-4 border-t border-gray-100 mt-4 flex items-center justify-end">
+                <div className="pt-4 border-t border-gray-100 mt-4 flex items-center justify-end gap-2">
                   <Button
                     size="sm"
                     variant="outline"
                     leftIcon={<Edit className="w-4 h-4" />}
-                    onClick={() => handleOpenPriceModal(prod)}
+                    onClick={() => handleOpenEditModal(prod)}
                   >
-                    {t.updatePrice}
+                    उत्पाद संपादित करें (Edit Product)
                   </Button>
                 </div>
               )}
@@ -319,51 +340,88 @@ export const ProductsPage: React.FC = () => {
         </form>
       </Modal>
 
-      {/* Update Price & History Modal */}
+      {/* Edit Product & Price History Modal */}
       <Modal
-        isOpen={Boolean(selectedProductForPrice)}
-        onClose={() => setSelectedProductForPrice(null)}
-        title={t.updatePrice}
+        isOpen={Boolean(selectedProductForEdit)}
+        onClose={() => setSelectedProductForEdit(null)}
+        title="उत्पाद संपादित करें (Edit Product)"
         subtitle={
-          selectedProductForPrice
+          selectedProductForEdit
             ? language === 'hi'
-              ? selectedProductForPrice.name_hi
-              : selectedProductForPrice.name_en
+              ? selectedProductForEdit.name_hi
+              : selectedProductForEdit.name_en
             : ''
         }
         maxWidth="lg"
       >
         <div className="space-y-5 py-2">
-          {/* Update Form */}
-          <form onSubmit={handleUpdatePrice} className="space-y-4 p-4 rounded-2xl bg-cream-50 border border-cream-200">
-            <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider">
-              नई दर एवं कमीशन लागू करें
-            </h4>
-
-            {priceFormError && (
+          {/* Edit Form */}
+          <form onSubmit={handleUpdateProduct} className="space-y-4 p-4 rounded-2xl bg-cream-50 border border-cream-200">
+            {editFormError && (
               <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold">
-                {priceFormError}
+                {editFormError}
               </div>
             )}
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input
+                label="हिंदी नाम (Product Name Hindi) *"
+                placeholder="जैसे: ₹10 सादा कुल्फी"
+                value={editNameHi}
+                onChange={(e) => setEditNameHi(e.target.value)}
+                required
+              />
+              <Input
+                label="English Name *"
+                placeholder="e.g. ₹10 Sada Kulfi"
+                value={editNameEn}
+                onChange={(e) => setEditNameEn(e.target.value)}
+                required
+              />
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <Input
+                label="SKU / प्रोडक्ट कोड *"
+                value={editSku}
+                onChange={(e) => setEditSku(e.target.value)}
+                required
+              />
+
               <Input
                 type="number"
                 step="0.01"
-                label={t.sellingPrice}
+                min="0.01"
+                label="बिक्री मूल्य (Selling Price ₹) *"
                 prefixSymbol="₹"
-                value={newPrice}
-                onChange={(e) => setNewPrice(e.target.value)}
+                value={editSellingPrice}
+                onChange={(e) => setEditSellingPrice(e.target.value)}
                 required
               />
 
               <div className="space-y-1.5">
-                <label className="block text-sm font-semibold text-gray-800">
+                <label className="block text-xs font-bold text-gray-700">
+                  सक्रिय स्थिति (Status)
+                </label>
+                <select
+                  value={editIsActive ? 'active' : 'inactive'}
+                  onChange={(e) => setEditIsActive(e.target.value === 'active')}
+                  className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-xs font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-800"
+                >
+                  <option value="active">सक्रिय (Active)</option>
+                  <option value="inactive">निष्क्रिय (Inactive)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-gray-700">
                   {t.commissionType}
                 </label>
                 <select
-                  value={newCommType}
-                  onChange={(e) => setNewCommType(e.target.value as CommissionType)}
+                  value={editCommissionType}
+                  onChange={(e) => setEditCommissionType(e.target.value as CommissionType)}
                   className="w-full bg-white border border-gray-300 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-maroon-700 focus:outline-none min-h-[44px]"
                 >
                   <option value="fixed">{t.commissionFixed}</option>
@@ -375,17 +433,32 @@ export const ProductsPage: React.FC = () => {
                 type="number"
                 step="0.01"
                 label={t.commissionValue}
-                prefixSymbol={newCommType === 'fixed' ? '₹' : undefined}
-                suffixSymbol={newCommType === 'percentage' ? '%' : undefined}
-                value={newCommValue}
-                onChange={(e) => setNewCommValue(e.target.value)}
+                prefixSymbol={editCommissionType === 'fixed' ? '₹' : undefined}
+                suffixSymbol={editCommissionType === 'percentage' ? '%' : undefined}
+                value={editCommissionValue}
+                onChange={(e) => setEditCommissionValue(e.target.value)}
                 required
               />
             </div>
 
-            <div className="flex justify-end">
-              <Button type="submit" variant="primary" size="sm" isLoading={updatePrice.isPending}>
-                नया मूल्य लागू करें
+            <Input
+              label="विवरण (Description)"
+              placeholder="उत्पाद के स्वाद व पैकेजिंग की जानकारी"
+              value={editDescription}
+              onChange={(e) => setEditDescription(e.target.value)}
+            />
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setSelectedProductForEdit(null)}
+              >
+                {t.cancel}
+              </Button>
+              <Button type="submit" variant="primary" size="sm" isLoading={updateProduct.isPending}>
+                उत्पाद अपडेट करें (Save Product)
               </Button>
             </div>
           </form>

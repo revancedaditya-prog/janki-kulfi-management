@@ -47,6 +47,37 @@ export function useCreateProduct() {
   });
 }
 
+export function useUpdateProduct() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async ({
+      productId,
+      data,
+    }: {
+      productId: string;
+      data: {
+        name_en?: string;
+        name_hi?: string;
+        sku?: string;
+        description?: string;
+        selling_price?: number;
+        commission_type?: 'fixed' | 'percentage';
+        commission_value?: number;
+        is_active?: boolean;
+      };
+    }) => {
+      return api.updateProduct(productId, data, user?.id || 'usr-owner-001');
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['price_history', variables.productId] });
+      queryClient.invalidateQueries({ queryKey: ['recipes'] });
+    },
+  });
+}
+
 export function useUpdateProductPrice() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
@@ -74,6 +105,7 @@ export function useUpdateProductPrice() {
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['price_history', variables.productId] });
+      queryClient.invalidateQueries({ queryKey: ['recipes'] });
     },
   });
 }

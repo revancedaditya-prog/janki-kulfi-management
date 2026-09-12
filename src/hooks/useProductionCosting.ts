@@ -75,6 +75,7 @@ export function useSaveRecipe() {
   return useMutation({
     mutationFn: (data: {
       product_id: string;
+      recipe_id?: string;
       name?: string;
       standard_output_pieces: number;
       expected_yield_pieces?: number;
@@ -88,6 +89,7 @@ export function useSaveRecipe() {
         save_rate_to_master?: boolean;
         rate?: number;
       }[];
+      idempotency_key?: string;
     }) => api.saveRecipe(data, user?.id || 'usr-owner-001'),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['recipe', variables.product_id] });
