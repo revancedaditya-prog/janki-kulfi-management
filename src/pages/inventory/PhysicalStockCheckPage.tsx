@@ -4,6 +4,7 @@ import {
   useIngredients,
   usePhysicalStockCounts,
   useCreatePhysicalStockCount,
+  useApprovePhysicalStockCount,
 } from '@/hooks/useInventory';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
@@ -24,6 +25,7 @@ export const PhysicalStockCheckPage: React.FC = () => {
   const { data: ingredients = [] } = useIngredients();
   const { data: pastCounts = [] } = usePhysicalStockCounts();
   const createCountMutation = useCreatePhysicalStockCount();
+  const approveCountMutation = useApprovePhysicalStockCount();
 
   const [activeTab, setActiveTab] = useState<'new_audit' | 'history'>('new_audit');
   const [countDate, setCountDate] = useState(getTodayDateString());
@@ -422,7 +424,32 @@ export const PhysicalStockCheckPage: React.FC = () => {
             </table>
           </div>
 
-          <div className="flex justify-end pt-3 border-t border-stone-200">
+          <div className="flex items-center justify-between pt-3 border-t border-stone-200">
+            <div>
+              {isOwner && selectedPastCount?.status === 'draft' && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  isLoading={approveCountMutation.isPending}
+                  className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs"
+                  onClick={async () => {
+                    try {
+                      await approveCountMutation.mutateAsync(selectedPastCount.id);
+                      setSelectedPastCount(null);
+                      setSuccessMsg(
+                        language === 'hi'
+                          ? `ऑडिट ${selectedPastCount.count_number} स्वीकृत हो गया व स्टॉक सुधार दिया गया!`
+                          : `Audit ${selectedPastCount.count_number} approved and stock adjusted successfully!`
+                      );
+                    } catch (err: any) {
+                      alert(err.message || 'त्रुटि हुई');
+                    }
+                  }}
+                >
+                  ✓ यह ड्राफ्ट स्वीकृत करें व स्टॉक सुधारें (Approve & Correct)
+                </Button>
+              )}
+            </div>
             <Button variant="outline" size="sm" onClick={() => setSelectedPastCount(null)}>
               बंद करें
             </Button>

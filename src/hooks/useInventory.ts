@@ -222,26 +222,49 @@ export function useCreatePhysicalStockCount() {
         reason?: string;
       }[];
       status?: 'draft' | 'approved';
+      idempotency_key?: string;
     }) => api.createPhysicalStockCount(data, user?.id || 'usr-owner-001'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['physical-stock-counts'] });
       queryClient.invalidateQueries({ queryKey: ['ingredients'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-balances'] });
       queryClient.invalidateQueries({ queryKey: ['raw-material-movements'] });
       queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
     },
   });
 }
 
 export function useApprovePhysicalStockCount() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   return useMutation({
-    mutationFn: (countId: string) =>
-      api.approvePhysicalStockCount(countId, user?.id || 'usr-owner-001'),
+    mutationFn: (param: { countId: string; notes?: string } | string) => {
+      const id = typeof param === 'string' ? param : param.countId;
+      const n = typeof param === 'string' ? undefined : param.notes;
+      return api.approvePhysicalStockCount(id, n);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['physical-stock-counts'] });
       queryClient.invalidateQueries({ queryKey: ['ingredients'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-balances'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-movements'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard_summary'] });
+    },
+  });
+}
+
+export function useRejectPhysicalStockCount() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ countId, reason }: { countId: string; reason?: string }) =>
+      api.rejectPhysicalStockCount(countId, reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['physical-stock-counts'] });
+      queryClient.invalidateQueries({ queryKey: ['ingredients'] });
+      queryClient.invalidateQueries({ queryKey: ['raw-material-balances'] });
       queryClient.invalidateQueries({ queryKey: ['raw-material-movements'] });
       queryClient.invalidateQueries({ queryKey: ['raw-material-kpis'] });
     },

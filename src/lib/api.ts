@@ -4398,54 +4398,117 @@ export const api = {
         reason?: string;
       }[];
       status?: 'draft' | 'approved';
+      idempotency_key?: string;
     },
-    userId: string
+    userId?: string
   ): Promise<PhysicalStockCountWithItems> {
     if (useMockMode) {
-      return mockStore.createPhysicalStockCount(data, userId);
+      return mockStore.createPhysicalStockCount(data, userId || 'usr-owner-001');
     }
+
     const resolvedItems = await Promise.all(
       data.items.map(async (item) => ({
-        ...item,
         ingredient_id: await resolveSupabaseIngredientId(item.ingredient_id),
+        physical_stock: Math.max(0, Number(item.physical_stock) || 0),
+        reason: item.reason ? item.reason.trim() : null,
       }))
     );
-    const { data: created, error } = await (supabase as any).from('physical_stock_counts').insert({
-      count_date: data.count_date,
-      notes: data.notes,
-      status: data.status || 'draft',
-      counted_by: userId,
-    }).select().single();
+
+    const idempotencyKey = toSafeUuid(data.idempotency_key) || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null);
+
+    const { data: result, error } = await (supabase as any).rpc('create_physical_stock_count_transaction', {
+      p_count_date: data.count_date,
+      p_notes: data.notes ? data.notes.trim() : null,
+      p_items: resolvedItems,
+      p_idempotency_key: idempotencyKey,
+    });
+
     if (error) {
       throw new Error(`[Create Stock Count ${error.code || ''}]: ${error.message}`);
     }
-    if (resolvedItems.length > 0) {
-      const itemsToInsert = resolvedItems.map((item) => ({
-        count_id: created.id,
-        ingredient_id: item.ingredient_id,
-        physical_stock: item.physical_stock,
-        reason: item.reason || null,
-      }));
-      const { error: itemsError } = await (supabase as any).from('physical_stock_count_items').insert(itemsToInsert);
-      if (itemsError) {
-        throw new Error(`[Stock Count Items ${itemsError.code || ''}]: ${itemsError.message}`);
+
+    if (!result || result.success === false) {
+      throw new Error(result?.message || 'Failed to create physical stock count');
+    }
+
+    const countId = result.count_id;
+
+    // If approved status requested during creation, approve immediately
+    if (data.status === 'approved' && countId) {
+      const { data: approveResult, error: approveError } = await (supabase as any).rpc('approve_physical_stock_count_transaction', {
+        p_count_id: countId,
+        p_notes: data.notes ? `Approved on submission: ${data.notes.trim()}` : null,
+      });
+
+      if (approveError) {
+        throw new Error(`[Approve Stock Count ${approveError.code || ''}]: ${approveError.message}`);
+      }
+
+      if (approveResult?.success === false) {
+        throw new Error(approveResult?.message || 'Failed to approve physical stock count');
       }
     }
-    return (await this.getPhysicalStockCounts()).find((c) => c.id === created.id) || created;
+
+    // Return the full record from the database
+    const counts = await this.getPhysicalStockCounts();
+    const found = counts.find((c) => c.id === countId);
+    if (found) return found;
+
+    return {
+      id: countId,
+      count_number: result.count_number,
+      count_date: data.count_date,
+      status: data.status === 'approved' ? 'approved' : 'draft',
+      notes: data.notes || null,
+      items: (result.items || []).map((it: any) => ({
+        id: it.id,
+        count_id: countId,
+        ingredient_id: it.ingredient_id,
+        app_stock: Number(it.app_stock) || 0,
+        physical_stock: Number(it.physical_stock) || 0,
+        difference_quantity: Number(it.difference_quantity) || 0,
+        base_unit: it.base_unit || 'kg',
+        unit_cost_snapshot: Number(it.unit_cost_snapshot) || 0,
+        difference_value: Number(it.difference_value) || 0,
+        reason: it.reason || null,
+      })),
+    };
   },
 
-  async approvePhysicalStockCount(countId: string, approvedBy: string): Promise<boolean> {
+  async approvePhysicalStockCount(countId: string, notes?: string): Promise<boolean> {
     if (useMockMode) {
-      return mockStore.approvePhysicalStockCount(countId, approvedBy);
+      return mockStore.approvePhysicalStockCount(countId);
     }
     const { data, error } = await (supabase as any).rpc('approve_physical_stock_count_transaction', {
       p_count_id: countId,
-      p_approved_by: approvedBy,
+      p_notes: notes || null,
     });
     if (error) {
       throw new Error(`[Approve Stock Count ${error.code || ''}]: ${error.message}`);
     }
-    return data?.success !== false;
+    if (data?.success === false) {
+      throw new Error(data?.message || 'Failed to approve physical stock count');
+    }
+    return true;
+  },
+
+  async rejectPhysicalStockCount(countId: string, reason?: string): Promise<boolean> {
+    if (useMockMode) {
+      const count = (mockStore.getState().physical_stock_counts || []).find((c) => c.id === countId);
+      if (count) count.status = 'rejected';
+      return true;
+    }
+    const { data, error } = await (supabase as any).rpc('reject_physical_stock_count_transaction', {
+      p_count_id: countId,
+      p_reason: reason || null,
+    });
+    if (error) {
+      throw new Error(`[Reject Stock Count ${error.code || ''}]: ${error.message}`);
+    }
+    if (data?.success === false) {
+      throw new Error(data?.message || 'Failed to reject physical stock count');
+    }
+    return true;
   },
 
   // --- Simple LPG Cylinder Register Management ---
