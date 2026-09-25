@@ -662,6 +662,8 @@ export interface RecipeItem {
   ingredient_id: string;
   quantity: number;
   unit: UnitType;
+  rate?: number | null;
+  rate_unit?: UnitType | null;
   is_optional?: boolean;
   sort_order?: number;
   ingredient?: Ingredient;

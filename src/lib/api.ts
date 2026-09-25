@@ -1229,6 +1229,7 @@ export const api = {
         )
       `)
       .eq('product_id', resolvedProductId)
+      .eq('status', 'active')
       .order('is_default', { ascending: false })
       .order('version_number', { ascending: false })
       .limit(1);
@@ -1291,7 +1292,8 @@ export const api = {
         quantity: number;
         unit: UnitType;
         save_rate_to_master?: boolean;
-        rate?: number;
+        rate?: number | null;
+        rate_unit?: UnitType | null;
       }[];
       idempotency_key?: string;
     },
@@ -1309,6 +1311,8 @@ export const api = {
         ingredient_id: await resolveSupabaseIngredientId(it.ingredient_id),
         quantity: Math.max(0, Number(it.quantity) || 0),
         unit: it.unit || 'kg',
+        rate: it.rate,
+        rate_unit: it.rate_unit,
       }))
     );
 
@@ -1358,8 +1362,6 @@ export const api = {
       .single();
 
     if (recError || !recData) {
-      const fresh = await this.getRecipeForProduct(resolvedProductId);
-      if (fresh) return fresh;
       throw new Error(`Failed to retrieve newly saved recipe: ${recError?.message || 'Not found'}`);
     }
 

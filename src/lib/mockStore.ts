@@ -4232,7 +4232,8 @@ class MockStore {
         quantity: number;
         unit: UnitType;
         save_rate_to_master?: boolean;
-        rate?: number;
+        rate?: number | null;
+        rate_unit?: UnitType | null;
       }[];
       idempotency_key?: string;
     },
@@ -4321,6 +4322,8 @@ class MockStore {
         ingredient_id: it.ingredient_id,
         quantity: Number(it.quantity) || 0,
         unit: it.unit,
+        rate: it.rate ?? this.getIngredientById(it.ingredient_id)?.current_rate ?? 0,
+        rate_unit: it.rate_unit ?? this.getIngredientById(it.ingredient_id)?.rate_unit ?? it.unit,
         sort_order: idx + 1,
       };
       this.state.recipe_items!.push(rItem);
