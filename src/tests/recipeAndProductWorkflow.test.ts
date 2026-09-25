@@ -303,28 +303,12 @@ describe('Recipe Calculator & Product Editing Workflow Test Suite', () => {
 
 describe('Recipe rate snapshots', () => {
   beforeEach(() => mockStore.resetToDefault());
-
   it('keeps the saved recipe rate and unit after the master rate changes', () => {
     const recipe = mockStore.getRecipeForProduct('prod-sada-01')!;
-    const saved = mockStore.saveRecipe({
-      product_id: recipe.product_id,
-      recipe_id: recipe.id,
-      name: recipe.name,
-      standard_output_pieces: 100,
-      items: recipe.items.map((item) => ({
-        ingredient_id: item.ingredient_id,
-        quantity: item.quantity,
-        unit: item.unit,
-        rate: item.ingredient_id === 'ing-milk-01' ? 73.5 : 0,
-        rate_unit: item.unit,
-      })),
-      status: 'active',
-    });
+    const saved = mockStore.saveRecipe({ product_id: recipe.product_id, recipe_id: recipe.id, name: recipe.name, standard_output_pieces: 100, items: recipe.items.map((item) => ({ ingredient_id: item.ingredient_id, quantity: item.quantity, unit: item.unit, rate: item.ingredient_id === 'ing-milk-01' ? 73.5 : 0, rate_unit: item.unit })), status: 'active' });
     const savedMilk = saved.items.find((item) => item.ingredient_id === 'ing-milk-01')!;
-    expect(savedMilk.rate).toBe(73.5);
-    expect(savedMilk.rate_unit).toBe('litre');
+    expect(savedMilk.rate).toBe(73.5); expect(savedMilk.rate_unit).toBe('litre');
     mockStore.updateIngredientRate('ing-milk-01', 99, 'litre');
-    const reloadedMilk = mockStore.getRecipeForProduct('prod-sada-01')!.items.find((item) => item.ingredient_id === 'ing-milk-01')!;
-    expect(reloadedMilk.rate).toBe(73.5);
+    expect(mockStore.getRecipeForProduct('prod-sada-01')!.items.find((item) => item.ingredient_id === 'ing-milk-01')!.rate).toBe(73.5);
   });
 });

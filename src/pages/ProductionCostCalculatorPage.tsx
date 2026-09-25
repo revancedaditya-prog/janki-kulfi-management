@@ -175,16 +175,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
       setRecipeNotes(recipe.notes || '');
       setSaveAsStatus((recipe.status as 'active' | 'draft') || 'active');
       const storedOverheads = recipe.default_overheads as Partial<AdditionalOverheads> | undefined;
-      setOverheads({
-        electricity: Number(storedOverheads?.electricity) || 0,
-        generator_fuel: Number(storedOverheads?.generator_fuel) || 0,
-        gas: Number(storedOverheads?.gas) || 0,
-        direct_labour: Number(storedOverheads?.direct_labour) || 0,
-        water: Number(storedOverheads?.water) || 0,
-        packaging_extra: Number(storedOverheads?.packaging_extra) || 0,
-        transport: Number(storedOverheads?.transport) || 0,
-        other: Number(storedOverheads?.other) || 0,
-      });
+      setOverheads({ electricity: Number(storedOverheads?.electricity) || 0, generator_fuel: Number(storedOverheads?.generator_fuel) || 0, gas: Number(storedOverheads?.gas) || 0, direct_labour: Number(storedOverheads?.direct_labour) || 0, water: Number(storedOverheads?.water) || 0, packaging_extra: Number(storedOverheads?.packaging_extra) || 0, transport: Number(storedOverheads?.transport) || 0, other: Number(storedOverheads?.other) || 0 });
 
       // Populate items that exist in the recipe
       const rows: CostingIngredientRow[] = (recipe.items || []).map((it) => {
@@ -287,8 +278,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
 
   // Handle Product Tab Click
   const handleProductSelect = (productId: string) => {
-    if (saveRecipeMutation.isPending) return;
-    if (productId === selectedProductId) return;
+    if (saveRecipeMutation.isPending || productId === selectedProductId) return;
     if (isDirty) {
       const confirmDiscard = window.confirm(
         'आपके पास बिना सहेजे गए बदलाव हैं। क्या आप उत्पाद बदलना चाहते हैं? (Unsaved changes will be discarded)'
@@ -442,11 +432,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
   // Scaled Ingredients calculation
   const scaledResults = useMemo(() => {
     if (!requiredQuantity || requiredQuantity <= 0 || !recipeRows.length) return null;
-    return scaleProductionRecipe({
-      standard_output_pieces: standardOutputPieces,
-      default_overheads: overheads,
-      items: recipeRows.map((row) => ({ ...row, ingredient: allIngredients.find((ing) => ing.id === row.ingredient_id) })),
-    }, Number(requiredQuantity));
+    return scaleProductionRecipe({ standard_output_pieces: standardOutputPieces, default_overheads: overheads, items: recipeRows.map((row) => ({ ...row, ingredient: allIngredients.find((ing) => ing.id === row.ingredient_id) })) }, Number(requiredQuantity));
   }, [requiredQuantity, recipeRows, standardOutputPieces, overheads, allIngredients]);
 
   // Ingredients available to add (not yet in recipeRows)

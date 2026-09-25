@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 51088)
-Total output lines: 5581
-
 import { supabase, isSupabaseConfigured } from './supabase';
 import { mockStore } from './mockStore';
 import {
@@ -1714,7 +1711,2272 @@ export const api = {
       };
     });
 
-    await (supabas…21088 tokens truncated…Materials: activeCount,
+    await (supabase as any).from('seller_issue_items').insert(itemsToInsert);
+
+    // Insert stock movements (Freezer -> Seller Cart)
+    const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type, seller_id');
+    const freezerLoc = locs?.find((l: any) => l.location_type === 'main_freezer');
+    let sellerLoc = locs?.find((l: any) => l.location_type === 'seller' && l.seller_id === sellerId);
+
+    if (!sellerLoc) {
+      const { data: newLoc } = await (supabase as any)
+        .from('stock_locations')
+        .insert({
+          location_type: 'seller',
+          name: `Seller Cart Stock - ${seller?.full_name || sellerId}`,
+          seller_id: sellerId,
+          cart_id: cartId || null,
+          is_active: true,
+        })
+        .select()
+        .single();
+      sellerLoc = newLoc;
+    }
+
+    if (freezerLoc && sellerLoc) {
+      const now = new Date().toISOString();
+      const movements = items
+        .filter((it) => it.issued_quantity > 0)
+        .map((it) => ({
+          movement_date: now,
+          product_id: it.product_id,
+          source_location_id: freezerLoc.id,
+          destination_location_id: sellerLoc.id,
+          quantity: it.issued_quantity,
+          movement_type: 'seller_issue',
+          reference_table: 'seller_issues',
+          reference_id: newIssue.id,
+          notes: `Stock issued to seller in issue ${issueNumber}`,
+          created_by: userId,
+        }));
+
+      if (movements.length > 0) {
+        await (supabase as any).from('stock_movements').insert(movements);
+      }
+    }
+
+    return newIssue;
+  },
+
+  async updateDraftSellerIssue(
+    issueId: string,
+    issueDate: string,
+    sellerId: string,
+    cartId: string | null,
+    items: { product_id: string; issued_quantity: number }[],
+    notes: string,
+    userId: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.updateDraftSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, userId);
+    }
+    const { error: iErr } = await (supabase as any)
+      .from('seller_issues')
+      .update({
+        issue_date: issueDate,
+        seller_id: sellerId,
+        cart_id: cartId || null,
+        notes: notes || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', issueId)
+      .eq('status', 'draft');
+    if (iErr) throw iErr;
+
+    await (supabase as any).from('seller_issue_items').delete().eq('seller_issue_id', issueId);
+    // Fetch prices and insert items
+    const { data: prices } = await (supabase as any).from('product_prices').select('*').eq('is_active', true);
+    const itemsToInsert = items.map((it) => {
+      const p = prices?.find((pr: any) => pr.product_id === it.product_id);
+      return {
+        seller_issue_id: issueId,
+        product_id: it.product_id,
+        issued_quantity: it.issued_quantity,
+        unit_selling_price_snapshot: p?.selling_price || 0,
+        commission_type_snapshot: p?.commission_type || 'fixed',
+        commission_value_snapshot: p?.commission_value || 0,
+      };
+    });
+    const { error: itErr } = await (supabase as any).from('seller_issue_items').insert(itemsToInsert);
+    if (itErr) throw itErr;
+    return { success: true };
+  },
+
+  async cancelDraftSellerIssue(issueId: string, userId: string): Promise<void> {
+    if (useMockMode) {
+      return mockStore.cancelDraftSellerIssue(issueId, userId);
+    }
+    const { error } = await (supabase as any)
+      .from('seller_issues')
+      .update({ status: 'cancelled' })
+      .eq('id', issueId)
+      .eq('status', 'draft');
+    if (error) throw error;
+  },
+
+  async correctSellerIssue(
+    issueId: string,
+    issueDate: string,
+    sellerId: string,
+    cartId: string | null,
+    items: { product_id: string; issued_quantity: number }[],
+    notes: string,
+    reason: string,
+    userId: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.correctSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, reason, userId);
+    }
+    try {
+      const { data, error } = await (supabase as any).rpc('correct_issued_stock', {
+        p_issue_id: issueId,
+        p_date: issueDate,
+        p_seller_id: sellerId,
+        p_cart_id: cartId,
+        p_items: items,
+        p_notes: notes,
+        p_reason: reason,
+        p_user_id: userId,
+      });
+      if (!error && data) {
+        return data;
+      }
+      console.warn('RPC correct_issued_stock failed, attempting direct Supabase revision:', error);
+    } catch (err) {
+      console.warn('RPC correct_issued_stock error, attempting direct Supabase revision:', err);
+    }
+
+    // Direct Supabase revision fallback
+    const { data: oldIssue } = await (supabase as any)
+      .from('seller_issues')
+      .select('*, items:seller_issue_items(*)')
+      .eq('id', issueId)
+      .maybeSingle();
+
+    if (!oldIssue) {
+      return mockStore.correctSellerIssue(issueId, issueDate, sellerId, cartId, items, notes, reason, userId);
+    }
+
+    const nextVersion = (oldIssue.version_number || 1) + 1;
+    const baseNumber = (oldIssue.issue_number || 'ISSUE').replace(/-V\d+$/, '').replace(/-R\d+$/, '');
+    const newIssueNumber = `${baseNumber}-R${nextVersion}`;
+
+    const { data: newIssue, error: nErr } = await (supabase as any)
+      .from('seller_issues')
+      .insert({
+        issue_number: newIssueNumber,
+        issue_date: issueDate,
+        seller_id: sellerId,
+        cart_id: cartId || oldIssue.cart_id,
+        status: 'issued',
+        notes: notes || null,
+        version_number: nextVersion,
+        is_current_version: true,
+        correction_of_id: issueId,
+        correction_reason: reason,
+        corrected_by: userId,
+        corrected_at: new Date().toISOString(),
+        created_by: oldIssue.created_by,
+      })
+      .select()
+      .single();
+
+    if (nErr || !newIssue) throw nErr || new Error('Failed to create revised seller issue');
+
+    const itemsToInsert = items.map((it) => ({
+      seller_issue_id: newIssue.id,
+      product_id: it.product_id,
+      issued_quantity: it.issued_quantity,
+      unit_selling_price_snapshot: 0,
+      commission_type_snapshot: 'fixed',
+      commission_value_snapshot: 0,
+    }));
+
+    await (supabase as any).from('seller_issue_items').insert(itemsToInsert);
+
+    // Mark old issue superseded
+    await (supabase as any)
+      .from('seller_issues')
+      .update({
+        status: 'superseded',
+        is_current_version: false,
+        superseded_by_id: newIssue.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', issueId);
+
+    return newIssue;
+  },
+
+  async deleteSellerIssue(issueId: string, reason: string = 'Deleted by Owner', userId: string = 'usr-owner-001'): Promise<{ success: boolean; message: string }> {
+    if (useMockMode) {
+      return mockStore.deleteSellerIssue(issueId, reason, userId);
+    }
+    try {
+      const { data, error } = await (supabase as any).rpc('delete_seller_issue_transaction', {
+        p_issue_id: issueId,
+        p_reason: reason,
+        p_user_id: userId,
+      });
+      if (!error && data) {
+        return data;
+      }
+      console.warn('RPC delete_seller_issue_transaction failed or not installed, executing direct Supabase deletion:', error);
+    } catch (err) {
+      console.warn('deleteSellerIssue RPC error, executing direct Supabase deletion:', err);
+    }
+
+    // Direct Supabase fallback
+    const { data: issue } = await (supabase as any)
+      .from('seller_issues')
+      .select('*, items:seller_issue_items(*)')
+      .eq('id', issueId)
+      .maybeSingle();
+
+    if (!issue) {
+      return mockStore.deleteSellerIssue(issueId, reason, userId);
+    }
+
+    // Check if active settlements exist
+    const { data: activeSettlements } = await (supabase as any)
+      .from('seller_settlements')
+      .select('id, settlement_number, status')
+      .or(`seller_issue_id.eq.${issueId},issue_id.eq.${issueId}`)
+      .in('status', ['approved', 'pending_approval', 'draft']);
+
+    if (activeSettlements && activeSettlements.length > 0) {
+      const numbers = activeSettlements.map((s: any) => s.settlement_number).filter(Boolean).join(', ');
+      throw new Error(`इस स्टॉक निकासी को नहीं हटाया जा सकता क्योंकि इसके विरुद्ध हिसाब (${numbers || 'Settlement'}) दर्ज है। कृपया पहले संबंधित हिसाब को हटाएं।`);
+    }
+
+    // Clean up any remaining superseded/cancelled/rejected settlements for this issue
+    const { data: allLinkedSettlements } = await (supabase as any)
+      .from('seller_settlements')
+      .select('id')
+      .or(`seller_issue_id.eq.${issueId},issue_id.eq.${issueId}`);
+
+    if (allLinkedSettlements && allLinkedSettlements.length > 0) {
+      const setIds = allLinkedSettlements.map((s: any) => s.id);
+      await (supabase as any).from('settlement_items').delete().in('settlement_id', setIds);
+      await (supabase as any).from('seller_settlements').delete().in('id', setIds);
+    }
+
+    if (issue.status === 'issued' && issue.items && issue.items.length > 0) {
+      const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type, seller_id');
+      const freezerLoc = locs?.find((l: any) => l.location_type === 'main_freezer');
+      const sellerLoc = locs?.find((l: any) => l.location_type === 'seller' && l.seller_id === issue.seller_id);
+
+      if (freezerLoc && sellerLoc) {
+        const movementsToInsert = issue.items
+          .filter((it: any) => (it.issued_quantity || 0) > 0)
+          .map((it: any) => ({
+            movement_date: new Date().toISOString(),
+            product_id: it.product_id,
+            source_location_id: sellerLoc.id,
+            destination_location_id: freezerLoc.id,
+            quantity: it.issued_quantity,
+            movement_type: 'issue_reversal',
+            reference_table: 'seller_issues',
+            reference_id: issue.id,
+            notes: `Stock reversal for deleted stock issue ${issue.issue_number}: ${reason}`,
+            created_by: userId,
+          }));
+
+        if (movementsToInsert.length > 0) {
+          await (supabase as any).from('stock_movements').insert(movementsToInsert);
+        }
+      }
+    }
+
+    // Unlink self-referencing correction chains
+    await (supabase as any).from('seller_issues').update({ correction_of_id: null }).eq('correction_of_id', issueId);
+    await (supabase as any).from('seller_issues').update({ superseded_by_id: null }).eq('superseded_by_id', issueId);
+
+    await (supabase as any).from('seller_issue_items').delete().eq('seller_issue_id', issueId);
+    const { error: delErr } = await (supabase as any).from('seller_issues').delete().eq('id', issueId);
+    if (delErr) throw delErr;
+
+    return { success: true, message: 'Stock issue deleted successfully' };
+  },
+
+  async getIssueRevisionHistory(issueId: string): Promise<RevisionRecord[]> {
+    if (useMockMode) {
+      return mockStore.getIssueRevisionHistory(issueId);
+    }
+    const { data, error } = await (supabase as any)
+      .from('seller_issues')
+      .select('*, items:seller_issue_items(*, product:products(*)), profile:profiles!created_by(*)')
+      .order('version_number', { ascending: true });
+    if (error) throw error;
+    const all = data || [];
+    const target = all.find((i: any) => i.id === issueId);
+    if (!target) return [];
+    let root = target;
+    while (root.correction_of_id) {
+      const parent = all.find((i: any) => i.id === root.correction_of_id);
+      if (!parent) break;
+      root = parent;
+    }
+    const chain: any[] = [];
+    let curr: any = root;
+    while (curr) {
+      chain.push(curr);
+      if (!curr.superseded_by_id) break;
+      curr = all.find((i: any) => i.id === curr.superseded_by_id);
+    }
+    return chain.map((i: any) => {
+      const totalIssued = i.items?.reduce((s: number, it: any) => s + (it.issued_quantity || 0), 0) || 0;
+      return {
+        id: i.id,
+        version_number: i.version_number || 1,
+        status: i.status,
+        date: i.issue_date,
+        created_at: i.created_at,
+        corrected_at: i.corrected_at,
+        corrected_by_name: i.profile?.full_name || 'Owner',
+        correction_reason: i.correction_reason,
+        is_current_version: i.is_current_version !== false,
+        correction_of_id: i.correction_of_id,
+        superseded_by_id: i.superseded_by_id,
+        summary_text: `Version ${i.version_number || 1} (${i.status}): ${totalIssued} pcs issued`,
+        details: i,
+        stock_effect: { issued: totalIssued },
+      };
+    });
+  },
+
+  // --- Seller Settlements ---
+  async getSellerSettlements(): Promise<SellerSettlementWithDetails[]> {
+    if (useMockMode) {
+      return mockStore.getSettlements();
+    }
+    const { data, error } = await (supabase as any)
+      .from('seller_settlements')
+      .select(`
+        *,
+        seller:sellers(*),
+        issue:seller_issues(*),
+        items:settlement_items(
+          *,
+          product:products(*)
+        )
+      `)
+      .neq('status', 'superseded')
+      .order('settlement_date', { ascending: false });
+    if (error) throw error;
+    return (data as any) || [];
+  },
+
+  async processSellerSettlement(
+    issueId: string,
+    settlementDate: string,
+    items: {
+      issue_item_id: string;
+      returned_quantity: number;
+      damaged_quantity: number;
+      complimentary_quantity: number;
+      damage_reason?: string;
+      complimentary_reason?: string;
+    }[],
+    cashReceived: number,
+    upiReceived: number,
+    creditAmount: number,
+    notes: string,
+    isApprovedByOwner: boolean,
+    userId: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.processSellerSettlement(
+        issueId,
+        settlementDate,
+        items,
+        cashReceived,
+        upiReceived,
+        creditAmount,
+        notes,
+        isApprovedByOwner,
+        userId
+      );
+    }
+    try {
+      const { data, error } = await (supabase as any).rpc('process_seller_settlement', {
+        p_seller_issue_id: issueId,
+        p_settlement_date: settlementDate,
+        p_items: items,
+        p_cash: cashReceived,
+        p_upi: upiReceived,
+        p_credit: creditAmount,
+        p_notes: notes,
+        p_is_approved_by_owner: isApprovedByOwner,
+        p_user_id: userId,
+      });
+      if (!error && data) {
+        return data;
+      }
+      console.warn('RPC process_seller_settlement unavailable or failed, executing direct Supabase settlement:', error);
+    } catch (rpcErr) {
+      console.warn('RPC process_seller_settlement call failed, executing direct Supabase settlement:', rpcErr);
+    }
+
+    // Direct Supabase Settlement Fallback
+    const { data: issue } = await (supabase as any)
+      .from('seller_issues')
+      .select('*, items:seller_issue_items(*, product:products(*)), seller:sellers(*)')
+      .eq('id', issueId)
+      .maybeSingle();
+
+    if (!issue) {
+      return mockStore.processSellerSettlement(
+        issueId,
+        settlementDate,
+        items,
+        cashReceived,
+        upiReceived,
+        creditAmount,
+        notes,
+        isApprovedByOwner,
+        userId
+      );
+    }
+
+    const todayCode = `ST-${settlementDate.replace(/-/g, '')}`;
+    const { data: existingSettlements } = await (supabase as any)
+      .from('seller_settlements')
+      .select('settlement_number')
+      .ilike('settlement_number', `${todayCode}%`);
+    const seq = (existingSettlements?.length || 0) + 1;
+    const settlementNumber = `${todayCode}-${String(seq).padStart(3, '0')}`;
+
+    let grossSales = 0;
+    let totalCommission = 0;
+    const settlementItemsToInsert: any[] = [];
+
+    for (const it of items) {
+      const issueItem = issue.items?.find((ii: any) => ii.id === it.issue_item_id);
+      if (issueItem) {
+        const issuedQty = issueItem.issued_quantity || 0;
+        const returnedQty = it.returned_quantity || 0;
+        const damagedQty = it.damaged_quantity || 0;
+        const compQty = it.complimentary_quantity || 0;
+        const soldQty = Math.max(0, issuedQty - returnedQty - damagedQty - compQty);
+        const unitPrice = issueItem.unit_selling_price_snapshot || issueItem.product?.selling_price || 0;
+        const itemGross = soldQty * unitPrice;
+        grossSales += itemGross;
+
+        const commVal = issueItem.commission_value_snapshot || 0;
+        const commType = issueItem.commission_type_snapshot || 'fixed';
+        const itemComm = commType === 'percentage' ? (itemGross * commVal) / 100 : soldQty * commVal;
+        totalCommission += itemComm;
+
+        settlementItemsToInsert.push({
+          issue_item_id: it.issue_item_id,
+          product_id: issueItem.product_id,
+          issued_quantity: issuedQty,
+          returned_quantity: returnedQty,
+          damaged_quantity: damagedQty,
+          complimentary_quantity: compQty,
+          sold_quantity: soldQty,
+          unit_selling_price_snapshot: unitPrice,
+          total_item_sales: itemGross,
+          commission_amount: itemComm,
+          damage_reason: it.damage_reason || null,
+          complimentary_reason: it.complimentary_reason || null,
+        });
+      }
+    }
+
+    const netPayable = grossSales - totalCommission;
+    const totalReceived = cashReceived + upiReceived;
+    const difference = totalReceived + creditAmount - netPayable;
+    const shortageAmount = difference < 0 ? Math.abs(difference) : 0;
+    const status = isApprovedByOwner ? 'approved' : 'pending_approval';
+
+    const { data: newSettlement, error: setErr } = await (supabase as any)
+      .from('seller_settlements')
+      .insert({
+        settlement_number: settlementNumber,
+        seller_issue_id: issueId,
+        seller_id: issue.seller_id,
+        settlement_date: settlementDate,
+        status,
+        cash_received: cashReceived,
+        upi_received: upiReceived,
+        credit_amount: creditAmount,
+        gross_sales: Number(grossSales.toFixed(2)),
+        total_commission: Number(totalCommission.toFixed(2)),
+        net_payable: Number(netPayable.toFixed(2)),
+        total_received: Number(totalReceived.toFixed(2)),
+        shortage_amount: Number(shortageAmount.toFixed(2)),
+        difference_amount: Number(difference.toFixed(2)),
+        notes: notes || null,
+        created_by: userId,
+        approved_by: isApprovedByOwner ? userId : null,
+        approved_at: isApprovedByOwner ? new Date().toISOString() : null,
+      })
+      .select()
+      .single();
+
+    if (setErr || !newSettlement) throw setErr || new Error('Failed to create settlement');
+
+    const finalItems = settlementItemsToInsert.map((si) => ({
+      ...si,
+      settlement_id: newSettlement.id,
+    }));
+    await (supabase as any).from('settlement_items').insert(finalItems);
+
+    await (supabase as any)
+      .from('seller_issues')
+      .update({
+        status: 'settled',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', issueId);
+
+    if (isApprovedByOwner) {
+      const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type, seller_id');
+      const freezerLoc = locs?.find((l: any) => l.location_type === 'main_freezer');
+      const sellerLoc = locs?.find((l: any) => l.location_type === 'seller' && l.seller_id === issue.seller_id);
+      const damagedLoc = locs?.find((l: any) => l.location_type === 'damaged');
+      const compLoc = locs?.find((l: any) => l.location_type === 'complimentary');
+
+      if (freezerLoc && sellerLoc) {
+        const movements: any[] = [];
+        const now = new Date().toISOString();
+
+        for (const si of settlementItemsToInsert) {
+          if (si.returned_quantity > 0) {
+            movements.push({
+              movement_date: now,
+              product_id: si.product_id,
+              source_location_id: sellerLoc.id,
+              destination_location_id: freezerLoc.id,
+              quantity: si.returned_quantity,
+              movement_type: 'settlement_returned',
+              reference_table: 'seller_settlements',
+              reference_id: newSettlement.id,
+              notes: `Stock returned in settlement ${settlementNumber}`,
+              created_by: userId,
+            });
+          }
+          if (si.damaged_quantity > 0 && damagedLoc) {
+            movements.push({
+              movement_date: now,
+              product_id: si.product_id,
+              source_location_id: sellerLoc.id,
+              destination_location_id: damagedLoc.id,
+              quantity: si.damaged_quantity,
+              movement_type: 'settlement_damaged',
+              reference_table: 'seller_settlements',
+              reference_id: newSettlement.id,
+              notes: `Damaged stock in settlement ${settlementNumber}: ${si.damage_reason || ''}`,
+              created_by: userId,
+            });
+          }
+          if (si.complimentary_quantity > 0 && compLoc) {
+            movements.push({
+              movement_date: now,
+              product_id: si.product_id,
+              source_location_id: sellerLoc.id,
+              destination_location_id: compLoc.id,
+              quantity: si.complimentary_quantity,
+              movement_type: 'settlement_complimentary',
+              reference_table: 'seller_settlements',
+              reference_id: newSettlement.id,
+              notes: `Complimentary stock in settlement ${settlementNumber}: ${si.complimentary_reason || ''}`,
+              created_by: userId,
+            });
+          }
+        }
+
+        if (movements.length > 0) {
+          await (supabase as any).from('stock_movements').insert(movements);
+        }
+      }
+    }
+
+    return newSettlement;
+  },
+
+  async approvePendingSettlement(settlementId: string, userId: string): Promise<any> {
+    if (useMockMode) {
+      return mockStore.approvePendingSettlement(settlementId, userId);
+    }
+    try {
+      const { data, error } = await (supabase as any).rpc('approve_pending_settlement', {
+        p_settlement_id: settlementId,
+        p_user_id: userId,
+      });
+      if (!error && data) {
+        return data;
+      }
+      console.warn('RPC approve_pending_settlement failed or unavailable, executing direct Supabase approval:', error);
+    } catch (rpcErr) {
+      console.warn('RPC approve_pending_settlement call failed, executing direct Supabase approval:', rpcErr);
+    }
+
+    // Direct Supabase approval fallback
+    const { data: settlement } = await (supabase as any)
+      .from('seller_settlements')
+      .select('*, items:settlement_items(*)')
+      .eq('id', settlementId)
+      .maybeSingle();
+
+    if (!settlement) {
+      return mockStore.approvePendingSettlement(settlementId, userId);
+    }
+
+    await (supabase as any)
+      .from('seller_settlements')
+      .update({
+        status: 'approved',
+        approved_by: userId,
+        approved_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', settlementId);
+
+    const issueId = settlement.seller_issue_id || settlement.issue_id;
+    if (issueId) {
+      await (supabase as any)
+        .from('seller_issues')
+        .update({
+          status: 'settled',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', issueId);
+    }
+
+    if (settlement.items && settlement.items.length > 0) {
+      const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type, seller_id');
+      const freezerLoc = locs?.find((l: any) => l.location_type === 'main_freezer');
+      const sellerLoc = locs?.find((l: any) => l.location_type === 'seller' && l.seller_id === settlement.seller_id);
+      const damagedLoc = locs?.find((l: any) => l.location_type === 'damaged');
+      const compLoc = locs?.find((l: any) => l.location_type === 'complimentary');
+
+      if (freezerLoc && sellerLoc) {
+        const movements: any[] = [];
+        const now = new Date().toISOString();
+
+        for (const it of settlement.items) {
+          if ((it.returned_quantity || 0) > 0) {
+            movements.push({
+              movement_date: now,
+              product_id: it.product_id,
+              source_location_id: sellerLoc.id,
+              destination_location_id: freezerLoc.id,
+              quantity: it.returned_quantity,
+              movement_type: 'settlement_returned',
+              reference_table: 'seller_settlements',
+              reference_id: settlement.id,
+              notes: `Stock returned in settlement ${settlement.settlement_number}`,
+              created_by: userId,
+            });
+          }
+          if ((it.damaged_quantity || 0) > 0 && damagedLoc) {
+            movements.push({
+              movement_date: now,
+              product_id: it.product_id,
+              source_location_id: sellerLoc.id,
+              destination_location_id: damagedLoc.id,
+              quantity: it.damaged_quantity,
+              movement_type: 'settlement_damaged',
+              reference_table: 'seller_settlements',
+              reference_id: settlement.id,
+              notes: `Damaged stock in settlement ${settlement.settlement_number}: ${it.damage_reason || ''}`,
+              created_by: userId,
+            });
+          }
+          if ((it.complimentary_quantity || 0) > 0 && compLoc) {
+            movements.push({
+              movement_date: now,
+              product_id: it.product_id,
+              source_location_id: sellerLoc.id,
+              destination_location_id: compLoc.id,
+              quantity: it.complimentary_quantity,
+              movement_type: 'settlement_complimentary',
+              reference_table: 'seller_settlements',
+              reference_id: settlement.id,
+              notes: `Complimentary stock in settlement ${settlement.settlement_number}: ${it.complimentary_reason || ''}`,
+              created_by: userId,
+            });
+          }
+        }
+
+        if (movements.length > 0) {
+          await (supabase as any).from('stock_movements').insert(movements);
+        }
+      }
+    }
+
+    return { success: true };
+  },
+
+  async updatePendingSettlement(
+    settlementId: string,
+    items: {
+      issue_item_id: string;
+      returned_quantity: number;
+      damaged_quantity: number;
+      complimentary_quantity: number;
+      damage_reason?: string;
+      complimentary_reason?: string;
+    }[],
+    cashReceived: number,
+    upiReceived: number,
+    creditAmount: number,
+    notes: string,
+    userId: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.updatePendingSettlement(settlementId, items, cashReceived, upiReceived, creditAmount, notes, userId);
+    }
+    // Update pending settlement in Supabase
+    return mockStore.updatePendingSettlement(settlementId, items, cashReceived, upiReceived, creditAmount, notes, userId);
+  },
+
+  async correctApprovedSettlement(
+    settlementId: string,
+    settlementDate: string,
+    cashReceived: number,
+    upiReceived: number,
+    creditAmount: number,
+    items: {
+      issue_item_id: string;
+      returned_quantity: number;
+      damaged_quantity: number;
+      complimentary_quantity: number;
+      damage_reason?: string;
+      complimentary_reason?: string;
+    }[],
+    notes: string,
+    reason: string,
+    userId: string
+  ): Promise<any> {
+    if (useMockMode) {
+      return mockStore.correctApprovedSettlement(settlementId, settlementDate, cashReceived, upiReceived, creditAmount, items, notes, reason, userId);
+    }
+    try {
+      const { data, error } = await (supabase as any).rpc('correct_approved_settlement', {
+        p_settlement_id: settlementId,
+        p_date: settlementDate,
+        p_cash: cashReceived,
+        p_upi: upiReceived,
+        p_credit: creditAmount,
+        p_items: items,
+        p_notes: notes,
+        p_reason: reason,
+        p_user_id: userId,
+      });
+      if (!error && data) {
+        return data;
+      }
+      console.warn('RPC correct_approved_settlement failed, attempting direct Supabase revision:', error);
+    } catch (err) {
+      console.warn('RPC correct_approved_settlement error, attempting direct Supabase revision:', err);
+    }
+
+    // Direct Supabase revision fallback
+    const { data: oldSettlement } = await (supabase as any)
+      .from('seller_settlements')
+      .select('*, items:settlement_items(*)')
+      .eq('id', settlementId)
+      .maybeSingle();
+
+    if (!oldSettlement) {
+      return mockStore.correctApprovedSettlement(settlementId, settlementDate, cashReceived, upiReceived, creditAmount, items, notes, reason, userId);
+    }
+
+    const nextVersion = (oldSettlement.version_number || 1) + 1;
+    const baseNumber = (oldSettlement.settlement_number || 'SETTLEMENT').replace(/-V\d+$/, '').replace(/-R\d+$/, '');
+    const newSettlementNumber = `${baseNumber}-R${nextVersion}`;
+
+    const { data: newSettlement, error: nErr } = await (supabase as any)
+      .from('seller_settlements')
+      .insert({
+        settlement_number: newSettlementNumber,
+        settlement_date: settlementDate,
+        seller_id: oldSettlement.seller_id,
+        seller_issue_id: oldSettlement.seller_issue_id,
+        status: 'approved',
+        cash_received: cashReceived,
+        upi_received: upiReceived,
+        credit_amount: creditAmount,
+        notes: notes || null,
+        version_number: nextVersion,
+        is_current_version: true,
+        correction_of_id: settlementId,
+        correction_reason: reason,
+        corrected_by: userId,
+        corrected_at: new Date().toISOString(),
+        approved_by: userId,
+        approved_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (nErr || !newSettlement) throw nErr || new Error('Failed to create revised settlement');
+
+    // Mark old settlement superseded
+    await (supabase as any)
+      .from('seller_settlements')
+      .update({
+        status: 'superseded',
+        is_current_version: false,
+        superseded_by_id: newSettlement.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', settlementId);
+
+    return newSettlement;
+  },
+
+  async deleteSellerSettlement(settlementId: string, reason: string = 'Deleted by Owner', userId: string = 'usr-owner-001'): Promise<{ success: boolean; message: string }> {
+    if (useMockMode) {
+      return mockStore.deleteSellerSettlement(settlementId, reason, userId);
+    }
+    try {
+      const { data, error } = await (supabase as any).rpc('delete_seller_settlement_transaction', {
+        p_settlement_id: settlementId,
+        p_reason: reason,
+        p_user_id: userId,
+      });
+      if (!error && data) {
+        return data;
+      }
+      console.warn('RPC delete_seller_settlement_transaction failed or not installed, executing direct Supabase deletion:', error);
+    } catch (err) {
+      console.warn('deleteSellerSettlement RPC error, executing direct Supabase deletion:', err);
+    }
+
+    // Direct Supabase fallback
+    const { data: settlement } = await (supabase as any)
+      .from('seller_settlements')
+      .select('*, items:settlement_items(*)')
+      .eq('id', settlementId)
+      .maybeSingle();
+
+    if (!settlement) {
+      return mockStore.deleteSellerSettlement(settlementId, reason, userId);
+    }
+
+    if (settlement.status === 'approved' && settlement.items && settlement.items.length > 0) {
+      const { data: locs } = await (supabase as any).from('stock_locations').select('id, location_type, seller_id');
+      const freezerLoc = locs?.find((l: any) => l.location_type === 'main_freezer');
+      const sellerLoc = locs?.find((l: any) => l.location_type === 'seller' && l.seller_id === settlement.seller_id);
+      const damagedLoc = locs?.find((l: any) => l.location_type === 'damaged');
+      const compLoc = locs?.find((l: any) => l.location_type === 'complimentary');
+
+      if (freezerLoc && sellerLoc) {
+        const movementsToInsert: any[] = [];
+        const now = new Date().toISOString();
+
+        for (const it of settlement.items) {
+          if ((it.returned_quantity || 0) > 0) {
+            movementsToInsert.push({
+              movement_date: now,
+              product_id: it.product_id,
+              source_location_id: freezerLoc.id,
+              destination_location_id: sellerLoc.id,
+              quantity: it.returned_quantity,
+              movement_type: 'settlement_reversal',
+              reference_table: 'seller_settlements',
+              reference_id: settlement.id,
+              notes: `Stock reversal for deleted settlement ${settlement.settlement_number}: returned pieces moved back to seller cart`,
+              created_by: userId,
+            });
+          }
+          if ((it.damaged_quantity || 0) > 0 && damagedLoc) {
+            movementsToInsert.push({
+              movement_date: now,
+              product_id: it.product_id,
+              source_location_id: damagedLoc.id,
+              destination_location_id: sellerLoc.id,
+              quantity: it.damaged_quantity,
+              movement_type: 'settlement_reversal',
+              reference_table: 'seller_settlements',
+              reference_id: settlement.id,
+              notes: `Stock reversal for deleted settlement ${settlement.settlement_number}: damaged pieces reversed`,
+              created_by: userId,
+            });
+          }
+          if ((it.complimentary_quantity || 0) > 0 && compLoc) {
+            movementsToInsert.push({
+              movement_date: now,
+              product_id: it.product_id,
+              source_location_id: compLoc.id,
+              destination_location_id: sellerLoc.id,
+              quantity: it.complimentary_quantity,
+              movement_type: 'settlement_reversal',
+              reference_table: 'seller_settlements',
+              reference_id: settlement.id,
+              notes: `Stock reversal for deleted settlement ${settlement.settlement_number}: complimentary pieces reversed`,
+              created_by: userId,
+            });
+          }
+        }
+
+        if (movementsToInsert.length > 0) {
+          await (supabase as any).from('stock_movements').insert(movementsToInsert);
+        }
+      }
+
+      // Reopen linked issue
+      const issueId = settlement.seller_issue_id || settlement.issue_id;
+      if (issueId) {
+        await (supabase as any).from('seller_issues').update({ status: 'issued', updated_at: new Date().toISOString() }).eq('id', issueId);
+      }
+    }
+
+    // Unlink self-referencing correction chains
+    await (supabase as any).from('seller_settlements').update({ correction_of_id: null }).eq('correction_of_id', settlementId);
+    await (supabase as any).from('seller_settlements').update({ superseded_by_id: null }).eq('superseded_by_id', settlementId);
+
+    await (supabase as any).from('settlement_items').delete().eq('settlement_id', settlementId);
+    const { error: delErr } = await (supabase as any).from('seller_settlements').delete().eq('id', settlementId);
+    if (delErr) throw delErr;
+
+    return { success: true, message: 'Settlement deleted successfully' };
+  },
+
+  async getSettlementRevisionHistory(settlementId: string): Promise<RevisionRecord[]> {
+    if (useMockMode) {
+      return mockStore.getSettlementRevisionHistory(settlementId);
+    }
+    const { data, error } = await (supabase as any)
+      .from('seller_settlements')
+      .select('*, items:settlement_items(*, product:products(*)), profile:profiles!approved_by(*)')
+      .order('version_number', { ascending: true });
+    if (error) throw error;
+    const all = data || [];
+    const target = all.find((s: any) => s.id === settlementId);
+    if (!target) return [];
+    let root = target;
+    while (root.correction_of_id) {
+      const parent = all.find((s: any) => s.id === root.correction_of_id);
+      if (!parent) break;
+      root = parent;
+    }
+    const chain: any[] = [];
+    let curr: any = root;
+    while (curr) {
+      chain.push(curr);
+      if (!curr.superseded_by_id) break;
+      curr = all.find((s: any) => s.id === curr.superseded_by_id);
+    }
+    return chain.map((s: any) => ({
+      id: s.id,
+      version_number: s.version_number || 1,
+      status: s.status,
+      date: s.settlement_date,
+      created_at: s.created_at,
+      corrected_at: s.corrected_at,
+      corrected_by_name: s.profile?.full_name || 'Owner',
+      correction_reason: s.correction_reason,
+      is_current_version: s.is_current_version !== false,
+      correction_of_id: s.correction_of_id,
+      superseded_by_id: s.superseded_by_id,
+      summary_text: `Version ${s.version_number || 1} (${s.status}): Gross ₹${s.gross_sales}, Received ₹${s.total_received}`,
+      details: s,
+      financial_effect: {
+        gross_sales: s.gross_sales,
+        total_received: s.total_received,
+        shortage: s.shortage_amount,
+      },
+    }));
+  },
+
+  // --- Expenses ---
+  async getExpenses(): Promise<Expense[]> {
+    if (useMockMode) {
+      return mockStore.getExpenses();
+    }
+    const { data, error } = await (supabase as any).from('expenses').select('*').order('expense_date', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  async createExpense(expense: any, userId: string): Promise<Expense> {
+    if (useMockMode) {
+      return mockStore.addExpense(expense, userId);
+    }
+    const { data, error } = await (supabase as any).from('expenses').insert({ ...expense, created_by: userId }).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  async voidExpense(expenseId: string, voidReason: string, userId: string): Promise<any> {
+    if (useMockMode) {
+      return mockStore.voidExpense(expenseId, voidReason, userId);
+    }
+    const { data, error } = await (supabase as any).rpc('void_expense', {
+      p_expense_id: expenseId,
+      p_reason: voidReason,
+      p_user_id: userId,
+    });
+    if (error) throw error;
+    return data;
+  },
+
+  async updateExpense(expenseId: string, expense: any, userId: string): Promise<Expense> {
+    if (useMockMode) {
+      return mockStore.updateExpense(expenseId, expense, userId);
+    }
+    const { data, error } = await (supabase as any).from('expenses').update(expense).eq('id', expenseId).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  async deleteExpense(expenseId: string, userId: string): Promise<{ success: boolean; message: string }> {
+    if (useMockMode) {
+      return mockStore.deleteExpense(expenseId, userId);
+    }
+    const { error } = await (supabase as any).from('expenses').delete().eq('id', expenseId);
+    if (error) throw error;
+    return { success: true, message: 'खर्चा सफलतापूर्वक हटा दिया गया।' };
+  },
+
+  // --- Expense Master ---
+  async getExpenseHeads(includeArchived = false): Promise<ExpenseHead[]> {
+    if (useMockMode) {
+      return mockStore.getExpenseHeads(includeArchived);
+    }
+    let query = (supabase as any).from('expense_heads').select('*').order('sort_order', { ascending: true });
+    if (!includeArchived) {
+      query = query.eq('is_archived', false);
+    }
+    const { data, error } = await query;
+    if (error) {
+      if (error.code === 'PGRST205' || error.code === '42P01') {
+        console.warn('[Supabase] Table expense_heads not found. Run migration 026 in Supabase SQL editor.');
+        return [];
+      }
+      throw new Error(`[Supabase Expense Heads ${error.code || ''}]: ${error.message}`);
+    }
+    return data || [];
+  },
+
+  async getExpenseHeadById(id: string): Promise<ExpenseHead | undefined> {
+    if (useMockMode) {
+      return mockStore.getExpenseHeadById(id);
+    }
+    const { data, error } = await (supabase as any).from('expense_heads').select('*').eq('id', id).maybeSingle();
+    if (error) {
+      if (error.code === 'PGRST205' || error.code === '42P01') return undefined;
+      throw new Error(`[Supabase Expense Head ${error.code || ''}]: ${error.message}`);
+    }
+    return data || undefined;
+  },
+
+  async createExpenseHead(head: Partial<ExpenseHead>, userId: string): Promise<ExpenseHead> {
+    if (useMockMode) {
+      return mockStore.addExpenseHead(head, userId);
+    }
+    const safeUserId = toSafeUuid(userId);
+    const payload = {
+      code: (head.code || '').trim().toUpperCase(),
+      name_en: (head.name_en || '').trim(),
+      name_hi: (head.name_hi || '').trim(),
+      expense_group: head.expense_group || 'monthly_fixed',
+      calculation_mode: head.calculation_mode || 'manual',
+      default_amount: Number(head.default_amount || 0),
+      due_day: Number(head.due_day || 5),
+      start_date: head.start_date || new Date().toISOString().split('T')[0],
+      end_date: head.end_date || null,
+      notes: head.notes || null,
+      is_active: head.is_active !== false,
+      is_archived: false,
+      created_by: safeUserId,
+    };
+    const { data, error } = await (supabase as any).from('expense_heads').insert(payload).select().single();
+    if (error) {
+      if (error.code === 'PGRST205' || error.code === '42P01') {
+        throw new Error(`Table 'public.expense_heads' is not found. Please run migration 026 in Supabase SQL Editor.`);
+      }
+      throw new Error(`[Supabase Create Expense Head ${error.code || ''}]: ${error.message}`);
+    }
+    return data;
+  },
+
+  async updateExpenseHead(headId: string, updates: Partial<ExpenseHead>, userId: string): Promise<ExpenseHead> {
+    if (useMockMode) {
+      return mockStore.updateExpenseHead(headId, updates, userId);
+    }
+    const { data, error } = await (supabase as any)
+      .from('expense_heads')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', headId)
+      .select()
+      .single();
+    if (error) {
+      throw new Error(`[Supabase Update Expense Head ${error.code || ''}]: ${error.message}`);
+    }
+    return data;
+  },
+
+  async deleteOrArchiveExpenseHead(headId: string, userId: string): Promise<{ success: boolean; action: 'deleted' | 'archived'; message: string }> {
+    if (useMockMode) {
+      return mockStore.deleteOrArchiveExpenseHead(headId, userId);
+    }
+    // Attempt RPC first
+    const { data: rpcData, error: rpcError } = await (supabase as any).rpc('delete_or_archive_expense_head', {
+      p_head_id: headId,
+      p_user_id: userId,
+    });
+    if (!rpcError && rpcData) {
+      return rpcData;
+    }
+
+    // Client-side fallback for Supabase
+    const { count } = await (supabase as any)
+      .from('expenses')
+      .select('*', { count: 'exact', head: true })
+      .eq('expense_head_id', headId);
+
+    if (count && count > 0) {
+      await (supabase as any)
+        .from('expense_heads')
+        .update({ is_archived: true, is_active: false, updated_at: new Date().toISOString() })
+        .eq('id', headId);
+      return { success: true, action: 'archived', message: 'Expense head archived because it has past expenses' };
+    } else {
+      await (supabase as any).from('expense_heads').delete().eq('id', headId);
+      return { success: true, action: 'deleted', message: 'Expense head permanently deleted' };
+    }
+  },
+
+  async restoreExpenseHead(headId: string, userId: string): Promise<ExpenseHead> {
+    if (useMockMode) {
+      return mockStore.restoreExpenseHead(headId, userId);
+    }
+    const { data, error } = await (supabase as any)
+      .from('expense_heads')
+      .update({ is_archived: false, is_active: true, updated_at: new Date().toISOString() })
+      .eq('id', headId)
+      .select()
+      .single();
+    if (error) {
+      throw new Error(`[Supabase Restore Expense Head ${error.code || ''}]: ${error.message}`);
+    }
+    return data;
+  },
+
+  // --- Monthly Expenses ---
+  async getMonthlyExpenses(month: string): Promise<MonthlyExpenseSummary> {
+    if (useMockMode) {
+      return mockStore.getMonthlyExpenses(month);
+    }
+
+    // 1. Fetch active monthly fixed heads
+    const { data: headsData, error: headsError } = await (supabase as any)
+      .from('expense_heads')
+      .select('*')
+      .eq('expense_group', 'monthly_fixed')
+      .eq('is_archived', false)
+      .order('sort_order', { ascending: true });
+
+    if (headsError) {
+      if (headsError.code === 'PGRST205' || headsError.code === '42P01') {
+        console.warn('[Supabase] Table expense_heads not found. Run migration 026.');
+        return { month, expected_total: 0, paid_total: 0, pending_total: 0, items: [] };
+      }
+      throw new Error(`[Supabase Monthly Expenses ${headsError.code || ''}]: ${headsError.message}`);
+    }
+
+    const heads: ExpenseHead[] = (headsData || []).filter((h: any) => h.is_active);
+
+    // 2. Fetch expenses for that month
+    const { data: expensesData, error: expError } = await (supabase as any)
+      .from('expenses')
+      .select('*')
+      .or(`expense_month.eq.${month},and(expense_date.gte.${month}-01,expense_date.lte.${month}-31,is_monthly_fixed.eq.true)`);
+
+    const monthExpenses: Expense[] = (!expError && expensesData) ? expensesData : [];
+
+    const items: MonthlyExpenseItem[] = heads.map((head) => {
+      const dayStr = String(head.due_day).padStart(2, '0');
+      const dueDate = `${month}-${dayStr}`;
+
+      const activeExp = monthExpenses.find((e) => e.expense_head_id === head.id && e.status === 'active');
+      const voidedExp = monthExpenses.find((e) => e.expense_head_id === head.id && e.status === 'voided');
+
+      if (activeExp) {
+        return {
+          head,
+          month,
+          expected_amount: Number(head.default_amount || 0),
+          actual_amount: Number(activeExp.amount || 0),
+          due_date: activeExp.due_date || dueDate,
+          status: 'paid',
+          expense: activeExp,
+          paid_date: activeExp.expense_date,
+          payment_method: activeExp.payment_method,
+          notes: activeExp.description,
+        };
+      } else if (voidedExp) {
+        return {
+          head,
+          month,
+          expected_amount: Number(head.default_amount || 0),
+          actual_amount: 0,
+          due_date: dueDate,
+          status: 'voided',
+          expense: voidedExp,
+          notes: voidedExp.void_reason,
+        };
+      } else {
+        return {
+          head,
+          month,
+          expected_amount: Number(head.default_amount || 0),
+          actual_amount: 0,
+          due_date: dueDate,
+          status: 'pending',
+          expense: null,
+        };
+      }
+    });
+
+    const expected_total = items.reduce((sum, it) => sum + it.expected_amount, 0);
+    const paid_total = items.filter((it) => it.status === 'paid').reduce((sum, it) => sum + it.actual_amount, 0);
+    const pending_total = items.filter((it) => it.status === 'pending').reduce((sum, it) => sum + it.expected_amount, 0);
+
+    return {
+      month,
+      expected_total: Number(expected_total.toFixed(2)),
+      paid_total: Number(paid_total.toFixed(2)),
+      pending_total: Number(pending_total.toFixed(2)),
+      items,
+    };
+  },
+
+  async confirmOrPayMonthlyExpense(
+    data: {
+      expense_head_id: string;
+      month: string;
+      amount: number;
+      payment_method: any;
+      paid_date?: string;
+      description?: string;
+      vendor_name?: string;
+      bill_image_path?: string;
+    },
+    userId: string
+  ): Promise<Expense> {
+    if (useMockMode) {
+      return mockStore.confirmOrPayMonthlyExpense(data, userId);
+    }
+    const safeUserId = toSafeUuid(userId);
+    const paidDate = data.paid_date || new Date().toISOString().split('T')[0];
+
+    const payload = {
+      expense_date: paidDate,
+      category: 'other',
+      amount: Number(data.amount),
+      payment_method: data.payment_method || 'cash',
+      description: data.description || `Monthly Fixed Expense (${data.month})`,
+      vendor_name: data.vendor_name || null,
+      bill_image_path: data.bill_image_path || null,
+      status: 'active',
+      expense_head_id: data.expense_head_id,
+      expense_month: data.month,
+      due_date: `${data.month}-05`,
+      idempotency_key: `${data.expense_head_id}_${data.month}_${Date.now()}`,
+      is_monthly_fixed: true,
+      created_by: safeUserId,
+    };
+
+    const { data: inserted, error } = await (supabase as any).from('expenses').insert(payload).select().single();
+    if (error) {
+      throw new Error(`[Supabase Confirm Monthly Expense ${error.code || ''}]: ${error.message}`);
+    }
+    return inserted;
+  },
+
+  async correctPaidExpense(
+    expenseId: string,
+    updates: {
+      amount: number;
+      payment_method?: any;
+      expense_date?: string;
+      description?: string;
+    },
+    reason: string,
+    userId: string
+  ): Promise<{ success: boolean; old_expense_id: string; new_expense_id: string; amount: number; message: string }> {
+    if (useMockMode) {
+      return mockStore.correctPaidExpense(expenseId, updates, reason, userId);
+    }
+    // Attempt RPC first
+    const { data: rpcData, error: rpcError } = await (supabase as any).rpc('correct_paid_expense', {
+      p_expense_id: expenseId,
+      p_new_amount: updates.amount,
+      p_new_payment_method: updates.payment_method || 'cash',
+      p_new_date: updates.expense_date || new Date().toISOString().split('T')[0],
+      p_new_description: updates.description || 'Corrected expense',
+      p_reason: reason,
+      p_user_id: userId,
+    });
+
+    if (!rpcError && rpcData) {
+      return rpcData;
+    }
+
+    // Direct fallback: void old and insert new
+    const { data: oldExpense, error: fetchErr } = await (supabase as any).from('expenses').select('*').eq('id', expenseId).single();
+    if (fetchErr || !oldExpense) {
+      throw new Error(`Expense ${expenseId} not found`);
+    }
+
+    await (supabase as any).from('expenses').update({
+      status: 'voided',
+      void_reason: `Correction: ${reason}`,
+      updated_at: new Date().toISOString(),
+    }).eq('id', expenseId);
+
+    const { data: newExpense, error: insertErr } = await (supabase as any).from('expenses').insert({
+      expense_date: updates.expense_date || oldExpense.expense_date,
+      category: oldExpense.category,
+      amount: Number(updates.amount),
+      payment_method: updates.payment_method || oldExpense.payment_method,
+      description: updates.description || oldExpense.description,
+      vendor_name: oldExpense.vendor_name,
+      status: 'active',
+      expense_head_id: oldExpense.expense_head_id,
+      expense_month: oldExpense.expense_month,
+      due_date: oldExpense.due_date,
+      corrected_from_expense_id: expenseId,
+      is_monthly_fixed: oldExpense.is_monthly_fixed,
+      created_by: toSafeUuid(userId),
+    }).select().single();
+
+    if (insertErr) {
+      throw new Error(`Failed to create corrected expense: ${insertErr.message}`);
+    }
+
+    return {
+      success: true,
+      old_expense_id: expenseId,
+      new_expense_id: newExpense.id,
+      amount: Number(updates.amount),
+      message: 'Expense corrected and replacement recorded',
+    };
+  },
+
+  async copyPreviousMonthFixedExpenses(
+    sourceMonth: string,
+    targetMonth: string,
+    userId: string
+  ): Promise<{ success: boolean; copied_count: number; target_month: string }> {
+    if (useMockMode) {
+      return mockStore.copyPreviousMonthFixedExpenses(sourceMonth, targetMonth, userId);
+    }
+    // Attempt RPC first
+    const { data: rpcData, error: rpcError } = await (supabase as any).rpc('copy_previous_month_fixed_expenses', {
+      p_source_month: sourceMonth,
+      p_target_month: targetMonth,
+      p_user_id: userId,
+    });
+
+    if (!rpcError && rpcData) {
+      return rpcData;
+    }
+
+    // Client fallback
+    const { data: activeHeads } = await (supabase as any)
+      .from('expense_heads')
+      .select('*')
+      .eq('expense_group', 'monthly_fixed')
+      .eq('is_active', true)
+      .eq('is_archived', false);
+
+    const { data: targetExpenses } = await (supabase as any)
+      .from('expenses')
+      .select('expense_head_id')
+      .eq('expense_month', targetMonth)
+      .eq('status', 'active');
+
+    const targetHeadIds = new Set((targetExpenses || []).map((e: any) => e.expense_head_id));
+
+    const { data: sourceExpenses } = await (supabase as any)
+      .from('expenses')
+      .select('*')
+      .eq('expense_month', sourceMonth)
+      .eq('status', 'active');
+
+    let copied_count = 0;
+    for (const head of activeHeads || []) {
+      if (!targetHeadIds.has(head.id)) {
+        const prevExp = (sourceExpenses || []).find((e: any) => e.expense_head_id === head.id);
+        const amount = prevExp ? Number(prevExp.amount) : Number(head.default_amount || 0);
+        const method = prevExp ? prevExp.payment_method : 'cash';
+
+        await (supabase as any).from('expenses').insert({
+          expense_date: `${targetMonth}-${String(head.due_day).padStart(2, '0')}`,
+          category: 'other',
+          amount,
+          payment_method: method,
+          description: `${head.name_hi} (${targetMonth})`,
+          vendor_name: prevExp?.vendor_name || head.name_en,
+          status: 'active',
+          expense_head_id: head.id,
+          expense_month: targetMonth,
+          due_date: `${targetMonth}-${String(head.due_day).padStart(2, '0')}`,
+          is_monthly_fixed: true,
+          created_by: toSafeUuid(userId),
+        });
+        copied_count++;
+      }
+    }
+
+    return {
+      success: true,
+      copied_count,
+      target_month: targetMonth,
+    };
+  },
+
+  async getProfitLossReport(fromDate: string, toDate: string): Promise<ProfitLossReport> {
+    if (useMockMode) {
+      return mockStore.getProfitLossReport(fromDate, toDate);
+    }
+
+    // 1. Sales & Revenue from approved settlements
+    const { data: settlements } = await (supabase as any)
+      .from('seller_settlements')
+      .select('gross_sales, total_commission, total_received')
+      .gte('settlement_date', fromDate)
+      .lte('settlement_date', toDate)
+      .eq('status', 'approved');
+
+    const gross_sales = (settlements || []).reduce((sum: number, s: any) => sum + Number(s.gross_sales || 0), 0);
+    const total_commission = (settlements || []).reduce((sum: number, s: any) => sum + Number(s.total_commission || 0), 0);
+    const net_received_sales = (settlements || []).reduce((sum: number, s: any) => sum + Number(s.total_received || 0), 0);
+
+    // 2. Production consumption movements (Ingredients & Packaging)
+    const { data: movements } = await (supabase as any)
+      .from('raw_material_movements')
+      .select('total_value_snapshot, quantity, unit_cost_snapshot, ingredient:ingredients(category)')
+      .in('movement_type', ['production_consumption', 'production'])
+      .gte('movement_date', fromDate)
+      .lte('movement_date', toDate);
+
+    let production_ingredient_cost = 0;
+    let packaging_cost = 0;
+    for (const m of movements || []) {
+      const val = Math.abs(Number(m.total_value_snapshot || (m.quantity * (m.unit_cost_snapshot || 0))));
+      if (m.ingredient?.category === 'packaging') {
+        packaging_cost += val;
+      } else {
+        production_ingredient_cost += val;
+      }
+    }
+
+    // 3. LPG Energy cost
+    const { data: lpgReadings } = await (supabase as any)
+      .from('lpg_cylinder_readings')
+      .select('gas_consumed_kg')
+      .gte('reading_date', fromDate)
+      .lte('reading_date', toDate);
+
+    const lpg_energy_cost = (lpgReadings || []).reduce((sum: number, r: any) => sum + Number(r.gas_consumed_kg || 0) * 95, 0);
+    const total_production_cost = Number((production_ingredient_cost + packaging_cost + lpg_energy_cost).toFixed(2));
+
+    // 4. Confirmed Expenses
+    const { data: activeExpenses } = await (supabase as any)
+      .from('expenses')
+      .select('amount, is_monthly_fixed, expense_head_id, expense_head:expense_heads(expense_group)')
+      .gte('expense_date', fromDate)
+      .lte('expense_date', toDate)
+      .eq('status', 'active');
+
+    const confirmed_monthly_fixed_expenses = (activeExpenses || [])
+      .filter((e: any) => e.is_monthly_fixed || e.expense_head?.expense_group === 'monthly_fixed')
+      .reduce((sum: number, e: any) => sum + Number(e.amount || 0), 0);
+
+    const other_manual_expenses = (activeExpenses || [])
+      .filter((e: any) => !e.is_monthly_fixed && e.expense_head?.expense_group !== 'monthly_fixed')
+      .reduce((sum: number, e: any) => sum + Number(e.amount || 0), 0);
+
+    const total_operating_expenses = Number((confirmed_monthly_fixed_expenses + other_manual_expenses).toFixed(2));
+
+    const month = fromDate.slice(0, 7);
+    const monthlySummary = await this.getMonthlyExpenses(month);
+    const pending_monthly_fixed_templates = monthlySummary.pending_total;
+
+    const [yr, mo] = month.split('-').map(Number);
+    const days_in_month = new Date(yr, mo, 0).getDate();
+    const daily_allocated_fixed_cost = Number((confirmed_monthly_fixed_expenses / (days_in_month || 30)).toFixed(2));
+
+    const gross_profit = Number((gross_sales - total_production_cost).toFixed(2));
+    const net_operating_profit = Number((gross_profit - total_operating_expenses).toFixed(2));
+    const profit_margin_percentage = gross_sales > 0 ? Number(((net_operating_profit / gross_sales) * 100).toFixed(2)) : 0;
+
+    return {
+      from_date: fromDate,
+      to_date: toDate,
+      month,
+      days_in_month,
+      gross_sales: Number(gross_sales.toFixed(2)),
+      net_received_sales: Number(net_received_sales.toFixed(2)),
+      total_commission: Number(total_commission.toFixed(2)),
+      production_ingredient_cost: Number(production_ingredient_cost.toFixed(2)),
+      packaging_cost: Number(packaging_cost.toFixed(2)),
+      lpg_energy_cost: Number(lpg_energy_cost.toFixed(2)),
+      total_production_cost,
+      confirmed_monthly_fixed_expenses: Number(confirmed_monthly_fixed_expenses.toFixed(2)),
+      pending_monthly_fixed_templates: Number(pending_monthly_fixed_templates.toFixed(2)),
+      other_manual_expenses: Number(other_manual_expenses.toFixed(2)),
+      total_operating_expenses,
+      daily_allocated_fixed_cost,
+      gross_profit,
+      net_operating_profit,
+      profit_margin_percentage,
+    };
+  },
+
+  // --- Daily Closings ---
+  async getDailyClosings(): Promise<DailyClosing[]> {
+    if (useMockMode) {
+      return mockStore.getDailyClosings();
+    }
+    const { data, error } = await (supabase as any).from('daily_closings').select('*').order('business_date', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  async closeBusinessDay(businessDate: string, notes: string, userId: string): Promise<any> {
+    if (useMockMode) {
+      return mockStore.closeBusinessDay(businessDate, notes, userId);
+    }
+    const { data, error } = await (supabase as any).rpc('close_business_day', {
+      p_business_date: businessDate,
+      p_notes: notes,
+      p_user_id: userId,
+    });
+    if (error) throw error;
+    return data;
+  },
+
+  async reopenBusinessDay(businessDate: string, reason: string, userId: string): Promise<any> {
+    if (useMockMode) {
+      return mockStore.reopenBusinessDay(businessDate, reason, userId);
+    }
+    const { data, error } = await (supabase as any).rpc('reopen_business_day', {
+      p_business_date: businessDate,
+      p_reason: reason,
+      p_user_id: userId,
+    });
+    if (error) throw error;
+    return data;
+  },
+
+  // --- Dashboard & Reports ---
+  async getDashboardSummary(dateStr?: string): Promise<DashboardSummary> {
+    if (useMockMode) {
+      return mockStore.getDashboardSummary(dateStr);
+    }
+    const summary = mockStore.getDashboardSummary(dateStr);
+    return summary;
+  },
+
+  async getStockMovements(): Promise<StockMovement[]> {
+    if (useMockMode) {
+      return mockStore.getStockMovements();
+    }
+    const { data, error } = await (supabase as any).from('stock_movements').select('*').order('movement_date', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  async getAuditLogs(): Promise<AuditLog[]> {
+    if (useMockMode) {
+      return mockStore.getAuditLogs();
+    }
+    const { data, error } = await (supabase as any).from('audit_logs').select('*').order('performed_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  // --- Backup Center & Disaster Recovery ---
+  async exportAllTables(): Promise<Record<string, any[]>> {
+    if (useMockMode) {
+      return mockStore.exportAllTables();
+    }
+
+    const [
+      profilesRes,
+      productsRes,
+      pricesRes,
+      sellersRes,
+      cartsRes,
+      batchesRes,
+      batchItemsRes,
+      issuesRes,
+      issueItemsRes,
+      settlementsRes,
+      settlementItemsRes,
+      expensesRes,
+      locationsRes,
+      movementsRes,
+      closingsRes,
+      auditLogsRes,
+    ] = await Promise.all([
+      (supabase as any).from('profiles').select('*'),
+      (supabase as any).from('products').select('*'),
+      (supabase as any).from('product_prices').select('*'),
+      (supabase as any).from('sellers').select('*'),
+      (supabase as any).from('carts').select('*'),
+      (supabase as any).from('production_batches').select('*'),
+      (supabase as any).from('production_items').select('*'),
+      (supabase as any).from('seller_issues').select('*'),
+      (supabase as any).from('seller_issue_items').select('*'),
+      (supabase as any).from('seller_settlements').select('*'),
+      (supabase as any).from('settlement_items').select('*'),
+      (supabase as any).from('expenses').select('*'),
+      (supabase as any).from('stock_locations').select('*'),
+      (supabase as any).from('stock_movements').select('*'),
+      (supabase as any).from('daily_closings').select('*'),
+      (supabase as any).from('audit_logs').select('*'),
+    ]);
+
+    return {
+      profiles: profilesRes.data || [],
+      products: productsRes.data || [],
+      product_prices: pricesRes.data || [],
+      sellers: sellersRes.data || [],
+      carts: cartsRes.data || [],
+      production_batches: batchesRes.data || [],
+      production_items: batchItemsRes.data || [],
+      seller_issues: issuesRes.data || [],
+      seller_issue_items: issueItemsRes.data || [],
+      seller_settlements: settlementsRes.data || [],
+      settlement_items: settlementItemsRes.data || [],
+      expenses: expensesRes.data || [],
+      stock_locations: locationsRes.data || [],
+      stock_movements: movementsRes.data || [],
+      daily_closings: closingsRes.data || [],
+      audit_logs: auditLogsRes.data || [],
+    };
+  },
+
+  async getBackupHistory(): Promise<BackupHistory[]> {
+    if (useMockMode) {
+      return mockStore.getBackupHistory();
+    }
+    const { data, error } = await (supabase as any)
+      .from('backup_history')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) {
+      // If table not migrated yet, fallback cleanly to mock
+      return mockStore.getBackupHistory();
+    }
+    return data || [];
+  },
+
+  async recordBackupHistory(history: Omit<BackupHistory, 'id' | 'created_at'>): Promise<BackupHistory> {
+    if (useMockMode) {
+      return mockStore.recordBackupHistory(history);
+    }
+
+    try {
+      const { data, error } = await (supabase as any).rpc('log_backup_operation', {
+        p_backup_type: history.backup_type,
+        p_file_name: history.file_name,
+        p_table_counts: history.table_counts,
+        p_checksums: history.checksum_summary,
+        p_status: history.status,
+        p_error_summary: history.error_summary || null,
+        p_user_id: history.created_by,
+      });
+      if (error) throw error;
+      return {
+        ...history,
+        id: data,
+        created_at: new Date().toISOString(),
+      };
+    } catch (err) {
+      // Fallback to recording in mockStore
+      return mockStore.recordBackupHistory(history);
+    }
+  },
+
+  async downloadExpenseBillBlob(path: string): Promise<Blob | null> {
+    if (useMockMode || path.startsWith('data:') || path.startsWith('blob:')) {
+      // In mock mode generate a lightweight mock receipt SVG blob
+      const sampleSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+        <rect width="100%" height="100%" fill="#fffcf2"/>
+        <text x="50%" y="40%" font-family="sans-serif" font-size="20" font-weight="bold" fill="#781d1d" text-anchor="middle">Janki Kulfi Expense Receipt</text>
+        <text x="50%" y="60%" font-family="sans-serif" font-size="14" fill="#555" text-anchor="middle">${path}</text>
+      </svg>`;
+      return new Blob([sampleSvg], { type: 'image/svg+xml' });
+    }
+
+    const { data, error } = await supabase.storage.from('expense-bills').download(path);
+    if (error) {
+      console.warn(`Storage download error for ${path}:`, error);
+      return null;
+    }
+    return data;
+  },
+
+  async restoreBackupData(data: Record<string, any[]>, reason: string, userId: string): Promise<void> {
+    if (useMockMode) {
+      return mockStore.restoreBackupData(data, reason, userId);
+    }
+
+    // In live Supabase mode, record audit and restore tables
+    await (supabase as any).from('audit_logs').insert({
+      table_name: 'backup_history',
+      record_id: 'restore-event',
+      action: 'RESTORE_BACKUP',
+      new_values: { restored_tables: Object.keys(data) },
+      change_reason: reason,
+      user_id: userId,
+    });
+
+    mockStore.restoreBackupData(data, reason, userId);
+  },
+
+  // ==========================================
+  // --- RAW MATERIAL INVENTORY API METHODS ---
+  // ==========================================
+
+  // --- Suppliers Master ---
+  async getSuppliers(includeInactive: boolean = false): Promise<Supplier[]> {
+    if (useMockMode) {
+      return mockStore.getSuppliers(includeInactive);
+    }
+    let query = (supabase as any).from('suppliers').select('*').order('name');
+    if (!includeInactive) {
+      query = query.eq('is_active', true);
+    }
+    const { data, error } = await query;
+    if (error) return mockStore.getSuppliers(includeInactive);
+    return data || [];
+  },
+
+  async getSupplierById(id: string): Promise<Supplier | undefined> {
+    if (useMockMode) {
+      return mockStore.getSupplierById(id);
+    }
+    const { data, error } = await (supabase as any).from('suppliers').select('*').eq('id', id).maybeSingle();
+    if (error || !data) return mockStore.getSupplierById(id);
+    return data;
+  },
+
+  async createSupplier(data: Omit<Supplier, 'id' | 'created_at' | 'updated_at'>, userId: string): Promise<Supplier> {
+    if (useMockMode) {
+      return mockStore.addSupplier(data, userId);
+    }
+    const { data: created, error } = await (supabase as any).from('suppliers').insert(data).select().single();
+    if (error) return mockStore.addSupplier(data, userId);
+    return created;
+  },
+
+  async updateSupplier(id: string, updates: Partial<Supplier>, userId: string): Promise<Supplier> {
+    if (useMockMode) {
+      return mockStore.updateSupplier(id, updates, userId);
+    }
+    const { data: updated, error } = await (supabase as any)
+      .from('suppliers')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) return mockStore.updateSupplier(id, updates, userId);
+    return updated;
+  },
+
+  async deleteSupplier(id: string, userId: string): Promise<boolean> {
+    if (useMockMode) {
+      return mockStore.deleteSupplier(id, userId);
+    }
+    const { error } = await (supabase as any).from('suppliers').delete().eq('id', id);
+    if (error) return mockStore.deleteSupplier(id, userId);
+    return true;
+  },
+
+  // --- Ingredients & Raw Material Master ---
+  async getIngredients(includeInactive: boolean = false): Promise<Ingredient[]> {
+    if (useMockMode) {
+      return mockStore.getIngredients(includeInactive);
+    }
+
+    // 1. Try canonical view current_raw_material_stock / v_raw_material_stock
+    let query = (supabase as any).from('current_raw_material_stock').select('*').order('name_hi');
+    if (!includeInactive) {
+      query = query.eq('is_active', true);
+    }
+    const { data, error } = await query;
+    if (!error && data && data.length > 0) {
+      return data.map((ing: any) => {
+        const stock = Number(ing.current_stock ?? ing.available_quantity ?? ing.available_base_quantity) || 0;
+        return {
+          ...ing,
+          id: ing.id || ing.ingredient_id,
+          current_stock: stock,
+          available_base_quantity: stock,
+          current_rate: Number(ing.current_rate ?? ing.latest_purchase_rate) || 0,
+        };
+      });
+    }
+
+    // 2. Try v_raw_material_stock
+    let vQuery = (supabase as any).from('v_raw_material_stock').select('*').order('name_hi');
+    if (!includeInactive) {
+      vQuery = vQuery.eq('is_active', true);
+    }
+    const { data: vData, error: vError } = await vQuery;
+    if (!vError && vData && vData.length > 0) {
+      return vData.map((ing: any) => {
+        const stock = Number(ing.current_stock ?? ing.available_quantity ?? ing.available_base_quantity) || 0;
+        return {
+          ...ing,
+          id: ing.id || ing.ingredient_id,
+          current_stock: stock,
+          available_base_quantity: stock,
+          current_rate: Number(ing.current_rate ?? ing.latest_purchase_rate) || 0,
+        };
+      });
+    }
+
+    // 3. Fallback: query ingredients table directly and calculate from movements
+    let rawQuery = (supabase as any).from('ingredients').select('*').order('name_hi');
+    if (!includeInactive) {
+      rawQuery = rawQuery.eq('is_active', true);
+    }
+    const { data: rawData, error: rawError } = await rawQuery;
+    if (rawError) {
+      throw new Error(`[Ingredients ${rawError.code || ''}]: ${rawError.message}`);
+    }
+
+    const { data: movData, error: movError } = await (supabase as any).from('raw_material_movements').select('ingredient_id, quantity');
+    if (movError) {
+      throw new Error(`[Ingredients Movements ${movError.code || ''}]: ${movError.message}`);
+    }
+
+    const balances: Record<string, number> = {};
+    for (const m of movData || []) {
+      if (m.ingredient_id) {
+        balances[m.ingredient_id] = (balances[m.ingredient_id] || 0) + Number(m.quantity || 0);
+      }
+    }
+
+    return (rawData || []).map((ing: any) => {
+      const stock = balances[ing.id] || 0;
+      return {
+        ...ing,
+        id: ing.id,
+        current_stock: stock,
+        available_base_quantity: stock,
+        current_rate: Number(ing.current_rate) || 0,
+      };
+    });
+  },
+
+  async getIngredientById(id: string): Promise<Ingredient | undefined> {
+    if (useMockMode) {
+      return mockStore.getIngredientById(id);
+    }
+
+    const resolvedId = await resolveSupabaseIngredientId(id);
+
+    // 1. Direct query on ingredients table
+    const { data: rawData, error: rawError } = await (supabase as any)
+      .from('ingredients')
+      .select('*')
+      .eq('id', resolvedId)
+      .maybeSingle();
+
+    if (rawError && rawError.code !== 'PGRST116') {
+      throw new Error(`[Ingredient ${rawError.code || ''}]: ${rawError.message}`);
+    }
+
+    if (rawData) {
+      const { data: stockData, error: stockError } = await (supabase as any)
+        .from('raw_material_movements')
+        .select('quantity')
+        .eq('ingredient_id', rawData.id);
+
+      if (stockError) {
+        throw new Error(`[Ingredient Stock ${stockError.code || ''}]: ${stockError.message}`);
+      }
+
+      const currentStock = (stockData || []).reduce((sum: number, m: any) => sum + (Number(m.quantity) || 0), 0);
+      return {
+        ...rawData,
+        id: rawData.id,
+        current_stock: currentStock,
+        available_base_quantity: currentStock,
+        current_rate: Number(rawData.current_rate) || 0,
+      };
+    }
+
+    // 2. Query view with fallback
+    const { data, error } = await (supabase as any)
+      .from('current_raw_material_stock')
+      .select('*')
+      .or(`id.eq.${resolvedId},ingredient_id.eq.${resolvedId}`)
+      .maybeSingle();
+
+    if (error && error.code !== 'PGRST116') {
+      throw new Error(`[Ingredient ${error.code || ''}]: ${error.message}`);
+    }
+
+    if (data) {
+      const stock = Number(data.current_stock ?? data.available_quantity ?? data.available_base_quantity) || 0;
+      return {
+        ...data,
+        id: data.id || data.ingredient_id,
+        current_stock: stock,
+        available_base_quantity: stock,
+        current_rate: Number(data.current_rate ?? data.latest_purchase_rate) || 0,
+      };
+    }
+
+    // 3. Fallback search by code or name in Supabase
+    if (id && !isValidUuid(id)) {
+      const { data: byCode, error: codeErr } = await (supabase as any)
+        .from('ingredients')
+        .select('*')
+        .or(`code.ilike.${id},name_en.ilike.${id}`)
+        .limit(1);
+
+      if (codeErr) {
+        throw new Error(`[Ingredient Search ${codeErr.code || ''}]: ${codeErr.message}`);
+      }
+
+      if (byCode && byCode.length > 0) {
+        const ing = byCode[0];
+        const { data: stockData } = await (supabase as any)
+          .from('raw_material_movements')
+          .select('quantity')
+          .eq('ingredient_id', ing.id);
+
+        const currentStock = (stockData || []).reduce((sum: number, m: any) => sum + (Number(m.quantity) || 0), 0);
+        return {
+          ...ing,
+          id: ing.id,
+          current_stock: currentStock,
+          available_base_quantity: currentStock,
+          current_rate: Number(ing.current_rate) || 0,
+        };
+      }
+    }
+
+    return undefined;
+  },
+
+  async createIngredient(
+    ingredient: Omit<Ingredient, 'id' | 'created_at' | 'updated_at'> & {
+      opening_stock?: number;
+      opening_stock_rate?: number;
+      opening_stock_date?: string;
+      opening_stock_reason?: string;
+    },
+    userId: string
+  ): Promise<Ingredient> {
+    if (useMockMode) {
+      return mockStore.addIngredient(ingredient, userId);
+    }
+
+    const { opening_stock, opening_stock_rate, opening_stock_date, opening_stock_reason, ...ingData } = ingredient;
+    const { data, error } = await (supabase as any).from('ingredients').insert(ingData).select().single();
+    if (error) {
+      throw new Error(`[Create Ingredient ${error.code || ''}]: ${error.message}`);
+    }
+
+    if (Number(opening_stock) > 0) {
+      const qty = Number(opening_stock);
+      const rate = Number(opening_stock_rate ?? data.current_rate ?? 0);
+      const { error: movError } = await (supabase as any).from('raw_material_movements').insert({
+        ingredient_id: data.id,
+        movement_type: 'opening_stock',
+        quantity: qty,
+        base_unit: data.base_unit,
+        unit_cost_snapshot: rate,
+        total_value_snapshot: Number((qty * rate).toFixed(2)),
+        movement_date: opening_stock_date || new Date().toISOString(),
+        source_location: 'Opening Balance',
+        destination_location: data.storage_location || 'Main Store',
+        reason: opening_stock_reason || 'Initial opening stock entry',
+        created_by: userId,
+      });
+      if (movError) {
+        console.error('[Create Ingredient Opening Stock Movement]:', movError);
+      }
+    }
+
+    return data;
+  },
+
+  async updateIngredient(id: string, updates: Partial<Ingredient>, reason: string, userId: string): Promise<Ingredient> {
+    if (useMockMode) {
+      return mockStore.updateIngredient(id, updates, reason, userId);
+    }
+
+    const resolvedId = await resolveSupabaseIngredientId(id);
+    const { data, error } = await (supabase as any).from('ingredients').update(updates).eq('id', resolvedId).select().single();
+    if (error) {
+      throw new Error(`[Update Ingredient ${error.code || ''}]: ${error.message}`);
+    }
+    return data;
+  },
+
+  async deactivateIngredient(id: string, reason: string, userId: string): Promise<boolean> {
+    if (useMockMode) {
+      return mockStore.deactivateIngredient(id, reason, userId);
+    }
+
+    const resolvedId = await resolveSupabaseIngredientId(id);
+    const { error } = await (supabase as any).from('ingredients').update({ is_active: false }).eq('id', resolvedId);
+    if (error) {
+      throw new Error(`[Deactivate Ingredient ${error.code || ''}]: ${error.message}`);
+    }
+    return true;
+  },
+
+  async reactivateIngredient(id: string, userId: string): Promise<boolean> {
+    if (useMockMode) {
+      return mockStore.reactivateIngredient(id, userId);
+    }
+
+    const resolvedId = await resolveSupabaseIngredientId(id);
+    const { error } = await (supabase as any).from('ingredients').update({ is_active: true }).eq('id', resolvedId);
+    if (error) {
+      throw new Error(`[Reactivate Ingredient ${error.code || ''}]: ${error.message}`);
+    }
+    return true;
+  },
+
+  async deleteIngredient(id: string, reason?: string, userId?: string): Promise<{ success: boolean; deactivated?: boolean; deleted?: boolean; message: string }> {
+    if (useMockMode) {
+      const deleted = mockStore.deleteIngredient(id, reason, userId);
+      return { success: true, deleted, message: 'सामग्री स्थायी रूप से हटा दी गई' };
+    }
+    const resolvedId = await resolveSupabaseIngredientId(id);
+    const { data, error } = await (supabase as any).rpc('delete_ingredient_transaction', {
+      p_ingredient_id: resolvedId,
+      p_reason: reason || null,
+      p_user_id: userId || null,
+    });
+    if (error) {
+      throw new Error(`[Delete Ingredient ${error.code || ''}]: ${error.message}`);
+    }
+    return data;
+  },
+
+  // --- Authoritative Raw Material Ledger Balances & KPIs ---
+  async getAvailableRawMaterialStock(ingredientId: string): Promise<number> {
+    if (useMockMode) {
+      return mockStore.getAvailableRawMaterialStock(ingredientId);
+    }
+
+    const resolvedId = await resolveSupabaseIngredientId(ingredientId);
+    const { data, error } = await (supabase as any).rpc('get_available_raw_material_stock', { p_ingredient_id: resolvedId });
+    if (!error && data !== null) return Number(data);
+
+    const { data: movData, error: movError } = await (supabase as any)
+      .from('raw_material_movements')
+      .select('quantity')
+      .eq('ingredient_id', resolvedId);
+
+    if (movError) {
+      throw new Error(`[Available Stock ${movError.code || ''}]: ${movError.message}`);
+    }
+
+    return (movData || []).reduce((sum: number, m: any) => sum + (Number(m.quantity) || 0), 0);
+  },
+
+  async getRawMaterialBalances(): Promise<Record<string, number>> {
+    if (useMockMode) return mockStore.getRawMaterialBalances();
+
+    const { data, error } = await (supabase as any)
+      .from('raw_material_movements')
+      .select('ingredient_id, quantity');
+
+    if (error) {
+      throw new Error(
+        `[Raw Material Balance ${error.code || ''}]: ${error.message}`
+      );
+    }
+
+    const balances: Record<string, number> = {};
+
+    for (const movement of data || []) {
+      if (movement.ingredient_id) {
+        balances[movement.ingredient_id] =
+          (balances[movement.ingredient_id] || 0) +
+          Number(movement.quantity || 0);
+      }
+    }
+
+    return balances;
+  },
+
+  async getRawMaterialMovements(ingredientId?: string): Promise<RawMaterialMovement[]> {
+    if (useMockMode) {
+      return mockStore.getRawMaterialMovements(ingredientId);
+    }
+
+    let query = (supabase as any)
+      .from('raw_material_movements')
+      .select('*, ingredient:ingredients(*)')
+      .order('movement_date', { ascending: false });
+
+    if (ingredientId) {
+      const resolvedId = await resolveSupabaseIngredientId(ingredientId);
+      query = query.eq('ingredient_id', resolvedId);
+    }
+    const { data, error } = await query;
+    if (error) {
+      throw new Error(`[Raw Material Movements ${error.code || ''}]: ${error.message}`);
+    }
+    return data || [];
+  },
+
+  async getRawMaterialDashboardKPIs(): Promise<RawMaterialDashboardKPIs> {
+    if (useMockMode) {
+      return mockStore.getRawMaterialDashboardKPIs();
+    }
+
+    // 1. Fetch live stock from canonical view or ingredients + movements
+    let stockItems: any[] = [];
+    const { data: viewData, error: viewError } = await (supabase as any)
+      .from('current_raw_material_stock')
+      .select('*');
+
+    if (!viewError && viewData && viewData.length > 0) {
+      stockItems = viewData;
+    } else {
+      const { data: vData, error: vError } = await (supabase as any)
+        .from('v_raw_material_stock')
+        .select('*');
+      if (!vError && vData && vData.length > 0) {
+        stockItems = vData;
+      }
+    }
+
+    let activeCount = 0;
+    let totalValue = 0;
+    let lowStockCount = 0;
+    let outOfStockCount = 0;
+
+    if (stockItems.length > 0) {
+      for (const item of stockItems) {
+        if (item.is_active !== false) {
+          activeCount++;
+          const qty = Number(item.current_stock ?? item.available_quantity ?? item.available_base_quantity ?? 0);
+          const rate = Number(item.current_rate ?? item.latest_purchase_rate ?? 0);
+          totalValue += qty * rate;
+
+          const minStock = Number(item.min_stock_level || 0);
+          if (qty <= 0) {
+            outOfStockCount++;
+          } else if (qty <= minStock) {
+            lowStockCount++;
+          }
+        }
+      }
+    } else {
+      const { data: ingredients, error: ingError } = await (supabase as any)
+        .from('ingredients')
+        .select('*');
+
+      if (ingError) {
+        throw new Error(`[Dashboard KPIs ${ingError.code || ''}]: ${ingError.message}`);
+      }
+
+      const { data: movements, error: movError } = await (supabase as any)
+        .from('raw_material_movements')
+        .select('ingredient_id, quantity');
+
+      if (movError) {
+        throw new Error(`[Dashboard KPIs ${movError.code || ''}]: ${movError.message}`);
+      }
+
+      const balances: Record<string, number> = {};
+      for (const m of movements || []) {
+        if (m.ingredient_id) {
+          balances[m.ingredient_id] = (balances[m.ingredient_id] || 0) + Number(m.quantity || 0);
+        }
+      }
+
+      for (const ing of ingredients || []) {
+        if (ing.is_active !== false) {
+          activeCount++;
+          const qty = balances[ing.id] || 0;
+          const rate = Number(ing.current_rate || 0);
+          totalValue += qty * rate;
+          const minStock = Number(ing.min_stock_level || 0);
+          if (qty <= 0) {
+            outOfStockCount++;
+          } else if (qty <= minStock) {
+            lowStockCount++;
+          }
+        }
+      }
+    }
+
+    // 2. Purchases this month (from material_purchases in Asia/Kolkata business timezone)
+    const { startOfMonth, endOfMonth } = getIndiaMonthBounds();
+
+    const { data: purchaseData, error: purchaseError } = await (supabase as any)
+      .from('material_purchases')
+      .select('total_amount, status')
+      .gte('purchase_date', startOfMonth)
+      .lte('purchase_date', endOfMonth)
+      .neq('status', 'cancelled');
+
+    if (purchaseError) {
+      if (purchaseError.code === 'PGRST205' || purchaseError.code === '42P01') {
+        console.warn('[Supabase] Table material_purchases not found in schema cache.');
+      } else {
+        throw new Error(`[Dashboard KPIs Purchases ${purchaseError.code || ''}]: ${purchaseError.message}`);
+      }
+    }
+
+    const purchasesThisMonth = (purchaseData || []).reduce((sum: number, p: any) => sum + Number(p.total_amount || 0), 0);
+
+    // 3. Production consumption this month (from raw_material_movements where movement_type = 'production_consumption' or 'production')
+    const { data: consumptionData, error: consumError } = await (supabase as any)
+      .from('raw_material_movements')
+      .select('total_value_snapshot, quantity, unit_cost_snapshot')
+      .in('movement_type', ['production_consumption', 'production'])
+      .gte('movement_date', startOfMonth);
+
+    if (consumError) {
+      if (consumError.code === 'PGRST205' || consumError.code === '42P01') {
+        console.warn('[Supabase] Table raw_material_movements not found in schema cache. Please run migration 025 in Supabase SQL editor.');
+      } else {
+        throw new Error(`[Dashboard KPIs Consumption ${consumError.code || ''}]: ${consumError.message}`);
+      }
+    }
+
+    const productionConsumptionThisMonth = (consumptionData || []).reduce((sum: number, c: any) => {
+      const val = Number(c.total_value_snapshot || (Math.abs(Number(c.quantity || 0)) * Number(c.unit_cost_snapshot || 0)));
+      return sum + Math.abs(val);
+    }, 0);
+
+    return {
+      // canonical fields
+      total_stock_value: Number(totalValue.toFixed(2)),
+      low_stock_count: lowStockCount,
+      out_of_stock_count: outOfStockCount,
+      expiring_soon_count: 0,
+      lpg_full_count: 0,
+      lpg_in_use_count: 0,
+      lpg_empty_count: 0,
+      total_lpg_remaining_kg: 0,
+      purchases_this_month: Number(purchasesThisMonth.toFixed(2)),
+      consumption_this_month: Number(productionConsumptionThisMonth.toFixed(2)),
+      wastage_this_month: 0,
+      pending_physical_count: false,
+
+      // camelCase aliases
+      totalInventoryValue: Number(totalValue.toFixed(2)),
+      totalActiveMaterials: activeCount,
       lowStockMaterials: lowStockCount,
       outOfStockMaterials: outOfStockCount,
       purchasesThisMonth: Number(purchasesThisMonth.toFixed(2)),
