@@ -87,7 +87,8 @@ export function useSaveRecipe() {
         quantity: number;
         unit: UnitType;
         save_rate_to_master?: boolean;
-        rate?: number;
+        rate?: number | null;
+        rate_unit?: UnitType | null;
       }[];
       idempotency_key?: string;
     }) => api.saveRecipe(data, user?.id || 'usr-owner-001'),
@@ -168,4 +169,3 @@ export function useCreateProductionCostingBatch() {
     },
   });
 }
-

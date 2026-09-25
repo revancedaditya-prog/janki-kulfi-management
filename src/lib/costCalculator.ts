@@ -252,7 +252,7 @@ export function calculateProductionCosting(
  * Required batches = ceiling(required quantity ÷ standard batch output)
  */
 export function scaleProductionRecipe(
-  recipe: RecipeWithItems,
+  recipe: Pick<RecipeWithItems, 'standard_output_pieces' | 'items' | 'default_overheads'>,
   requiredQuantity: number
 ): ProductionScalingResult {
   const reqQty = Math.max(0, Math.round(Number(requiredQuantity) || 0));
@@ -290,8 +290,8 @@ export function scaleProductionRecipe(
     const ingNameHi = it.ingredient?.name_hi || 'सामग्री';
     const stdQty = Number(it.quantity) || 0;
     const scaledQty = Number((stdQty * scale_factor).toFixed(3));
-    const rate = Number(it.ingredient?.current_rate) || 0;
-    const rateUnit = it.ingredient?.rate_unit || it.unit;
+    const rate = Number(it.rate ?? it.ingredient?.current_rate ?? 0);
+    const rateUnit = it.rate_unit ?? it.ingredient?.rate_unit ?? it.unit;
 
     const estCost = calculateIngredientRowCost(scaledQty, it.unit, rate, rateUnit);
     total_ingredient_cost += estCost;

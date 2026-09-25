@@ -70,7 +70,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
   const { isOwner } = useAuth();
 
   const { data: products = [] } = useProducts();
-  const { data: allIngredients = [] } = useIngredients();
+  const { data: allIngredients = [], isSuccess: ingredientsReady } = useIngredients();
 
   // Selected Product State
   const defaultProductId = searchParams.get('product') || products[0]?.id || 'prod-sada-01';
@@ -83,7 +83,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
   );
 
   // Active Recipe & History Query
-  const { data: activeRecipe } = useRecipeForProduct(activeProduct?.id);
+  const { data: activeRecipe, isSuccess: recipeReady, error: recipeLoadError } = useRecipeForProduct(activeProduct?.id);
   const { data: recipeHistory = [] } = useRecipeHistory(activeProduct?.id);
 
   // Mutations
@@ -174,9 +174,17 @@ export const ProductionCostCalculatorPage: React.FC = () => {
       setRecipeName(recipe.name || `${prod.name_hi || prod.name_en} Standard Recipe`);
       setRecipeNotes(recipe.notes || '');
       setSaveAsStatus((recipe.status as 'active' | 'draft') || 'active');
-      if (recipe.default_overheads) {
-        setOverheads({ ...recipe.default_overheads });
-      }
+      const storedOverheads = recipe.default_overheads as Partial<AdditionalOverheads> | undefined;
+      setOverheads({
+        electricity: Number(storedOverheads?.electricity) || 0,
+        generator_fuel: Number(storedOverheads?.generator_fuel) || 0,
+        gas: Number(storedOverheads?.gas) || 0,
+        direct_labour: Number(storedOverheads?.direct_labour) || 0,
+        water: Number(storedOverheads?.water) || 0,
+        packaging_extra: Number(storedOverheads?.packaging_extra) || 0,
+        transport: Number(storedOverheads?.transport) || 0,
+        other: Number(storedOverheads?.other) || 0,
+      });
 
       // Populate items that exist in the recipe
       const rows: CostingIngredientRow[] = (recipe.items || []).map((it) => {
@@ -184,8 +192,8 @@ export const ProductionCostCalculatorPage: React.FC = () => {
         const nameEn = (it as any).ingredient_name_en || it.ingredient?.name_en || ingMaster?.name_en || 'Ingredient';
         const nameHi = (it as any).ingredient_name_hi || it.ingredient?.name_hi || ingMaster?.name_hi || nameEn;
         const category = ingMaster?.category || 'other';
-        const rate = Number((it as any).rate || ingMaster?.current_rate || 0);
-        const rateUnit = (ingMaster?.rate_unit || (it as any).rate_unit || it.unit || 'kg') as UnitType;
+        const rate = Number(it.rate ?? ingMaster?.current_rate ?? it.ingredient?.current_rate ?? 0);
+        const rateUnit = (it.rate_unit ?? ingMaster?.rate_unit ?? it.ingredient?.rate_unit ?? it.unit ?? 'kg') as UnitType;
         const calculated_cost = calculateIngredientRowCost(it.quantity, it.unit, rate, rateUnit);
 
         return {
@@ -267,20 +275,19 @@ export const ProductionCostCalculatorPage: React.FC = () => {
     setFormError(null);
   };
 
-  // Synchronize Form State only when activeRecipe / selectedProductId changes, respecting isDirty
+  // Hydrate once per product. Refetches must not replace the editor (including saved drafts).
   useEffect(() => {
-    if (!activeProduct) return;
-    const currentKey = `${activeProduct.id}:${activeRecipe?.id || 'none'}:${activeRecipe?.version_number || 0}`;
-
-    // If product/recipe changed or we haven't loaded yet, or form is NOT dirty, initialize
+    if (!activeProduct || !recipeReady || !ingredientsReady || isDirty || saveRecipeMutation.isPending) return;
+    const currentKey = activeProduct.id;
     if (loadedRecipeKeyRef.current !== currentKey) {
       loadedRecipeKeyRef.current = currentKey;
       populateFormFromRecipe(activeRecipe, activeProduct);
     }
-  }, [activeRecipe, activeProduct, allIngredients]);
+  }, [activeRecipe, activeProduct, allIngredients, recipeReady, ingredientsReady, isDirty, saveRecipeMutation.isPending]);
 
   // Handle Product Tab Click
   const handleProductSelect = (productId: string) => {
+    if (saveRecipeMutation.isPending) return;
     if (productId === selectedProductId) return;
     if (isDirty) {
       const confirmDiscard = window.confirm(
@@ -289,6 +296,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
       if (!confirmDiscard) return;
     }
     setSelectedProductId(productId);
+    loadedRecipeKeyRef.current = '';
     setSearchParams({ product: productId });
     setShowScalingDrawer(false);
     setRequiredQuantity('');
@@ -433,9 +441,13 @@ export const ProductionCostCalculatorPage: React.FC = () => {
 
   // Scaled Ingredients calculation
   const scaledResults = useMemo(() => {
-    if (!requiredQuantity || requiredQuantity <= 0 || !activeRecipe) return null;
-    return scaleProductionRecipe(activeRecipe, Number(requiredQuantity));
-  }, [requiredQuantity, activeRecipe]);
+    if (!requiredQuantity || requiredQuantity <= 0 || !recipeRows.length) return null;
+    return scaleProductionRecipe({
+      standard_output_pieces: standardOutputPieces,
+      default_overheads: overheads,
+      items: recipeRows.map((row) => ({ ...row, ingredient: allIngredients.find((ing) => ing.id === row.ingredient_id) })),
+    }, Number(requiredQuantity));
+  }, [requiredQuantity, recipeRows, standardOutputPieces, overheads, allIngredients]);
 
   // Ingredients available to add (not yet in recipeRows)
   const availableIngredientsToAdd = useMemo(() => {
@@ -445,6 +457,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
 
   // Save Recipe Version Handler
   const handleSaveRecipe = async (asNewVersionOverride = false) => {
+    if (!activeProduct || !recipeReady || !ingredientsReady || saveRecipeMutation.isPending) return;
     setFormError(null);
     setSuccessMessage(null);
 
@@ -491,7 +504,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
 
     try {
       const result = await saveRecipeMutation.mutateAsync({
-        product_id: selectedProductId,
+        product_id: activeProduct.id,
         recipe_id: asNewVersionOverride ? undefined : (currentRecipeId || undefined),
         name: recipeName.trim() || `${activeProduct?.name_hi || activeProduct?.name_en} Standard Recipe`,
         standard_output_pieces: standardOutputPieces,
@@ -503,13 +516,8 @@ export const ProductionCostCalculatorPage: React.FC = () => {
         idempotency_key: `rec-save-${Date.now()}`,
       });
 
-      setIsDirty(false);
-      if (result?.id) {
-        setCurrentRecipeId(result.id);
-      }
-      if (result?.version_number) {
-        setCurrentVersionNumber(result.version_number);
-      }
+      loadedRecipeKeyRef.current = activeProduct.id;
+      populateFormFromRecipe(result, activeProduct);
 
       setSuccessMessage(
         `रेसिपी संस्करण v${result?.version_number || currentVersionNumber || 1} सफलतापूर्वक सुरक्षित हो गया! (${
@@ -671,7 +679,8 @@ export const ProductionCostCalculatorPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-5">
+    <fieldset disabled={saveRecipeMutation.isPending || !recipeReady || !ingredientsReady} className="space-y-5 min-w-0">
+      {recipeLoadError && <p role="alert">रेसिपी लोड नहीं हुई: {recipeLoadError.message}</p>}
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
@@ -1051,7 +1060,7 @@ export const ProductionCostCalculatorPage: React.FC = () => {
                             type="number"
                             step="any"
                             min="0"
-                            value={row.rate || ''}
+                            value={row.rate ?? ''}
                             onChange={(e) => handleRateChange(idx, parseFloat(e.target.value) || 0)}
                             className="w-20 px-2 py-1.5 text-xs font-mono bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-maroon-800"
                           />
@@ -1518,6 +1527,6 @@ export const ProductionCostCalculatorPage: React.FC = () => {
           </div>
         </form>
       </Modal>
-    </div>
+    </fieldset>
   );
 };
