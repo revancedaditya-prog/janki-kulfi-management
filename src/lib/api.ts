@@ -1379,7 +1379,6 @@ export const api = {
     }
     const { data, error } = await (supabase as any).rpc('activate_recipe_version_transaction', {
       p_recipe_id: recipeId,
-      p_user_id: userId || null,
     });
     if (error) {
       throw new Error(error.message || 'Failed to activate recipe version');
