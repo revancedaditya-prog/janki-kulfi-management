@@ -4,6 +4,7 @@ import { useIngredients } from '@/hooks/useInventory';
 import { useCompleteProductionWithRawMaterials } from '@/hooks/useProduction';
 import { api } from '@/lib/api';
 import { formatIngredientQuantityWithUnit, convertQuantity } from '@/lib/inventoryService';
+import { calculateIngredientRowCost } from '@/lib/costCalculator';
 import { formatCurrency } from '@/lib/formatters';
 import { useLanguage } from '@/i18n/LanguageContext';
 import { Modal } from '@/components/common/Modal';
@@ -64,7 +65,7 @@ export const CompleteBatchWithIngredientsModal: React.FC<Props> = ({
 
           const recipe = await api.getRecipeForProduct(item.product_id);
           if (recipe && recipe.items && recipe.items.length > 0) {
-            const stdOutput = recipe.standard_output_pieces || 100;
+            const stdOutput = recipe.expected_yield_pieces || recipe.standard_output_pieces || 100;
             const ratio = item.produced_quantity / stdOutput;
 
             for (const rit of recipe.items) {
@@ -106,7 +107,7 @@ export const CompleteBatchWithIngredientsModal: React.FC<Props> = ({
           const available = ing.available_base_quantity || 0;
           const shortage = available < baseStdQty ? Number((baseStdQty - available).toFixed(3)) : 0;
           const rate = ing.weighted_average_rate || ing.current_rate;
-          const cost = Number((baseStdQty * rate).toFixed(2));
+          const cost = calculateIngredientRowCost(stdQty, req.unit, rate, ing.rate_unit || ing.base_unit);
 
           reqList.push({
             ingredientId: ing.id,
