@@ -26,6 +26,8 @@ import {
   formatDate,
   getTodayDateString,
 } from '@/lib/formatters';
+import { convertQuantity } from '@/lib/inventoryService';
+import { calculateIngredientRowCost } from '@/lib/costCalculator';
 import {
   Factory,
   Plus,
@@ -124,7 +126,7 @@ export const ProductionPage: React.FC = () => {
       };
     }
 
-    const expectedYield = activeRecipe.expected_yield_pieces || activeRecipe.standard_output_pieces || 100;
+    const expectedYield = Number(activeRecipe.expected_yield_pieces || activeRecipe.standard_output_pieces || 100);
     const ratio = (producedQuantity || 0) / (expectedYield > 0 ? expectedYield : 100);
 
     let totalCost = 0;
@@ -137,14 +139,22 @@ export const ProductionPage: React.FC = () => {
       const actualQty = override ? override.actual_quantity : stdRequired;
       const varianceReason = override ? override.reason : '';
 
-      const conversionFactor = ing?.conversion_factor || 1;
-      const baseQty = Number((actualQty * conversionFactor).toFixed(3));
-      const availStock = rawMaterialBalances[rItem.ingredient_id] ?? 0;
+      // Raw-material movements are always stored in the ingredient's base unit.
+      // Convert the recipe quantity before comparing it with that ledger balance.
+      const conversionFactor = Number(ing?.conversion_factor) || 1;
+      const baseUnit = ing?.base_unit || rItem.unit;
+      const baseQty = Number(
+        convertQuantity(actualQty, rItem.unit, baseUnit, conversionFactor).toFixed(3)
+      );
+      const availStock = Number(rawMaterialBalances[rItem.ingredient_id] ?? 0);
       const isShortage = availStock < baseQty;
       const shortageQty = isShortage ? Number((baseQty - availStock).toFixed(3)) : 0;
 
-      const rate = Number(ing?.current_rate) || 0;
-      const itemCost = Number((baseQty * rate).toFixed(2));
+      // A recipe version owns its cost snapshot. Fall back only for old recipes
+      // which were saved before rate snapshots were introduced.
+      const rate = Number(rItem.rate ?? ing?.current_rate) || 0;
+      const rateUnit = rItem.rate_unit || ing?.rate_unit || baseUnit;
+      const itemCost = calculateIngredientRowCost(actualQty, rItem.unit, rate, rateUnit);
       totalCost += itemCost;
 
       const itemResult = {
@@ -155,13 +165,13 @@ export const ProductionPage: React.FC = () => {
         stdRequired,
         actualQty,
         unit: rItem.unit,
-        baseUnit: ing?.base_unit || rItem.unit,
+        baseUnit,
         baseQty,
         availStock,
         isShortage,
         shortageQty,
         rate,
-        rateUnit: ing?.rate_unit || rItem.unit,
+        rateUnit,
         itemCost,
         varianceReason,
       };
@@ -175,7 +185,7 @@ export const ProductionPage: React.FC = () => {
 
     const lpgCostNum = parseFloat(lpgCost) || 0;
     const totalBatchCost = totalCost + lpgCostNum;
-    const costPerPiece = (producedQuantity || 0) > 0 ? Number((totalBatchCost / producedQuantity).toFixed(2)) : 0;
+    const costPerPiece = saleableQuantity > 0 ? Number((totalBatchCost / saleableQuantity).toFixed(2)) : 0;
 
     return {
       items,
@@ -186,7 +196,7 @@ export const ProductionPage: React.FC = () => {
       shortageItems: shortageList,
       expectedYield,
     };
-  }, [activeRecipe, producedQuantity, allIngredients, rawMaterialBalances, actualIngredientOverrides, lpgCost]);
+  }, [activeRecipe, producedQuantity, saleableQuantity, allIngredients, rawMaterialBalances, actualIngredientOverrides, lpgCost]);
 
   // Open New Production Modal
   const handleOpenNewModal = () => {
@@ -658,7 +668,10 @@ export const ProductionPage: React.FC = () => {
               label={`${t.producedQty} (पीस) *`}
               isPieceQuantity
               value={producedQuantity}
-              onChange={(e) => setProducedQuantity(Math.max(1, parseInt(e.target.value, 10) || 0))}
+              onChange={(e) => {
+                const next = e.currentTarget.valueAsNumber;
+                setProducedQuantity(Number.isFinite(next) ? Math.max(1, Math.trunc(next)) : 1);
+              }}
               min={1}
               required
             />
@@ -668,7 +681,10 @@ export const ProductionPage: React.FC = () => {
               label={`${t.damagedQty} (खराब पीस)`}
               isPieceQuantity
               value={damagedQuantity}
-              onChange={(e) => setDamagedQuantity(Math.max(0, parseInt(e.target.value, 10) || 0))}
+              onChange={(e) => {
+                const next = e.currentTarget.valueAsNumber;
+                setDamagedQuantity(Number.isFinite(next) ? Math.max(0, Math.trunc(next)) : 0);
+              }}
               min={0}
             />
 
